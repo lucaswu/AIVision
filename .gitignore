@@ -21,7 +21,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-deploy/
+backEnd/deploy/images
+backEnd/storage/images
 
 # PyInstaller
 *.manifest
