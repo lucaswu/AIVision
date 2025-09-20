@@ -1,0 +1,200 @@
+# AI视觉检测报告模板配置
+# 支持不修改代码的情况下调整报告格式
+
+report_templates:
+  # 默认通用检测报告模板
+  default:
+    name: "AI视觉检测报告"
+    description: "通用的AI视觉检测报告模板"
+    format: "markdown"
+    sections:
+      - type: "header"
+        title: "报告基本信息"
+        template: |
+          # AI视觉检测报告
+          
+          **报告编号**: {report_number}
+          **检测时间**: {detection_time}
+          **文件名称**: {file_name}
+          **检测算法**: {algorithm_type}
+          **项目名称**: {project_name}
+          
+      - type: "summary"
+        title: "检测摘要"
+        template: |
+          ## 检测摘要
+          
+          本次检测共发现 **{total_defects}** 处异常：
+          - 高风险缺陷：{high_risk_count} 处
+          - 中风险缺陷：{medium_risk_count} 处  
+          - 低风险缺陷：{low_risk_count} 处
+          
+          整体质量等级：**{overall_grade}**
+          
+      - type: "details_table"
+        title: "详细检测结果"
+        template: |
+          ## 详细检测结果
+          
+          {detection_table}
+          
+      - type: "recommendations"
+        title: "处理建议"
+        template: |
+          ## 处理建议
+          
+          {recommendations}
+
+  # 基于客户docx的工业射线检测报告模板  
+  industrial_xray:
+    name: "工业射线检测报告"
+    description: "基于客户docx文档的工业射线检测报告格式"
+    format: "markdown"
+    sections:
+      - type: "header"
+        title: "射线检测报告"
+        template: |
+          # 射线检测报告
+          
+          **报告编号**: {report_number}
+          **工程名称**: {project_name}
+          **工件名称**: {component_name}
+          **检测部件代号**: {component_code}
+          **规格**: {specification}
+          **检测时间**: {detection_time}
+          
+      - type: "details_table"
+        title: "检测结果详表"
+        format: "table"
+        columns:
+          - name: "序号"
+            field: "index"
+            width: "8%"
+          - name: "焊口编号"  
+            field: "weld_number"
+            width: "12%"
+          - name: "片号"
+            field: "film_number" 
+            width: "8%"
+          - name: "底片黑度"
+            field: "film_density"
+            width: "12%"
+          - name: "像质计灵敏度"
+            field: "iq_sensitivity"
+            width: "12%"
+          - name: "缺陷性质"
+            field: "defect_type"
+            width: "10%"
+          - name: "缺陷位置"
+            field: "defect_position"
+            width: "12%"
+          - name: "缺陷尺寸"
+            field: "defect_size"
+            width: "12%"
+          - name: "质量等级"
+            field: "quality_grade"
+            width: "10%"
+          - name: "备注"
+            field: "remarks"
+            width: "4%"
+            
+      - type: "legend"
+        title: "缺陷性质说明"
+        template: |
+          ## 缺陷性质说明
+          
+          - **A**: 裂纹
+          - **B**: 未熔合  
+          - **C**: 未焊透
+          - **D**: 条状缺陷
+          - **E**: 圆形缺陷
+          - **F**: 咬边
+          - **G**: 内凹
+          - **H**: 其它（在缺陷描述中文字说明）
+          
+      - type: "summary"
+        title: "检测结果统计"
+        template: |
+          ## 检测结果统计
+          
+          - 检测总数：{total_inspections} 个焊口
+          - 发现缺陷：{total_defects} 处
+          - 质量等级分布：
+            - Ⅰ级（合格）：{grade_1_count} 处
+            - Ⅱ级（可接受）：{grade_2_count} 处  
+            - Ⅲ级（不合格）：{grade_3_count} 处
+          - 合格率：{pass_rate}%
+
+# LLM生成配置
+llm_config:
+  default:
+    system_prompt: |
+      你是一个专业的工业检测报告分析师，负责根据AI视觉检测结果生成标准化的检测报告。
+      
+      你的职责是：
+      1. 准确解读AI检测结果数据
+      2. 按照标准格式生成专业报告
+      3. 提供合理的质量评估和建议
+      4. 确保报告的准确性和专业性
+      
+    user_prompt_template: |
+      请根据以下AI视觉检测数据生成专业的检测报告：
+      
+      **检测数据**：
+      {vision_results}
+      
+      **报告要求**：
+      - 使用模板：{template_name}
+      - 报告格式：{report_format}
+      - 包含章节：{required_sections}
+      
+      **数据映射规则**：
+      {data_mapping_rules}
+      
+      请严格按照模板格式生成报告，确保：
+      1. 数据准确性
+      2. 格式标准化  
+      3. 专业术语正确
+      4. 逻辑结构清晰
+      
+  industrial_xray:
+    system_prompt: |
+      你是资深的工业射线检测专家，具有丰富的焊接缺陷分析经验。
+      
+      你需要将AI视觉检测结果转换为符合工业标准的射线检测报告格式。
+      
+    data_mapping:
+      # AI检测结果到工业报告字段的映射规则
+      defect_type_mapping:
+        "crack": "A"
+        "incomplete_fusion": "B"
+        "incomplete_penetration": "C"  
+        "linear_defect": "D"
+        "circular_defect": "E"
+        "undercut": "F"
+        "concavity": "G"
+        "other": "H"
+        
+      quality_grade_mapping:
+        confidence_ranges:
+          - range: [0.9, 1.0]
+            grade: "Ⅰ"
+            description: "合格"
+          - range: [0.7, 0.9]
+            grade: "Ⅱ" 
+            description: "可接受"
+          - range: [0.0, 0.7]
+            grade: "Ⅲ"
+            description: "不合格"
+
+# 项目特定配置
+project_overrides:
+  # 可以为特定项目ID设置不同的模板和参数
+  example_project_id:
+    template: "industrial_xray"
+    custom_fields:
+      project_name: "特定工程项目名称"
+      component_name: "特定工件名称"
+    llm_config:
+      temperature: 0.1  # 更严格的生成
+      max_tokens: 2000 

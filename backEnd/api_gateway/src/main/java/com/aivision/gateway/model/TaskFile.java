@@ -1,0 +1,235 @@
+package com.aivision.gateway.model;
+
+import javax.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "task_file")
+public class TaskFile {
+    
+    public enum Status {
+        PENDING, PROCESSING, COMPLETED, FAILED
+    }
+    
+    @Id
+    @Column(name = "task_file_id", length = 255)
+    private String taskFileId;
+    
+    @Column(name = "task_id", nullable = false, length = 255)
+    private String taskId;
+    
+    @Column(name = "file_id", nullable = false, length = 255)
+    private String fileId;
+    
+    @Column(name = "logical_file_path", nullable = false, length = 500)
+    private String logicalFilePath;
+    
+    @Column(name = "minio_file_path", length = 500)
+    private String minioFilePath;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    private Status status = Status.PENDING;
+    
+    @Column(name = "vision_result", columnDefinition = "TEXT")
+    private String visionResult;
+    
+    @Column(name = "llm_result", columnDefinition = "TEXT")
+    private String llmResult;
+    
+    @Column(name = "report_path", length = 500)
+    private String reportPath;
+    
+    @Column(name = "error_message", columnDefinition = "TEXT")
+    private String errorMessage;
+    
+    @Column(name = "processing_start_time")
+    private LocalDateTime processingStartTime;
+    
+    @Column(name = "processing_end_time")
+    private LocalDateTime processingEndTime;
+    
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+    
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+    
+    // 构造函数
+    public TaskFile() {}
+    
+    public TaskFile(String taskFileId, String taskId, String fileId, 
+                    String logicalFilePath, String minioFilePath) {
+        this.taskFileId = taskFileId;
+        this.taskId = taskId;
+        this.fileId = fileId;
+        this.logicalFilePath = logicalFilePath;
+        this.minioFilePath = minioFilePath;
+        this.status = Status.PENDING;
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    // Getters and Setters
+    public String getTaskFileId() {
+        return taskFileId;
+    }
+    
+    public void setTaskFileId(String taskFileId) {
+        this.taskFileId = taskFileId;
+    }
+    
+    public String getTaskId() {
+        return taskId;
+    }
+    
+    public void setTaskId(String taskId) {
+        this.taskId = taskId;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getFileId() {
+        return fileId;
+    }
+    
+    public void setFileId(String fileId) {
+        this.fileId = fileId;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getLogicalFilePath() {
+        return logicalFilePath;
+    }
+    
+    public void setLogicalFilePath(String logicalFilePath) {
+        this.logicalFilePath = logicalFilePath;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getMinioFilePath() {
+        return minioFilePath;
+    }
+    
+    public void setMinioFilePath(String minioFilePath) {
+        this.minioFilePath = minioFilePath;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public Status getStatus() {
+        return status;
+    }
+    
+    public void setStatus(Status status) {
+        this.status = status;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getVisionResult() {
+        return visionResult;
+    }
+    
+    public void setVisionResult(String visionResult) {
+        this.visionResult = visionResult;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getLlmResult() {
+        return llmResult;
+    }
+    
+    public void setLlmResult(String llmResult) {
+        this.llmResult = llmResult;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getReportPath() {
+        return reportPath;
+    }
+    
+    public void setReportPath(String reportPath) {
+        this.reportPath = reportPath;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+    
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public LocalDateTime getProcessingStartTime() {
+        return processingStartTime;
+    }
+    
+    public void setProcessingStartTime(LocalDateTime processingStartTime) {
+        this.processingStartTime = processingStartTime;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public LocalDateTime getProcessingEndTime() {
+        return processingEndTime;
+    }
+    
+    public void setProcessingEndTime(LocalDateTime processingEndTime) {
+        this.processingEndTime = processingEndTime;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+    
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+    
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+    
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+    
+    @PrePersist
+    protected void onCreate() {
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    @PreUpdate
+    protected void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    /**
+     * 计算处理时间（毫秒）
+     */
+    public Long getProcessingTimeMs() {
+        if (processingStartTime != null && processingEndTime != null) {
+            return java.time.Duration.between(processingStartTime, processingEndTime).toMillis();
+        }
+        return null;
+    }
+    
+    @Override
+    public String toString() {
+        return "TaskFile{" +
+                "taskFileId='" + taskFileId + '\'' +
+                ", taskId='" + taskId + '\'' +
+                ", fileId='" + fileId + '\'' +
+                ", logicalFilePath='" + logicalFilePath + '\'' +
+                ", minioFilePath='" + minioFilePath + '\'' +
+                ", status=" + status +
+                ", reportPath='" + reportPath + '\'' +
+                ", errorMessage='" + errorMessage + '\'' +
+                ", processingStartTime=" + processingStartTime +
+                ", processingEndTime=" + processingEndTime +
+                ", createdAt=" + createdAt +
+                ", updatedAt=" + updatedAt +
+                '}';
+    }
+} 

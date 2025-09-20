@@ -1,0 +1,16 @@
+# 基于之前构建的镜像
+FROM ai-vision-gateway:latest
+
+# 切换到root用户以便更新文件
+USER root
+
+# 复制新的JAR包替换旧的
+COPY target/api-gateway-*.jar /app/app.jar
+
+# 重新设置文件所有者
+RUN chown appuser:appuser /app/app.jar
+
+# 切换回非root用户
+USER appuser
+
+# 其他配置保持不变，从基础镜像继承 

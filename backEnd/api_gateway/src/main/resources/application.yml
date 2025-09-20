@@ -1,0 +1,100 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: ai-vision-gateway
+    
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ai_detection}
+    username: ${SPRING_DATASOURCE_USERNAME:aiuser}
+    password: ${SPRING_DATASOURCE_PASSWORD:aipass123}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.postgresql.Driver}
+    
+  jpa:
+    hibernate:
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+    show-sql: ${SPRING_JPA_SHOW_SQL:true}
+    properties:
+      hibernate:
+        dialect: ${SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        format_sql: ${SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL:true}
+        
+  servlet:
+    multipart:
+      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:200MB}
+      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:10GB}
+      enabled: ${SPRING_SERVLET_MULTIPART_ENABLED:true}
+
+# Local storage configuration (replacing MinIO)
+storage:
+  local:
+    base-dir: ${STORAGE_LOCAL_BASE_DIR:/data/files}
+  # 外部可访问路径（传给非容器化的 huodian_ai 服务），可与本地不同
+  external-base-dir: ${STORAGE_EXTERNAL_BASE_DIR:/data/files}
+
+# AI Services Configuration
+ai-services:
+  vision-ai:
+    url: ${AI_SERVICES_VISION_AI_URL:http://host.docker.internal:8001}
+  llm-ai:
+    url: ${AI_SERVICES_LLM_AI_URL:http://localhost:11434}
+    model: ${AI_SERVICES_LLM_AI_MODEL:qwen2:0.5b}
+
+# Default User Configuration (临时配置，用于未实现认证时的默认用户)
+default-user:
+  user-id: ${DEFAULT_USER_ID:default-user}
+  user-name: ${DEFAULT_USER_NAME:默认用户}
+
+# File Upload Configuration
+file-upload:
+  # 允许的图片类型
+  allowed-image-types:
+    - jpg
+    - jpeg
+    - png
+    - gif
+    - bmp
+    - webp
+  # 文件大小限制
+  max-file-size: ${FILE_UPLOAD_MAX_FILE_SIZE:200MB}
+  max-total-size: ${FILE_UPLOAD_MAX_TOTAL_SIZE:10GB}
+  # 本地存储配置（用于非MinIO模式）
+  local:
+    base-dir: ${STORAGE_LOCAL_BASE_DIR:/data/files}
+
+# SpringDoc OpenAPI Configuration
+springdoc:
+  api-docs:
+    path: ${SPRINGDOC_API_DOCS_PATH:/v3/api-docs}
+  swagger-ui:
+    path: ${SPRINGDOC_SWAGGER_UI_PATH:/swagger-ui.html}
+    try-it-out-enabled: ${SPRINGDOC_SWAGGER_UI_TRY_IT_OUT_ENABLED:true}
+    operations-sorter: ${SPRINGDOC_SWAGGER_UI_OPERATIONS_SORTER:method}
+    tags-sorter: ${SPRINGDOC_SWAGGER_UI_TAGS_SORTER:alpha}
+    filter: ${SPRINGDOC_SWAGGER_UI_FILTER:true}
+  packages-to-scan: ${SPRINGDOC_PACKAGES_TO_SCAN:com.aivision.gateway.controller}
+
+# Spring Boot Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: ${MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE:health,info,metrics,prometheus}
+  endpoint:
+    health:
+      show-details: ${MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS:always}
+      show-components: ${MANAGEMENT_ENDPOINT_HEALTH_SHOW_COMPONENTS:always}
+  health:
+    datasource:
+      enabled: ${MANAGEMENT_HEALTH_DATASOURCE_ENABLED:true}
+    diskspace:
+      enabled: ${MANAGEMENT_HEALTH_DISKSPACE_ENABLED:true}
+
+# Logging Configuration
+logging:
+  level:
+    com.aivision.gateway: ${LOGGING_LEVEL_GATEWAY:INFO}
+    org.springframework.web: ${LOGGING_LEVEL_SPRING_WEB:INFO}
+    org.hibernate.SQL: ${LOGGING_LEVEL_HIBERNATE_SQL:INFO}
+    root: ${LOGGING_LEVEL_ROOT:INFO} 

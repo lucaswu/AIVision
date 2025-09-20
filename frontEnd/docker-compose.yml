@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aivision-frontend:latest
+    container_name: aivision-frontend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - aivision-network
+    depends_on:
+      - api-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 如果需要连接到现有的后端服务，可以取消注释以下配置
+  # api-gateway:
+  #   image: deploy_api-gateway:latest
+  #   container_name: aivision-api-gateway
+  #   ports:
+  #     - "8080:8080"
+  #   networks:
+  #     - aivision-network
+
+networks:
+  aivision-network:
+    external: true
+

@@ -1,0 +1,27 @@
+.custom-file-tree .ant-tree-treenode {
+  padding: 2px 0;
+}
+.custom-file-tree .ant-tree-node-content-wrapper {
+  border-radius: 6px;
+  transition: all 0.2s;
+  padding: 0;
+}
+.custom-file-tree .ant-tree-node-content-wrapper:hover {
+  background-color: #f0f9ff;
+}
+.custom-file-tree .ant-tree-node-selected .ant-tree-node-content-wrapper {
+  background-color: #e6f7ff;
+  border: 1px solid #91d5ff;
+}
+.custom-tree-node {
+  width: 100%;
+}
+
+/* 修复表格滚动时固定列背景色缺失问题 */
+.ant-table-cell-fix-right {
+  background-color: #fff !important;
+}
+
+.ant-table-tbody > tr:hover > .ant-table-cell-fix-right {
+  background-color: #fafafa !important;
+}

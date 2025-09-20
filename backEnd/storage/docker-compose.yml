@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # MinIO对象存储
+  minio:
+    image: minio/minio:RELEASE.2023-07-07T07-13-57Z
+    container_name: ai-detection-minio
+    networks:
+      - ai-services
+    ports:
+      - "9000:9000"  # API端口
+      - "9001:9001"  # Web控制台端口
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # MinIO初始化服务
+  minio-init:
+    image: minio/mc:RELEASE.2023-07-07T05-25-51Z
+    container_name: ai-detection-minio-init
+    networks:
+      - ai-services
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      - MINIO_HOST=minio
+      - MINIO_PORT=9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin123
+    entrypoint: >
+      /bin/sh -c "
+      echo 'MinIO服务已就绪，开始初始化...';
+      mc alias set local http://minio:9000 minioadmin minioadmin123;
+      echo '创建存储桶...';
+      mc mb local/ai-detection-bucket --ignore-existing;
+      echo '创建目录结构...';
+      echo '' | mc pipe local/ai-detection-bucket/images/.keep;
+      echo '' | mc pipe local/ai-detection-bucket/report/.keep;
+      echo '设置存储桶访问策略...';
+      mc anonymous set download local/ai-detection-bucket/images/ || true;
+      mc anonymous set download local/ai-detection-bucket/report/ || true;
+      echo '✅ MinIO初始化完成！';
+      echo '📊 访问信息：';
+      echo '   Web控制台: http://localhost:9001';
+      echo '   API端点:   http://localhost:9000';
+      echo '   用户名:    minioadmin';
+      echo '   密码:      minioadmin123';
+      mc ls local/ai-detection-bucket;
+      "
+    restart: "no"
+
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:14.12-alpine
+    container_name: ai-detection-postgres
+    networks:
+      - ai-services
+    environment:
+      POSTGRES_DB: ai_detection
+      POSTGRES_USER: aiuser
+      POSTGRES_PASSWORD: aipass123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiuser -d ai_detection"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # PostgreSQL数据库初始化服务
+  postgres-init:
+    image: postgres:14.12-alpine
+    container_name: ai-detection-postgres-init
+    networks:
+      - ai-services
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: aipass123
+    volumes:
+      - ./init.sql:/init.sql:ro
+    entrypoint: >
+      /bin/sh -c "
+      echo 'PostgreSQL服务已就绪，开始初始化数据库...';
+      psql -h postgres -U aiuser -d ai_detection -f /init.sql;
+      echo '✅ PostgreSQL数据库初始化完成！';
+      echo '📋 已创建的表：';
+      psql -h postgres -U aiuser -d ai_detection -c '\dt';
+      "
+    restart: "no"
+
+volumes:
+  minio_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  ai-services:
+    name: ai-services
+    driver: bridge 

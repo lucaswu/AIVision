@@ -1,0 +1,398 @@
+{
+  "name": "AI Detection Submit",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/api/v1/task/submit",
+        "options": {
+          "binaryData": true,
+          "rawBody": false
+        },
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-submit",
+      "name": "Task Submit Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "api-v1-task-submit"
+    },
+    {
+      "parameters": {
+        "functionCode": "// 生成UUID的函数\nfunction generateUUID() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    const r = Math.random() * 16 | 0;\n    const v = c == 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\n// 辅助函数：清理引号\nfunction cleanValue(value) {\n  if (typeof value === 'string') {\n    // 移除开头和结尾的引号\n    return value.replace(/^[\"']|[\"']$/g, '');\n  }\n  return value;\n}\n\n// 获取输入数据\nconst inputData = $input.all()[0];\nconst headers = inputData.json.headers || {};  // 从headers中获取参数\nconst files = inputData.binary;\n\n// 根据错误信息，图片在binary.data中\nlet imageFile = null;\nif (files && files.data) {\n  imageFile = files.data;\n  console.log('Found image in files.data');\n} else if (files && files.image) {\n  imageFile = files.image;\n  console.log('Found image in files.image');\n} else if (typeof $binary !== 'undefined' && $binary.data) {\n  imageFile = $binary.data;\n  console.log('Found image in $binary.data');\n} else if (typeof $binary !== 'undefined' && $binary.image) {\n  imageFile = $binary.image;\n  console.log('Found image in $binary.image');\n}\n\n// 从headers中获取参数\nconst project_id = cleanValue(headers['project-id']);\nconst user_id = cleanValue(headers['user-id']);\n\n// 验证必要参数\nif (!project_id) {\n  throw new Error(`Missing required header: project-id. Available headers: ${JSON.stringify(Object.keys(headers))}`);\n}\nif (!user_id) {\n  throw new Error(`Missing required header: user-id. Available headers: ${JSON.stringify(Object.keys(headers))}`);\n}\nif (!imageFile) {\n  throw new Error(`Missing required parameter: image file. Debug info:\\nBinary keys: ${Object.keys(files || {})}\\nJSON keys: ${Object.keys(inputData.json || {})}\\nBody keys: ${Object.keys(inputData.json.body || {})}\\n$binary available: ${typeof $binary !== 'undefined'}`);\n}\n\n// 生成任务ID\nconst taskId = generateUUID();\nconst timestamp = new Date().toISOString();\n\nreturn {\n  task_id: taskId,\n  project_id: project_id,\n  user_id: user_id,\n  image_file: imageFile,\n  timestamp: timestamp,\n  image_filename: `images/${taskId}/original.jpg`\n};"
+      },
+      "id": "generate-taskid",
+      "name": "Generate TaskID",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO task (task_id, project_id, user_id, image_path, status, progress, created_at) VALUES ('{{ $json.task_id }}', '{{ $json.project_id }}', '{{ $json.user_id }}', '', 'pending', 0, NOW()) RETURNING task_id, project_id, user_id, status, progress, created_at",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "id": "create-task",
+      "name": "Create Task Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"task_id\": \"{{ $json.task_id || $node['Generate TaskID'].json['task_id'] }}\",\n  \"message\": \"任务提交成功，正在后台处理\",\n  \"timestamp\": \"{{ $node['Generate TaskID'].json['timestamp'] }}\",\n  \"status\": \"{{ $json.status || 'pending' }}\"\n}"
+      },
+      "id": "immediate-response",
+      "name": "Immediate Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// 传递 Generate TaskID 的数据（包括二进制文件）给 Upload 节点\nconst generateTaskData = $node['Generate TaskID'].json;\n\n// 返回任务数据，n8n 会自动传递二进制数据\nreturn generateTaskData;"
+      },
+      "id": "pass-data-for-upload",
+      "name": "Pass Data for Upload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [600, 500]
+    },
+    {
+      "parameters": {
+        "url": "=http://ai-detection-minio:9000/ai-detection-bucket/{{ $json.image_filename }}",
+        "method": "PUT",
+        "sendBinaryData": true,
+        "binaryPropertyName": "image_file",
+        "options": {
+          "headers": {
+            "Content-Type": "image/jpeg"
+          }
+        }
+      },
+      "id": "upload-image",
+      "name": "Upload Image to MinIO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [800, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE task SET image_path = '{{ $node['Generate TaskID'].json.image_filename }}', status = 'uploaded', progress = 25, updated_at = NOW() WHERE task_id = '{{ $node['Generate TaskID'].json.task_id }}' RETURNING task_id, project_id, user_id, image_path, status, progress, updated_at",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "id": "update-image-path",
+      "name": "Update Image Path",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [900, 500],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://vision-ai:8001/detect_minio_debug",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "body": "={\n  \"task_id\": \"{{ $json.task_id }}\",\n  \"minio_object_path\": \"{{ $json.image_path }}\",\n  \"detection_type\": \"defect_detection\",\n  \"confidence_threshold\": 0.5,\n  \"parameters\": {}\n}",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        }
+      },
+      "id": "call-vision-ai",
+      "name": "Call Vision AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE task SET vision_result = '{{ JSON.stringify($node['Call Vision AI'].json) }}', status = 'detected', progress = 50, updated_at = NOW() WHERE task_id = '{{ $node['Generate TaskID'].json.task_id }}'"
+      },
+      "id": "save-vision-result",
+      "name": "Save Vision Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1340, 500],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const visionResult = $node['Call Vision AI'].json;\nconst taskId = $node['Generate TaskID'].json.task_id;\n\nconst prompt = `请基于以下工业设备缺陷检测结果，生成详细的检测报告（Markdown格式）：\n\n检测数据：\n${JSON.stringify(visionResult, null, 2)}\n\n报告要求：\n1. 检测概述 - 简要说明检测的设备类型和检测时间\n2. 缺陷分析 - 详细描述发现的缺陷类型、位置和严重程度\n3. 风险评估 - 评估各类缺陷可能造成的影响和风险等级\n4. 维护建议 - 提供具体的维护和修复建议\n5. 总结 - 整体设备状态评估和后续关注要点\n\n请使用专业的工业检测术语，确保报告的准确性和实用性。`;\n\nreturn {\n  prompt: prompt,\n  task_id: taskId,\n  model: 'deepseek-r1:1.5b',\n  report_filename: `report/${taskId}/report.md`\n};"
+      },
+      "id": "build-llm-prompt",
+      "name": "Build LLM Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1560, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://deepseek-llm:11434/api/generate",
+        "options": {
+          "bodyContentType": "json"
+        },
+        "bodyParametersJson": "={\n  \"model\": \"{{ $node['Build LLM Prompt'].json['model'] }}\",\n  \"prompt\": \"{{ $node['Build LLM Prompt'].json['prompt'] }}\",\n  \"stream\": false,\n  \"options\": {\n    \"temperature\": 0.7,\n    \"top_p\": 0.9\n  }\n}"
+      },
+      "id": "call-llm-ai",
+      "name": "Call LLM AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1780, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE task SET llm_result = '{{ JSON.stringify($node['Call LLM AI'].json) }}', status = 'generating', progress = 75, updated_at = NOW() WHERE task_id = '{{ $node['Generate TaskID'].json.task_id }}'"
+      },
+      "id": "save-llm-result",
+      "name": "Save LLM Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [2000, 500],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=http://ai-detection-minio:9000/ai-detection-bucket/{{ $node['Build LLM Prompt'].json['report_filename'] }}",
+        "method": "PUT",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "body": "={{ $node['Call LLM AI'].json['response'] }}",
+        "options": {
+          "headers": {
+            "Content-Type": "text/markdown"
+          }
+        }
+      },
+      "id": "save-report",
+      "name": "Save Report to MinIO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2220, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE task SET report_path = '{{ $node['Build LLM Prompt'].json.report_filename }}', status = 'completed', progress = 100, updated_at = NOW() WHERE task_id = '{{ $node['Generate TaskID'].json.task_id }}'"
+      },
+      "id": "complete-task",
+      "name": "Complete Task",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [2440, 500],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE task SET status = 'failed', error_message = '{{ $node['Error Handler'].json.error_message }}', updated_at = NOW() WHERE task_id = '{{ $node['Generate TaskID'].json.task_id }}'"
+      },
+      "id": "update-error-status",
+      "name": "Update Error Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1560, 700],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const error = $input.all()[0].json.error || $input.all()[0].json;\nconst taskId = $node['Generate TaskID'].json?.task_id || 'unknown';\n\nreturn {\n  error_message: error.message || JSON.stringify(error),\n  task_id: taskId,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 700]
+    }
+  ],
+  "connections": {
+    "Task Submit Webhook": {
+      "main": [
+        [
+          {
+            "node": "Generate TaskID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate TaskID": {
+      "main": [
+        [
+          {
+            "node": "Create Task Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Task Record": {
+      "main": [
+        [
+          {
+            "node": "Immediate Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pass Data for Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass Data for Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload Image to MinIO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Image to MinIO": {
+      "main": [
+        [
+          {
+            "node": "Update Image Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Image Path": {
+      "main": [
+        [
+          {
+            "node": "Call Vision AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision AI": {
+      "main": [
+        [
+          {
+            "node": "Save Vision Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Vision Result": {
+      "main": [
+        [
+          {
+            "node": "Build LLM Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build LLM Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM AI": {
+      "main": [
+        [
+          {
+            "node": "Save LLM Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save LLM Result": {
+      "main": [
+        [
+          {
+            "node": "Save Report to MinIO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Report to MinIO": {
+      "main": [
+        [
+          {
+            "node": "Complete Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Update Error Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1"
+} 

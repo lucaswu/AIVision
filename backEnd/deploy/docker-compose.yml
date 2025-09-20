@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:14.12-alpine
+    container_name: ai-detection-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ai_detection
+      POSTGRES_USER: aiuser
+      POSTGRES_PASSWORD: aipass123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init_database.sql:/docker-entrypoint-initdb.d/init_database.sql:ro
+    networks:
+      - ai-services
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiuser -d ai_detection"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ================================
+  # 应用服务
+  # ================================
+  
+  # API Gateway 主应用服务
+  api-gateway:
+    image: deploy_api-gateway:latest
+    container_name: ai-detection-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # 数据库连接配置
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://ai-detection-postgres:5432/ai_detection
+      - SPRING_DATASOURCE_USERNAME=aiuser
+      - SPRING_DATASOURCE_PASSWORD=aipass123
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      
+      # 本地存储路径（容器内挂载点）
+      - STORAGE_LOCAL_BASE_DIR=/data/files
+      
+      # AI服务配置（huodian_ai 非容器化，使用宿主机地址）
+      - AI_SERVICES_VISION_AI_URL=http://host.docker.internal:8001
+      
+      # 应用配置
+      - SPRING_PROFILES_ACTIVE=docker
+      - SERVER_PORT=8080
+      
+      # JVM优化参数
+      - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport
+    networks:
+      - ai-services
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    volumes:
+      - files_data:/data/files
+
+  # 前端（如需）
+  front-end:
+    image: deploy_frontend:latest
+    container_name: ai-detection-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks:
+      - ai-services
+
+
+# ================================
+# 数据卷定义
+# ================================
+volumes:
+  postgres_data:
+    driver: local
+    name: ai-detection-postgres-data
+  files_data:
+    driver: local
+    name: ai-detection-files-data
+
+# ================================
+# 网络定义
+# ================================
+networks:
+  ai-services:
+    name: ai-services
+    driver: bridge 

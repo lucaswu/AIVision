@@ -1,0 +1,303 @@
+{
+  "name": "AI Detection Result",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "/api/v1/task/result",
+        "options": {}
+      },
+      "id": "webhook-result",
+      "name": "Result Query Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "ai-detection-result"
+    },
+    {
+      "parameters": {
+        "functionCode": "const query = $input.all()[0].json.query;\nconst taskId = query.task_id;\n\nif (!taskId) {\n  throw new Error('Missing required parameter: task_id');\n}\n\nreturn {\n  task_id: taskId\n};"
+      },
+      "id": "extract-taskid",
+      "name": "Extract TaskID",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT task_id, project_id, user_id, status, progress, image_path, report_path, vision_result, llm_result, error_message, created_at, updated_at FROM task WHERE task_id = $1",
+        "additionalFields": {
+          "queryParameters": "{{ [$node['Extract TaskID'].json['task_id']] }}"
+        }
+      },
+      "id": "query-task",
+      "name": "Query Task Info",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "cpvNeShDZ9KlgjVq"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "task-not-found",
+              "leftValue": "{{ $node['Query Task Info'].json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "task-failed",
+              "leftValue": "{{ $node['Query Task Info'].json[0]?.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "task-completed",
+              "leftValue": "{{ $node['Query Task Info'].json[0]?.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-status",
+      "name": "Check Task Status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"Task not found\",\n  \"task_id\": \"{{ $node['Extract TaskID'].json['task_id'] }}\"\n}",
+        "options": {
+          "responseCode": 404
+        }
+      },
+      "id": "task-not-found",
+      "name": "Task Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"task_id\": \"{{ $node['Query Task Info'].json[0]['task_id'] }}\",\n  \"status\": \"failed\",\n  \"error\": \"{{ $node['Query Task Info'].json[0]['error_message'] }}\",\n  \"created_at\": \"{{ $node['Query Task Info'].json[0]['created_at'] }}\",\n  \"updated_at\": \"{{ $node['Query Task Info'].json[0]['updated_at'] }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "task-failed",
+      "name": "Task Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"task_id\": \"{{ $node['Query Task Info'].json[0]['task_id'] }}\",\n  \"status\": \"{{ $node['Query Task Info'].json[0]['status'] }}\",\n  \"progress\": {{ $node['Query Task Info'].json[0]['progress'] }},\n  \"message\": \"任务正在处理中\",\n  \"created_at\": \"{{ $node['Query Task Info'].json[0]['created_at'] }}\",\n  \"updated_at\": \"{{ $node['Query Task Info'].json[0]['updated_at'] }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "task-in-progress",
+      "name": "Task In Progress",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "ai-detection-bucket",
+        "fileName": "{{ $node['Query Task Info'].json[0]['report_path'] }}"
+      },
+      "id": "download-report",
+      "name": "Download Report",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 1,
+      "position": [1120, 500],
+      "credentials": {
+        "s3": {
+          "id": "Ug53W2mWNs0XNhrv"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const taskInfo = $node['Query Task Info'].json[0];\nconst reportContent = $node['Download Report'].binary.data.toString();\n\nreturn {\n  success: true,\n  task_id: taskInfo.task_id,\n  status: 'completed',\n  progress: 100,\n  project_id: taskInfo.project_id,\n  user_id: taskInfo.user_id,\n  report: {\n    content: reportContent,\n    format: 'markdown'\n  },\n  detection_result: taskInfo.vision_result,\n  analysis_result: taskInfo.llm_result,\n  image_url: `http://ai-detection-minio:9000/ai-detection-bucket/${taskInfo.image_path}`,\n  created_at: taskInfo.created_at,\n  updated_at: taskInfo.updated_at\n};"
+      },
+      "id": "build-response",
+      "name": "Build Complete Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{{ $node['Build Complete Response'].json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "complete-result",
+      "name": "Complete Result Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 500]
+    },
+    {
+      "parameters": {
+        "functionCode": "const error = $input.all()[0].json.error || $input.all()[0].json;\nconst taskId = $node['Extract TaskID'].json?.task_id || 'unknown';\n\nreturn {\n  success: false,\n  error: error.message || 'Internal server error',\n  task_id: taskId,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{{ $node['Error Handler'].json }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 600]
+    }
+  ],
+  "connections": {
+    "Result Query Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract TaskID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract TaskID": {
+      "main": [
+        [
+          {
+            "node": "Query Task Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Task Info": {
+      "main": [
+        [
+          {
+            "node": "Check Task Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Task Status": {
+      "main": [
+        [
+          {
+            "node": "Task Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Task Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Task In Progress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Report": {
+      "main": [
+        [
+          {
+            "node": "Build Complete Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Complete Response": {
+      "main": [
+        [
+          {
+            "node": "Complete Result Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1"
+} 
