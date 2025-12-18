@@ -31,6 +31,7 @@ storage:
   local:
     # Use a path within /app to avoid permission issues with non-root user
     base-dir: ${STORAGE_LOCAL_BASE_DIR:/app/data/files}
+    result-dir: ${STORAGE_RESULT_DIR:/app/data/results}
   # 外部可访问路径（传给非容器化的 huodian_ai 服务），可与本地不同
   external-base-dir: ${STORAGE_EXTERNAL_BASE_DIR:/app/data/files}
 
@@ -38,9 +39,6 @@ storage:
 ai-services:
   vision-ai:
     url: ${AI_SERVICES_VISION_AI_URL:http://host.docker.internal:8001}
-  llm-ai:
-    url: ${AI_SERVICES_LLM_AI_URL:http://localhost:11434}
-    model: ${AI_SERVICES_LLM_AI_MODEL:qwen2:0.5b}
 
 # Default User Configuration (临时配置，用于未实现认证时的默认用户)
 default-user:

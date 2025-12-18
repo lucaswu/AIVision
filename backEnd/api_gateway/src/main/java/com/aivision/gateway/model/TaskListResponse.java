@@ -107,6 +107,12 @@ public class TaskListResponse {
         @JsonProperty("ErrorMessage")
         @Schema(description = "错误信息", example = "null")
         private String errorMessage;
+
+        @JsonProperty("IsArchived")
+        private Boolean isArchived;
+
+        @JsonProperty("EndTime")
+        private String endTime;
         
         @JsonProperty("TaskFiles")
         @Schema(description = "任务文件列表")
@@ -180,10 +186,16 @@ public class TaskListResponse {
         
         public String getErrorMessage() { return errorMessage; }
         public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+
+        public Boolean getIsArchived() { return isArchived; }
+        public void setIsArchived(Boolean isArchived) { this.isArchived = isArchived; }
+
+        public String getEndTime() { return endTime; }
+        public void setEndTime(String endTime) { this.endTime = endTime; }
         
         public List<TaskFileItem> getTaskFiles() { return taskFiles; }
         public void setTaskFiles(List<TaskFileItem> taskFiles) { this.taskFiles = taskFiles; }
-    }
+    } 
     
     /**
      * 任务文件项

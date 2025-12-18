@@ -69,12 +69,12 @@ public class DirectoryController {
             required = true,
             content = @Content(
                 schema = @Schema(implementation = CreateDirectoryRequest.class),
-                examples = @ExampleObject(
-                    value = "{\n" +
-                           "    \"Name\": \"dir-1\",\n" +
-                           "    \"ParentDirectoryId\": null\n" +
-                           "}"
-                )
+                                 examples = @ExampleObject(
+                     value = "{\n" +
+                            "    \"Name\": \"dir-1\",\n" +
+                            "    \"ParentDirectoryId\": null\n" +
+                            "}"
+                 )
             )
         )
         @Valid @RequestBody CreateDirectoryRequest request) {
@@ -124,4 +124,4 @@ public class DirectoryController {
             return ResponseEntity.status(500).body(ApiResponse.error(500, "服务器内部错误"));
         }
     }
-}
+} 

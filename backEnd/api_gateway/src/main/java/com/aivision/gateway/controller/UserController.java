@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import javax.validation.Valid;
 
 @RestController
-@RequestMapping("/api")
+@RequestMapping("/api/v1/users")
 @CrossOrigin(origins = "*")
 @Tag(name = "用户管理", description = "用户认证与管理相关接口")
 public class UserController {
@@ -22,7 +22,7 @@ public class UserController {
     @Autowired
     private UserService userService;
 
-    @PostMapping("/auth/login")
+    @PostMapping("/login")
     @Operation(summary = "用户登录")
     public ResponseEntity<ApiResponse<UserLoginResponse>> login(@Valid @RequestBody UserLoginRequest request) {
         try {
@@ -33,7 +33,7 @@ public class UserController {
         }
     }
 
-    @PostMapping("/users")
+    @PostMapping
     @Operation(summary = "创建用户")
     public ResponseEntity<ApiResponse<UserResponse>> createUser(@Valid @RequestBody CreateUserRequest request) {
         try {
@@ -44,7 +44,7 @@ public class UserController {
         }
     }
 
-    @GetMapping("/users")
+    @GetMapping
     @Operation(summary = "获取用户列表")
     public ResponseEntity<ApiResponse<Page<User>>> getUserList(
             @RequestParam(defaultValue = "0") int page,
@@ -54,7 +54,7 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success("获取成功", users));
     }
 
-    @GetMapping("/users/{id}")
+    @GetMapping("/{id}")
     @Operation(summary = "获取用户详情")
     public ResponseEntity<ApiResponse<UserResponse>> getUser(@PathVariable String id) {
         try {
@@ -65,7 +65,7 @@ public class UserController {
         }
     }
 
-    @PutMapping("/users/{id}")
+    @PutMapping("/{id}")
     @Operation(summary = "更新用户")
     public ResponseEntity<ApiResponse<UserResponse>> updateUser(
             @PathVariable String id,
@@ -78,7 +78,7 @@ public class UserController {
         }
     }
 
-    @DeleteMapping("/users/{id}")
+    @DeleteMapping("/{id}")
     @Operation(summary = "删除用户")
     public ResponseEntity<ApiResponse<Void>> deleteUser(@PathVariable String id) {
         try {

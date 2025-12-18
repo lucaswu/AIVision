@@ -56,6 +56,15 @@ public class Task {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
     
+    @Column(name = "is_archived", nullable = false)
+    private Boolean isArchived = false;
+    
+    @Column(name = "task_report", columnDefinition = "TEXT")
+    private String taskReport;
+    
+    @Column(name = "end_time")
+    private LocalDateTime endTime;
+    
     @Column(name = "created_at")
     private LocalDateTime createdAt;
     
@@ -210,6 +219,33 @@ public class Task {
     
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public Boolean getIsArchived() {
+        return isArchived;
+    }
+
+    public void setIsArchived(Boolean isArchived) {
+        this.isArchived = isArchived;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getTaskReport() {
+        return taskReport;
+    }
+
+    public void setTaskReport(String taskReport) {
+        this.taskReport = taskReport;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public LocalDateTime getEndTime() {
+        return endTime;
+    }
+
+    public void setEndTime(LocalDateTime endTime) {
+        this.endTime = endTime;
         this.updatedAt = LocalDateTime.now();
     }
     

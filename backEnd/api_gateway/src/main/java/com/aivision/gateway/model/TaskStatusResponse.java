@@ -61,6 +61,15 @@ public class TaskStatusResponse {
     @JsonProperty("InQueueFiles")
     @Schema(description = "等待处理的文件数量", example = "2")
     private Integer inQueueFiles;
+
+    @JsonProperty("IsArchived")
+    private Boolean isArchived;
+
+    @JsonProperty("EndTime")
+    private String endTime;
+
+    @JsonProperty("TaskReport")
+    private String taskReport;
     
     // 内部类：任务文件结果
     public static class TaskFileResult {
@@ -233,4 +242,13 @@ public class TaskStatusResponse {
     
     public Integer getInQueueFiles() { return inQueueFiles; }
     public void setInQueueFiles(Integer inQueueFiles) { this.inQueueFiles = inQueueFiles; }
+
+    public Boolean getIsArchived() { return isArchived; }
+    public void setIsArchived(Boolean isArchived) { this.isArchived = isArchived; }
+
+    public String getEndTime() { return endTime; }
+    public void setEndTime(String endTime) { this.endTime = endTime; }
+
+    public String getTaskReport() { return taskReport; }
+    public void setTaskReport(String taskReport) { this.taskReport = taskReport; }
 } 

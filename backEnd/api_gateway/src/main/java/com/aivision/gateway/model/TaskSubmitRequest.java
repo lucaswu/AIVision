@@ -20,8 +20,10 @@ public class TaskSubmitRequest {
     private String algorithmType;
     
     @JsonProperty("SelectedFiles")
-    @NotEmpty(message = "选择的文件列表不能为空")
     private List<SelectedFile> selectedFiles;
+
+    @JsonProperty("DirectoryIds")
+    private List<String> directoryIds;
     
     // 内部类：选择的文件信息
     public static class SelectedFile {
@@ -85,6 +87,14 @@ public class TaskSubmitRequest {
     
     public void setSelectedFiles(List<SelectedFile> selectedFiles) {
         this.selectedFiles = selectedFiles;
+    }
+
+    public List<String> getDirectoryIds() {
+        return directoryIds;
+    }
+
+    public void setDirectoryIds(List<String> directoryIds) {
+        this.directoryIds = directoryIds;
     }
     
     @Override
