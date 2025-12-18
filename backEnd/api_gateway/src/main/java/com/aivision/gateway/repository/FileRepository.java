@@ -43,6 +43,11 @@ public interface FileRepository extends JpaRepository<File, String> {
      */
     @Query("SELECT COUNT(f) FROM File f WHERE f.projectId = :projectId AND f.userId = :userId")
     long countByProjectIdAndUserId(@Param("projectId") String projectId, @Param("userId") String userId);
+
+    /**
+     * 统计项目下的所有文件数量（不区分用户）
+     */
+    long countByProjectId(String projectId);
     
     /**
      * 计算目录下文件总大小

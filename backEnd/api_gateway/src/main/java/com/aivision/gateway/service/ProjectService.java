@@ -92,15 +92,87 @@ public class ProjectService {
         String updateTime = project.getUpdatedAt() != null ? 
             project.getUpdatedAt().format(DATE_TIME_FORMATTER) : "";
             
+        // 查询项目下的文件数量
+        int fileCount = (int) fileRepository.countByProjectId(project.getProjectId());
+        
         return new ProjectListItem(
             project.getProjectId(),
             project.getProjectName(),
             project.getDescription(),
             createTime,
             updateTime,
-            0, // fileCount - 暂时固定为0
-            0  // taskCount - 暂时固定为0
+            fileCount, 
+            0  // taskCount - 暂时固定为0，后续可类似增加 taskRepository.countByProjectId
         );
+    }
+
+    /**
+     * 更新项目信息
+     * @param projectId 项目ID
+     * @param userId 用户ID (用于权限验证)
+     * @param name 新名称 (可选)
+     * @param description 新描述 (可选)
+     * @return 更新后的项目ID
+     */
+    public String updateProject(String projectId, String userId, String name, String description) {
+        if (projectId == null || projectId.trim().isEmpty()) {
+            throw new IllegalArgumentException("项目ID不能为空");
+        }
+        
+        Project project = projectRepository.findById(projectId)
+            .orElseThrow(() -> new RuntimeException("项目不存在"));
+            
+        // 验证权限
+        if (!project.getOwnerId().equals(userId)) {
+            throw new RuntimeException("无权限修改该项目");
+        }
+        
+        boolean updated = false;
+        
+        if (name != null && !name.trim().isEmpty() && !name.equals(project.getProjectName())) {
+            // 检查重名
+            if (projectRepository.existsByProjectNameAndOwnerId(name.trim(), userId)) {
+                throw new RuntimeException("项目名称已存在: " + name);
+            }
+            project.setProjectName(name.trim());
+            updated = true;
+        }
+        
+        if (description != null && !description.equals(project.getDescription())) {
+            project.setDescription(description);
+            updated = true;
+        }
+        
+        if (updated) {
+            projectRepository.save(project);
+        }
+        
+        return project.getProjectId();
+    }
+    
+    /**
+     * 删除项目
+     * @param projectId 项目ID
+     * @param userId 用户ID (用于权限验证)
+     */
+    public void deleteProject(String projectId, String userId) {
+        if (projectId == null || projectId.trim().isEmpty()) {
+            throw new IllegalArgumentException("项目ID不能为空");
+        }
+        
+        Project project = projectRepository.findById(projectId)
+            .orElseThrow(() -> new RuntimeException("项目不存在"));
+            
+        // 验证权限
+        if (!project.getOwnerId().equals(userId)) {
+            throw new RuntimeException("无权限删除该项目");
+        }
+        
+        // 级联删除在数据库层通过 Foreign Key CASCADE 处理
+        // 但如果文件存储在 MinIO，这里需要调用 FileService 删除物理文件
+        // TODO: 集成 MinIO 删除逻辑
+        
+        projectRepository.delete(project);
     }
     
     /**

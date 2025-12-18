@@ -123,7 +123,7 @@ public class ProjectController {
                            "            \"Description\": \"PCB板自动化检测项目，用于电路板缺陷识别\",\n" +
                            "            \"CreateTime\": \"2023-10-01 14:30:22\",\n" +
                            "            \"UpdateTime\": \"2023-10-15 09:15:18\",\n" +
-                           "            \"FileCount\": 0,\n" +
+                           "            \"FileCount\": 24,\n" +
                            "            \"TaskCount\": 0\n" +
                            "        }\n" +
                            "    ],\n" +
@@ -158,6 +158,79 @@ public class ProjectController {
             return ResponseEntity.status(500).body(
                 ApiResponse.error(500, "服务器内部错误: " + e.getMessage())
             );
+        }
+    }
+
+    /**
+     * 更新项目
+     * PUT /api/v1/projects/{id}
+     */
+    @PutMapping("/{id}")
+    @Operation(
+        summary = "更新项目",
+        description = "更新项目名称或描述"
+    )
+    @ApiResponses(value = {
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "更新成功"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "请求参数错误"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "无权限"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "项目不存在"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "项目名称已存在")
+    })
+    public ResponseEntity<ApiResponse<String>> updateProject(
+            @Parameter(description = "项目ID", required = true)
+            @PathVariable("id") String projectId,
+            @Parameter(description = "用户ID", required = true, in = ParameterIn.HEADER)
+            @RequestHeader("user-id") String userId,
+            @RequestBody UpdateProjectRequest request) {
+            
+        try {
+            String updatedId = projectService.updateProject(projectId, userId, request.getProjectName(), request.getDescription());
+            return ResponseEntity.ok(ApiResponse.success("更新成功", updatedId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
+        } catch (RuntimeException e) {
+            if (e.getMessage().contains("无权限")) {
+                return ResponseEntity.status(403).body(ApiResponse.error(403, e.getMessage()));
+            } else if (e.getMessage().contains("不存在")) {
+                return ResponseEntity.status(404).body(ApiResponse.error(404, e.getMessage()));
+            } else if (e.getMessage().contains("已存在")) {
+                return ResponseEntity.status(409).body(ApiResponse.error(409, e.getMessage()));
+            }
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
+    /**
+     * 删除项目
+     * DELETE /api/v1/projects/{id}
+     */
+    @DeleteMapping("/{id}")
+    @Operation(
+        summary = "删除项目",
+        description = "删除项目及其所有相关资源（文件、任务等）"
+    )
+    @ApiResponses(value = {
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "删除成功"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "无权限"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "项目不存在")
+    })
+    public ResponseEntity<ApiResponse<Void>> deleteProject(
+            @Parameter(description = "项目ID", required = true)
+            @PathVariable("id") String projectId,
+            @Parameter(description = "用户ID", required = true, in = ParameterIn.HEADER)
+            @RequestHeader("user-id") String userId) {
+            
+        try {
+            projectService.deleteProject(projectId, userId);
+            return ResponseEntity.ok(ApiResponse.success("删除成功", null));
+        } catch (RuntimeException e) {
+            if (e.getMessage().contains("无权限")) {
+                return ResponseEntity.status(403).body(ApiResponse.error(403, e.getMessage()));
+            } else if (e.getMessage().contains("不存在")) {
+                return ResponseEntity.status(404).body(ApiResponse.error(404, e.getMessage()));
+            }
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
         }
     }
     
