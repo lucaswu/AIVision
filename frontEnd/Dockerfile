@@ -8,8 +8,10 @@ WORKDIR /app
 # 复制package.json和yarn.lock文件
 COPY package.json yarn.lock ./
 
-# 安装依赖
-RUN yarn install --frozen-lockfile
+# 设置国内镜像源并安装依赖
+RUN yarn config set registry https://registry.npmmirror.com && \
+    yarn config set strict-ssl false && \
+    yarn install --frozen-lockfile
 
 # 复制源代码
 COPY . .

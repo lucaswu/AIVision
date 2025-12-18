@@ -44,12 +44,17 @@ public class File {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
     
+    // 新增字段存储文件内容，不再使用MinIO
+    @Lob
+    @Column(name = "file_data")
+    private byte[] fileData;
+    
     // 构造函数
     public File() {}
     
     public File(String fileId, String projectId, String userId, String directoryId, 
                 String originalName, String storedName, String filePath, Long fileSize, 
-                String mimeType, String fileExtension) {
+                String mimeType, String fileExtension, byte[] fileData) {
         this.fileId = fileId;
         this.projectId = projectId;
         this.userId = userId;
@@ -60,11 +65,20 @@ public class File {
         this.fileSize = fileSize;
         this.mimeType = mimeType;
         this.fileExtension = fileExtension;
+        this.fileData = fileData;
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
     }
     
     // Getters and Setters
+    public byte[] getFileData() {
+        return fileData;
+    }
+
+    public void setFileData(byte[] fileData) {
+        this.fileData = fileData;
+    }
+
     public String getFileId() {
         return fileId;
     }

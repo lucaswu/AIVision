@@ -16,7 +16,6 @@
     
     <properties>
         <java.version>11</java.version>
-        <minio.version>8.5.7</minio.version>
     </properties>
     
     <dependencies>
@@ -49,13 +48,6 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
-        </dependency>
-        
-        <!-- MinIO Client -->
-        <dependency>
-            <groupId>io.minio</groupId>
-            <artifactId>minio</artifactId>
-            <version>${minio.version}</version>
         </dependency>
         
         <!-- HTTP Client for AI Services -->

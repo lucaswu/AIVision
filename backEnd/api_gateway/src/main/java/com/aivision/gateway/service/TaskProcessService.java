@@ -128,9 +128,9 @@ public class TaskProcessService {
             String llmResult = aiServiceClient.callLlmAi(visionResult, fileName);
             taskFile.setLlmResult(llmResult);
             
-            // TODO: 生成并上传报告到MinIO
-            String reportPath = generateAndUploadReport(taskFile, visionResult, llmResult);
-            taskFile.setReportPath(reportPath);
+            // 报告生成优化：不再生成静态HTML文件，改为前端根据 visionResult 和 llmResult 动态渲染
+            // String reportPath = generateAndUploadReport(taskFile, visionResult, llmResult);
+            taskFile.setReportPath(null);
             
                          // 更新文件状态为完成
              taskFile.setStatus(TaskFile.Status.COMPLETED);
@@ -158,36 +158,6 @@ public class TaskProcessService {
         }
         
         return CompletableFuture.completedFuture(null);
-    }
-    
-    /**
-     * 生成报告并保存到数据库
-     */
-    private String generateAndUploadReport(TaskFile taskFile, String visionResult, String llmResult) {
-        try {
-            // 1. 生成HTML报告内容
-            String htmlContent = generateHtmlReport(taskFile, visionResult, llmResult);
-            
-            // 2. 创建报告文件名（用于标识）
-            String reportFileName = "report_" + UUID.randomUUID().toString() + ".html";
-            String reportPath = "reports/" + taskFile.getTaskId() + "/" + reportFileName;
-            
-            // 3. 将HTML内容保存到任务文件的报告字段中
-            // 注意：这里我们可以在TaskFile实体中添加一个reportContent字段来存储HTML内容
-            // 暂时先返回路径标识
-            
-            logger.info("报告生成成功: taskFileId={}, reportPath={}, contentSize={}bytes", 
-                       taskFile.getTaskFileId(), reportPath, htmlContent.length());
-            
-            return reportPath;
-            
-        } catch (Exception e) {
-            logger.error("报告生成失败: taskFileId={}, error={}", 
-                        taskFile.getTaskFileId(), e.getMessage(), e);
-            // 即使报告生成失败，也返回路径，避免整个任务失败
-            String reportFileName = "report_" + UUID.randomUUID().toString() + ".html";
-            return "reports/" + taskFile.getTaskId() + "/" + reportFileName;
-        }
     }
     
     /**

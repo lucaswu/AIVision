@@ -162,16 +162,17 @@ public class FileService {
             String fileExtension = FilenameUtils.getExtension(originalFilename).toLowerCase();
             String storedName = fileId + "." + fileExtension;
             String objectPath = buildObjectPath(projectId, userId, directory.getDirPath(), storedName);
-            String fullPath = objectPath; // 直接使用相对路径，前缀由前端/服务拼接
+            String fullPath = objectPath; // 逻辑路径
             
-            // 3. 保存到本地文件系统
-            saveToLocal(file, objectPath);
+            // 3. 读取文件内容到内存
+            byte[] fileContent = file.getBytes();
             
-            // 4. 保存到数据库
+            // 4. 保存到数据库（直接存储二进制）
             File fileEntity = new File(
                 fileId, projectId, userId, directoryId,
                 originalFilename, storedName, fullPath,
-                file.getSize(), file.getContentType(), fileExtension
+                file.getSize(), file.getContentType(), fileExtension,
+                fileContent
             );
             
             fileRepository.save(fileEntity);
@@ -254,14 +255,11 @@ public class FileService {
         }
         
         try {
-            // 3. 从本地获取文件数据
-            String rel = file.getFilePath().startsWith("/") ? file.getFilePath().substring(1) : file.getFilePath();
-            Path path = Path.of(localBaseDir).resolve(rel).normalize();
-            InputStream inputStream = Files.newInputStream(path);
-            
-            // 4. 读取文件字节数据
-            byte[] imageBytes = IOUtils.toByteArray(inputStream);
-            inputStream.close();
+            // 3. 从数据库获取文件数据
+            byte[] imageBytes = file.getFileData();
+            if (imageBytes == null || imageBytes.length == 0) {
+                throw new RuntimeException("文件内容为空");
+            }
             
             // 5. 获取图片尺寸信息
             Integer width = null;
@@ -317,14 +315,12 @@ public class FileService {
         }
         
         try {
-            // 3. 从本地获取文件数据
-            String rel = file.getFilePath().startsWith("/") ? file.getFilePath().substring(1) : file.getFilePath();
-            Path path = Path.of(localBaseDir).resolve(rel).normalize();
-            InputStream inputStream = Files.newInputStream(path);
-            
-            // 4. 读取文件字节数据
-            byte[] imageBytes = IOUtils.toByteArray(inputStream);
-            inputStream.close();
+            // 3. 从数据库获取文件数据
+            byte[] imageBytes = file.getFileData();
+            if (imageBytes == null) {
+                // 兼容旧数据：如果数据库为空，尝试从本地读取（可选，这里为了纯粹性直接报错）
+                throw new RuntimeException("文件数据为空（未存储在数据库中）");
+            }
             
             // 5. 确定Content-Type
             String contentType = file.getMimeType();

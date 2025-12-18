@@ -369,19 +369,53 @@ public class TaskService {
         // 2. 获取用户在该项目下的所有任务（按创建时间倒序）
         List<Task> tasks = taskRepository.findByProjectIdAndUserIdOrderByCreatedAtDesc(projectId, userId);
         
-        // 3. 构建任务列表项
+        if (tasks.isEmpty()) {
+            return new TaskListResponse(new ArrayList<>(), 0);
+        }
+
+        // 3. 批量查询优化 (解决 N+1 问题)
+        List<String> taskIds = new ArrayList<>();
+        for (Task task : tasks) {
+            taskIds.add(task.getTaskId());
+        }
+
+        // 3.1 批量查询所有任务文件
+        List<TaskFile> allTaskFiles = taskFileRepository.findByTaskIdInOrderByCreatedAtAsc(taskIds);
+        
+        // 按 taskId 分组
+        Map<String, List<TaskFile>> taskFilesMap = new HashMap<>();
+        List<String> fileIds = new ArrayList<>();
+        
+        for (TaskFile tf : allTaskFiles) {
+            taskFilesMap.computeIfAbsent(tf.getTaskId(), k -> new ArrayList<>()).add(tf);
+            fileIds.add(tf.getFileId());
+        }
+
+        // 3.2 批量查询所有文件详情
+        List<File> allFiles = new ArrayList<>();
+        if (!fileIds.isEmpty()) {
+            allFiles = fileRepository.findByFileIdIn(fileIds);
+        }
+        
+        // 按 fileId 映射
+        Map<String, File> fileMap = new HashMap<>();
+        for (File f : allFiles) {
+            fileMap.put(f.getFileId(), f);
+        }
+        
+        // 4. 构建任务列表项 (完全在内存中进行，不查询数据库)
         List<TaskListResponse.TaskListItem> taskListItems = new ArrayList<>();
         
         for (Task task : tasks) {
-            // 获取任务文件列表
-            List<TaskFile> taskFiles = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(task.getTaskId());
+            // 从内存 Map 获取任务文件列表
+            List<TaskFile> taskFiles = taskFilesMap.getOrDefault(task.getTaskId(), new ArrayList<>());
             
             // 构建任务文件项列表
             List<TaskListResponse.TaskFileItem> taskFileItems = new ArrayList<>();
             for (TaskFile taskFile : taskFiles) {
-                // 获取原始文件信息以获取文件名
-                Optional<File> fileOpt = fileRepository.findById(taskFile.getFileId());
-                String fileName = fileOpt.isPresent() ? fileOpt.get().getOriginalName() : "unknown";
+                // 从内存 Map 获取文件名
+                File file = fileMap.get(taskFile.getFileId());
+                String fileName = (file != null) ? file.getOriginalName() : "unknown";
                 
                 TaskListResponse.TaskFileItem taskFileItem = new TaskListResponse.TaskFileItem(
                     taskFile.getTaskFileId(),
@@ -425,7 +459,7 @@ public class TaskService {
             taskListItems.add(taskListItem);
         }
         
-        // 4. 构建响应对象
+        // 5. 构建响应对象
         TaskListResponse response = new TaskListResponse(taskListItems, taskListItems.size());
         
         return response;

@@ -21,8 +21,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-backEnd/deploy/images
-backEnd/storage/images
 
 # PyInstaller
 *.manifest
@@ -89,8 +87,7 @@ pom.xml.next
 release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
-.mvn/timing.properties
-.mvn/wrapper/maven-wrapper.jar
+.mvn/
 
 # Spring Boot
 spring-boot-*.log
@@ -213,8 +210,6 @@ Desktop.ini
 # Docker
 .dockerignore
 # Docker images (exclude large image tar files)
-backEnd/deploy/images/
-backEnd/storage/images/
 *.tar
 *.tar.gz
 

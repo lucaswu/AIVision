@@ -187,45 +187,35 @@ public class AiServiceClient {
      * @return 检测结果JSON
      */
     public String callVisionAi(String relativeStoredPath, String taskId) {
-        try {
-            String url = visionAiUrl + "/detect_file";
-            String cleanPath = buildExternalAbsolutePath(relativeStoredPath);
+        // Mock 实现：直接返回模拟的检测结果
+        logger.info("Mock Vision AI: 调用虚拟检测服务, taskId={}", taskId);
             
-            // 构建请求体（按照vision ai服务要求的格式）
-            Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("task_id", taskId);                    // 必填：任务ID
-            requestBody.put("file_path", cleanPath);               // 必填：本地文件绝对路径（huodian_ai 可访问）
-            requestBody.put("detection_type", "defect_detection"); // 必填：检测类型
-            
-            // 设置请求头
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
-            
-            logger.info("调用视觉AI服务: url={}, taskId={}, file_path={}, detectionType={}", 
-                       url, taskId, cleanPath, "defect_detection");
-            
-            // 发送请求
-            ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
-            
-            if (response.getStatusCode() == HttpStatus.OK) {
-                String result = response.getBody();
-                logger.info("视觉AI检测成功: taskId={}, cleanPath={}, result={}", taskId, cleanPath, result);
+        // 模拟一个包含气孔和裂纹的检测结果
+        String mockResult = "{" +
+            "\"metadata\": {" +
+                "\"image_path\": \"" + relativeStoredPath + "\"," +
+                "\"total_defects\": \"2\"," +
+                "\"suggested_quality_level\": \"II\"" +
+            "}," +
+            "\"results\": [" +
+                "{" +
+                    "\"strName\": \"porosity\"," +
+                    "\"score\": 0.95," +
+                    "\"vvContour\": [[100, 100], [120, 100], [120, 120], [100, 120]]" +
+                "}," +
+                "{" +
+                    "\"strName\": \"crack\"," +
+                    "\"score\": 0.88," +
+                    "\"vvContour\": [[200, 200], [250, 210], [240, 220]]" +
+                "}" +
+            "]" +
+        "}";
                 
                 // 后处理检测结果，修复已知问题
-                String processedResult = postProcessVisionResult(result, taskId);
-                logger.debug("视觉AI结果后处理完成: taskId={}, processedResult={}", taskId, processedResult);
+        String processedResult = postProcessVisionResult(mockResult, taskId);
+        logger.debug("Mock Vision AI结果后处理完成: taskId={}, processedResult={}", taskId, processedResult);
                 
                 return processedResult;
-            } else {
-                throw new RuntimeException("视觉AI服务调用失败: " + response.getStatusCode());
-            }
-            
-        } catch (Exception e) {
-            logger.error("调用视觉AI服务失败: taskId={}, file_path(rel)={}, error={}", taskId, relativeStoredPath, e.getMessage(), e);
-            throw new RuntimeException("视觉AI服务调用失败: " + e.getMessage(), e);
-        }
     }
     
     /**

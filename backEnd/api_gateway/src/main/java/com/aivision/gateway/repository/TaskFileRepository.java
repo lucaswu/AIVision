@@ -83,4 +83,9 @@ public interface TaskFileRepository extends JpaRepository<TaskFile, String> {
      * 根据MinIO文件路径查找任务文件
      */
     Optional<TaskFile> findByMinioFilePath(String minioFilePath);
+
+    /**
+     * 批量查询多个任务ID下的所有文件记录
+     */
+    List<TaskFile> findByTaskIdInOrderByCreatedAtAsc(List<String> taskIds);
 } 

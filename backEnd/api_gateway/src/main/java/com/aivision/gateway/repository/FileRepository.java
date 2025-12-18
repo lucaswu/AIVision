@@ -60,4 +60,9 @@ public interface FileRepository extends JpaRepository<File, String> {
      * 根据项目ID查找所有文件（用于构建文件树）
      */
     List<File> findByProjectIdOrderByDirectoryIdAscCreatedAtDesc(String projectId);
+
+    /**
+     * 批量查询文件详情
+     */
+    List<File> findByFileIdIn(List<String> fileIds);
 } 
