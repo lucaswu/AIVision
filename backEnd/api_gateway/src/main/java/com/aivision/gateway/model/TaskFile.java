@@ -34,9 +34,6 @@ public class TaskFile {
     @Column(name = "vision_result", columnDefinition = "TEXT")
     private String visionResult;
     
-    @Column(name = "llm_result", columnDefinition = "TEXT")
-    private String llmResult;
-    
     @Column(name = "report_path", length = 500)
     private String reportPath;
     
@@ -130,15 +127,6 @@ public class TaskFile {
     
     public void setVisionResult(String visionResult) {
         this.visionResult = visionResult;
-        this.updatedAt = LocalDateTime.now();
-    }
-    
-    public String getLlmResult() {
-        return llmResult;
-    }
-    
-    public void setLlmResult(String llmResult) {
-        this.llmResult = llmResult;
         this.updatedAt = LocalDateTime.now();
     }
     

@@ -91,9 +91,6 @@ public class TaskStatusResponse {
         @JsonProperty("VisionResult")
         private String visionResult;
         
-        @JsonProperty("LlmResult")
-        private String llmResult;
-        
         @JsonProperty("ReportPath")
         private String reportPath;
         
@@ -110,7 +107,7 @@ public class TaskStatusResponse {
         public TaskFileResult() {}
         
         public TaskFileResult(String taskFileId, String fileId, String fileName, String logicalPath, 
-                             String status, String visionResult, String llmResult, String reportPath, 
+                             String status, String visionResult, String reportPath, 
                              String errorMessage, String processingStartTime, String processingEndTime) {
             this.taskFileId = taskFileId;
             this.fileId = fileId;
@@ -118,7 +115,6 @@ public class TaskStatusResponse {
             this.logicalPath = logicalPath;
             this.status = status;
             this.visionResult = visionResult;
-            this.llmResult = llmResult;
             this.reportPath = reportPath;
             this.errorMessage = errorMessage;
             this.processingStartTime = processingStartTime;
@@ -143,9 +139,6 @@ public class TaskStatusResponse {
         
         public String getVisionResult() { return visionResult; }
         public void setVisionResult(String visionResult) { this.visionResult = visionResult; }
-        
-        public String getLlmResult() { return llmResult; }
-        public void setLlmResult(String llmResult) { this.llmResult = llmResult; }
         
         public String getReportPath() { return reportPath; }
         public void setReportPath(String reportPath) { this.reportPath = reportPath; }

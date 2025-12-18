@@ -26,29 +26,6 @@ services:
       retries: 3
       start_period: 30s
 
-  # Ollama LLM 服务
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ai-detection-ollama
-    restart: unless-stopped
-    # 避免端口冲突：容器内部依然是 11434，但映射到宿主机改为 11435
-    # 后端服务依然通过 http://ollama:11434 访问，不受影响
-    ports:
-      - "11435:11434"
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-    volumes:
-      # 挂载宿主机的 ollama 目录 (Mac 下通常是 ~/.ollama)
-      - ${HOME}/.ollama:/root/.ollama
-    networks:
-      - ai-services
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
   # ================================
   # 应用服务
   # ================================
@@ -73,9 +50,6 @@ services:
       
       # Mock AI 服务配置 (代码中已Mock，不会发起真实请求)
       - AI_SERVICES_VISION_AI_URL=http://localhost:8080
-      # LLM 服务配置 (使用 Ollama)
-      - AI_SERVICES_LLM_AI_URL=http://ollama:11434
-      - AI_SERVICES_LLM_AI_MODEL=qwen2:0.5b
       
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
@@ -120,9 +94,6 @@ volumes:
   postgres_data:
     driver: local
     name: ai-detection-postgres-data
-  ollama_data:
-    driver: local
-    name: ai-detection-ollama-data
   files_data:
     driver: local
     name: ai-detection-files-data

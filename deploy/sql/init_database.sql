@@ -157,6 +157,9 @@ CREATE TABLE IF NOT EXISTS task (
     progress INTEGER NOT NULL DEFAULT 0, -- (processed_files / total_files) * 100
     parallel_count INTEGER NOT NULL DEFAULT 10, -- 并行度配置
     error_message TEXT, -- 整体任务失败原因
+    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    task_report TEXT,
+    end_time TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
@@ -170,11 +173,10 @@ CREATE TABLE IF NOT EXISTS task_file (
     task_id VARCHAR(255) NOT NULL,
     file_id VARCHAR(255) NOT NULL,
     logical_file_path VARCHAR(500) NOT NULL, -- 逻辑路径，如 /images/pcb-boards/001.jpg
-    minio_file_path VARCHAR(500), -- 实际MinIO路径，从file表获取
+    minio_file_path VARCHAR(500), -- 实际存储路径，从file表获取
     status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, processing, completed, failed
     vision_result TEXT, -- Vision AI 检测结果 JSON
-    llm_result TEXT, -- LLM 分析结果 JSON
-    report_path VARCHAR(500), -- 生成的报告在MinIO中的路径
+    report_path VARCHAR(500), -- 生成的报告路径
     error_message TEXT, -- 单个文件失败原因
     processing_start_time TIMESTAMP,
     processing_end_time TIMESTAMP,

@@ -65,24 +65,6 @@ class TaskServiceTest {
         when(taskRepository.findByProjectIdAndUserIdOrderByCreatedAtDesc(projectId, userId))
                 .thenReturn(Arrays.asList(task1));
 
-        // 2. Mock TaskFiles
-        TaskFile tf1 = new TaskFile();
-        tf1.setTaskFileId("tf-1");
-        tf1.setTaskId("task-1");
-        tf1.setFileId("file-1");
-        tf1.setStatus(TaskFile.Status.COMPLETED);
-        
-        when(taskFileRepository.findByTaskIdInOrderByCreatedAtAsc(Collections.singletonList("task-1")))
-                .thenReturn(Arrays.asList(tf1));
-
-        // 3. Mock Files
-        File file1 = new File();
-        file1.setFileId("file-1");
-        file1.setOriginalName("test.jpg");
-        
-        when(fileRepository.findByFileIdIn(Collections.singletonList("file-1")))
-                .thenReturn(Arrays.asList(file1));
-
         // Act
         TaskListResponse response = taskService.getTaskList(projectId, userId);
 
@@ -94,14 +76,8 @@ class TaskServiceTest {
         assertEquals("task-1", item.getId());
         assertEquals("Task 1", item.getName());
         
-        assertEquals(1, item.getTaskFiles().size());
-        TaskListResponse.TaskFileItem fileItem = item.getTaskFiles().get(0);
-        assertEquals("test.jpg", fileItem.getFileName());
-        assertEquals("file-1", fileItem.getFileId());
-
-        // Verify that batch methods were called
-        verify(taskFileRepository).findByTaskIdInOrderByCreatedAtAsc(anyList());
-        verify(fileRepository).findByFileIdIn(anyList());
+        // TaskService does not populate taskFiles in list view
+        assertNull(item.getTaskFiles());
     }
 
     @Test

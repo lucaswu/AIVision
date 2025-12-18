@@ -2,7 +2,7 @@ import requests
 import json
 import pytest
 
-BASE_URL = "http://localhost:8080/api"
+BASE_URL = "http://localhost:8080/api/v1/users"
 
 class TestUserManagement:
     
@@ -19,7 +19,7 @@ class TestUserManagement:
         
     def test_01_admin_login(self):
         """Test admin login functionality"""
-        url = f"{BASE_URL}/auth/login"
+        url = f"{BASE_URL}/login"
         payload = {
             "username": self.admin_username,
             "password": self.admin_password
@@ -35,7 +35,7 @@ class TestUserManagement:
         
     def test_02_create_user(self):
         """Test creating a new user"""
-        url = f"{BASE_URL}/users"
+        url = f"{BASE_URL}"
         response = requests.post(url, json=self.test_user)
         
         print(f"\nCreate User Response: {response.text}")
@@ -51,7 +51,7 @@ class TestUserManagement:
 
     def test_03_get_user_list(self):
         """Test fetching user list"""
-        url = f"{BASE_URL}/users"
+        url = f"{BASE_URL}"
         response = requests.get(url)
         
         assert response.status_code == 200
@@ -72,7 +72,7 @@ class TestUserManagement:
         if not hasattr(TestUserManagement, 'user_id'):
             pytest.skip("Skipping update test because creation failed")
             
-        url = f"{BASE_URL}/users/{TestUserManagement.user_id}"
+        url = f"{BASE_URL}/{TestUserManagement.user_id}"
         new_password = "new_password_456"
         payload = {
             "password": new_password
@@ -85,7 +85,7 @@ class TestUserManagement:
         assert response.json()["Code"] == 200
         
         # Verify login with new password
-        login_url = f"{BASE_URL}/auth/login"
+        login_url = f"{BASE_URL}/login"
         login_payload = {
             "username": self.test_user["username"],
             "password": new_password
@@ -99,7 +99,7 @@ class TestUserManagement:
         if not hasattr(TestUserManagement, 'user_id'):
             pytest.skip("Skipping delete test because creation failed")
             
-        url = f"{BASE_URL}/users/{TestUserManagement.user_id}"
+        url = f"{BASE_URL}/{TestUserManagement.user_id}"
         response = requests.delete(url)
         
         assert response.status_code == 200

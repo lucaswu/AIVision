@@ -43,9 +43,15 @@ def test_file_management():
 
     # 3. Upload File
     print("Uploading file...")
-    # Create a dummy image file
-    with open("test_image.jpg", "wb") as f:
-        f.write(os.urandom(1024)) # 1KB random data
+    # Use real image if available, else create dummy
+    img_name = "qwe.png"
+    created_dummy = False
+    
+    if not os.path.exists(img_name):
+        print(f"Warning: {img_name} not found, creating dummy file.")
+        with open(img_name, "wb") as f:
+            f.write(os.urandom(1024))
+        created_dummy = True
 
     upload_headers = {
         "user-id": USER_ID,
@@ -53,12 +59,16 @@ def test_file_management():
         "directory-id": dir_id
     }
     
-    files = {'File': ('test_image.jpg', open('test_image.jpg', 'rb'), 'image/jpeg')}
+    files = {'File': (img_name, open(img_name, 'rb'), 'image/png')}
     resp = requests.post(f"{BASE_URL}/files/upload", files=files, headers=upload_headers)
     upload_data = print_response(resp, "Upload File")
     
-    # Clean up local file
-    os.remove("test_image.jpg")
+    # Close file before potentially deleting
+    files['File'][1].close()
+    
+    # Clean up only if we created a dummy file
+    if created_dummy:
+        os.remove(img_name)
     
     if not upload_data or upload_data["Data"]["SuccessCount"] == 0:
         print("File upload failed")

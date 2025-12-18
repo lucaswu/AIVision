@@ -114,7 +114,6 @@ public class TaskService {
         for (TaskFile tf : taskFiles) {
             tf.setStatus(TaskFile.Status.PENDING);
             tf.setVisionResult(null);
-            tf.setLlmResult(null);
             tf.setErrorMessage(null);
             tf.setProcessingStartTime(null);
             tf.setProcessingEndTime(null);
@@ -222,7 +221,7 @@ public class TaskService {
             String fileName = fileOpt.isPresent() ? fileOpt.get().getOriginalName() : "unknown";
             selectedFiles.add(new TaskStatusResponse.TaskFileResult(
                 taskFile.getTaskFileId(), taskFile.getFileId(), fileName, taskFile.getLogicalFilePath(),
-                taskFile.getStatus().name().toLowerCase(), taskFile.getVisionResult(), taskFile.getLlmResult(),
+                taskFile.getStatus().name().toLowerCase(), taskFile.getVisionResult(),
                 taskFile.getReportPath(), taskFile.getErrorMessage(),
                 taskFile.getProcessingStartTime() != null ? taskFile.getProcessingStartTime().format(DATE_TIME_FORMATTER) : null,
                 taskFile.getProcessingEndTime() != null ? taskFile.getProcessingEndTime().format(DATE_TIME_FORMATTER) : null
