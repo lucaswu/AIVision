@@ -3,6 +3,32 @@
 -- 完整的数据库初始化脚本，包含所有表结构和索引
 
 -- =====================================================
+-- 0. 用户管理表
+-- =====================================================
+
+-- Create users table
+CREATE TABLE IF NOT EXISTS users (
+    user_id VARCHAR(255) PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_username UNIQUE (username)
+);
+
+-- Create indexes for users table
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+
+-- Initial Admin User (Default password: password)
+INSERT INTO users (user_id, username, password, role, status)
+VALUES ('admin-001', 'Admin', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'ADMIN', 'ACTIVE')
+ON CONFLICT (username) DO NOTHING;
+
+-- =====================================================
 -- 1. 项目管理表
 -- =====================================================
 
@@ -25,6 +51,23 @@ CREATE INDEX IF NOT EXISTS idx_project_owner_id ON project(owner_id);
 CREATE INDEX IF NOT EXISTS idx_project_status ON project(status);
 CREATE INDEX IF NOT EXISTS idx_project_type ON project(project_type);
 CREATE INDEX IF NOT EXISTS idx_project_created_at ON project(created_at);
+
+-- Create user_project_permission table (Depends on users and project)
+CREATE TABLE IF NOT EXISTS user_project_permission (
+    id VARCHAR(255) PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    project_id VARCHAR(255) NOT NULL,
+    permission VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_user_project_permission UNIQUE (user_id, project_id),
+    CONSTRAINT fk_permission_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_permission_project FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE
+);
+
+-- Create indexes for user_project_permission table
+CREATE INDEX IF NOT EXISTS idx_permission_user_id ON user_project_permission(user_id);
+CREATE INDEX IF NOT EXISTS idx_permission_project_id ON user_project_permission(project_id);
 
 -- =====================================================
 -- 2. 目录管理表
@@ -213,5 +256,5 @@ SELECT
     correlation
 FROM pg_stats 
 WHERE schemaname = 'public' 
-    AND tablename IN ('project', 'directory', 'file', 'task', 'task_file')
-ORDER BY tablename, attname; 
+    AND tablename IN ('users', 'user_project_permission', 'project', 'directory', 'file', 'task', 'task_file')
+ORDER BY tablename, attname;

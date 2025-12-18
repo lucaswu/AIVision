@@ -298,4 +298,26 @@ public class FileController {
                 ApiResponse.error(500, "服务器内部错误: " + e.getMessage()));
         }
     }
+
+    /**
+     * 获取文件列表（分页）
+     * GET /api/v1/files/list
+     */
+    @GetMapping("/list")
+    @Operation(summary = "获取文件列表", description = "获取指定目录下的文件列表，支持分页")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.aivision.gateway.model.File>>> getFileList(
+            @RequestParam String projectId,
+            @RequestParam String directoryId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestHeader("user-id") String userId) {
+            
+        try {
+            org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size);
+            var filePage = fileService.getFileList(projectId, userId, directoryId, pageable);
+            return ResponseEntity.ok(ApiResponse.success("获取成功", filePage));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
 } 

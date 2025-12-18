@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -164,15 +163,14 @@ public class FileService {
             String objectPath = buildObjectPath(projectId, userId, directory.getDirPath(), storedName);
             String fullPath = objectPath; // 逻辑路径
             
-            // 3. 读取文件内容到内存
-            byte[] fileContent = file.getBytes();
+            // 3. 保存文件到本地文件系统
+            saveToLocal(file, fullPath);
             
-            // 4. 保存到数据库（直接存储二进制）
+            // 4. 保存到数据库（只存元数据，不存内容）
             File fileEntity = new File(
                 fileId, projectId, userId, directoryId,
                 originalFilename, storedName, fullPath,
-                file.getSize(), file.getContentType(), fileExtension,
-                fileContent
+                file.getSize(), file.getContentType(), fileExtension
             );
             
             fileRepository.save(fileEntity);
@@ -226,7 +224,7 @@ public class FileService {
     }
     
     /**
-     * 上传文件到MinIO
+     * 上传文件到本地文件系统
      */
     private void saveToLocal(MultipartFile file, String objectPath) throws Exception {
         String relative = objectPath.startsWith("/") ? objectPath.substring(1) : objectPath;
@@ -234,66 +232,6 @@ public class FileService {
         Files.createDirectories(target.getParent());
         try (InputStream inputStream = file.getInputStream()) {
             Files.copy(inputStream, target, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
-    
-    /**
-     * 获取文件预览
-     */
-    public FilePreviewResponse getFilePreview(String fileId, String projectId, String userId) {
-        // 1. 验证文件是否存在并且用户有权限访问
-        Optional<File> fileOpt = fileRepository.findByFileIdAndProjectIdAndUserId(fileId, projectId, userId);
-        if (!fileOpt.isPresent()) {
-            throw new IllegalArgumentException("文件不存在或无权限访问");
-        }
-        
-        File file = fileOpt.get();
-        
-        // 2. 验证是否为图片文件
-        if (!isImageFile(file.getFileExtension())) {
-            throw new IllegalArgumentException("该文件不是图片格式，无法预览");
-        }
-        
-        try {
-            // 3. 从数据库获取文件数据
-            byte[] imageBytes = file.getFileData();
-            if (imageBytes == null || imageBytes.length == 0) {
-                throw new RuntimeException("文件内容为空");
-            }
-            
-            // 5. 获取图片尺寸信息
-            Integer width = null;
-            Integer height = null;
-            try {
-                ByteArrayInputStream bis = new ByteArrayInputStream(imageBytes);
-                BufferedImage bufferedImage = ImageIO.read(bis);
-                if (bufferedImage != null) {
-                    width = bufferedImage.getWidth();
-                    height = bufferedImage.getHeight();
-                }
-                bis.close();
-            } catch (Exception e) {
-                // 忽略尺寸获取失败，继续返回图片数据
-            }
-            
-            // 6. 转换为Base64编码
-            String base64Data = Base64.getEncoder().encodeToString(imageBytes);
-            String mimeType = file.getMimeType() != null ? file.getMimeType() : "image/" + file.getFileExtension();
-            String imageDataUrl = "data:" + mimeType + ";base64," + base64Data;
-            
-            // 7. 构建响应
-            return new FilePreviewResponse(
-                file.getFileId(),
-                file.getOriginalName(),
-                file.getFileSize(),
-                mimeType,
-                imageDataUrl,
-                width,
-                height
-            );
-            
-        } catch (Exception e) {
-            throw new RuntimeException("获取文件预览失败: " + e.getMessage(), e);
         }
     }
     
@@ -315,12 +253,15 @@ public class FileService {
         }
         
         try {
-            // 3. 从数据库获取文件数据
-            byte[] imageBytes = file.getFileData();
-            if (imageBytes == null) {
-                // 兼容旧数据：如果数据库为空，尝试从本地读取（可选，这里为了纯粹性直接报错）
-                throw new RuntimeException("文件数据为空（未存储在数据库中）");
+            // 3. 从本地文件系统读取文件
+            String rel = file.getFilePath().startsWith("/") ? file.getFilePath().substring(1) : file.getFilePath();
+            Path path = Path.of(localBaseDir).resolve(rel).normalize();
+            
+            if (!Files.exists(path)) {
+                throw new RuntimeException("文件物理路径不存在: " + path);
             }
+            
+            byte[] imageBytes = Files.readAllBytes(path);
             
             // 5. 确定Content-Type
             String contentType = file.getMimeType();
@@ -339,6 +280,48 @@ public class FileService {
             
         } catch (Exception e) {
             throw new RuntimeException("获取文件数据失败: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * 获取文件预览
+     */
+    public FilePreviewResponse getFilePreview(String fileId, String projectId, String userId) {
+        // 复用 getFileImageData 逻辑获取二进制数据
+        FileImageData data = getFileImageData(fileId, projectId, userId);
+        
+        try {
+            // 获取图片尺寸信息
+            Integer width = null;
+            Integer height = null;
+            try {
+                ByteArrayInputStream bis = new ByteArrayInputStream(data.getImageBytes());
+                BufferedImage bufferedImage = ImageIO.read(bis);
+                if (bufferedImage != null) {
+                    width = bufferedImage.getWidth();
+                    height = bufferedImage.getHeight();
+                }
+                bis.close();
+            } catch (Exception e) {
+                // 忽略尺寸获取失败
+            }
+            
+            // 转换为Base64编码
+            String base64Data = Base64.getEncoder().encodeToString(data.getImageBytes());
+            String imageDataUrl = "data:" + data.getContentType() + ";base64," + base64Data;
+            
+            return new FilePreviewResponse(
+                fileId,
+                data.getFileName(),
+                data.getFileSize(),
+                data.getContentType(),
+                imageDataUrl,
+                width,
+                height
+            );
+            
+        } catch (Exception e) {
+            throw new RuntimeException("获取文件预览失败: " + e.getMessage(), e);
         }
     }
     
@@ -410,4 +393,15 @@ public class FileService {
             throw new RuntimeException("删除文件失败: " + e.getMessage(), e);
         }
     }
-} 
+
+    /**
+     * 获取文件列表（分页）
+     */
+    public org.springframework.data.domain.Page<File> getFileList(String projectId, String userId, String directoryId, org.springframework.data.domain.Pageable pageable) {
+        // 验证目录是否存在和权限
+        directoryRepository.findByDirIdAndProjectIdAndUserIdAndStatus(directoryId, projectId, userId, Directory.Status.ACTIVE)
+            .orElseThrow(() -> new IllegalArgumentException("目录不存在或无权限访问"));
+            
+        return fileRepository.findByProjectIdAndUserIdAndDirectoryIdOrderByCreatedAtDesc(projectId, userId, directoryId, pageable);
+    }
+}

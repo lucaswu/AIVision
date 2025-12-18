@@ -28,6 +28,11 @@ public interface FileRepository extends JpaRepository<File, String> {
     List<File> findByProjectIdAndUserIdAndDirectoryIdOrderByCreatedAtDesc(String projectId, String userId, String directoryId);
     
     /**
+     * 根据项目ID、用户ID和目录ID查找文件（分页）
+     */
+    org.springframework.data.domain.Page<File> findByProjectIdAndUserIdAndDirectoryIdOrderByCreatedAtDesc(String projectId, String userId, String directoryId, org.springframework.data.domain.Pageable pageable);
+
+    /**
      * 根据文件ID、项目ID和用户ID查找文件
      */
     Optional<File> findByFileIdAndProjectIdAndUserId(String fileId, String projectId, String userId);

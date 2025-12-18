@@ -69,12 +69,12 @@ public class DirectoryController {
             required = true,
             content = @Content(
                 schema = @Schema(implementation = CreateDirectoryRequest.class),
-                                 examples = @ExampleObject(
-                     value = "{\n" +
-                            "    \"Name\": \"dir-1\",\n" +
-                            "    \"ParentDirectoryId\": null\n" +
-                            "}"
-                 )
+                examples = @ExampleObject(
+                    value = "{\n" +
+                           "    \"Name\": \"dir-1\",\n" +
+                           "    \"ParentDirectoryId\": null\n" +
+                           "}"
+                )
             )
         )
         @Valid @RequestBody CreateDirectoryRequest request) {
@@ -104,4 +104,24 @@ public class DirectoryController {
             return ResponseEntity.status(500).body(ApiResponse.error(500, "服务器内部错误: " + e.getMessage()));
         }
     }
-} 
+
+    /**
+     * 删除目录
+     * DELETE /api/v1/directories/{dirId}
+     */
+    @DeleteMapping("/{dirId}")
+    @Operation(summary = "删除目录", description = "删除目录（必须为空目录）")
+    public ResponseEntity<ApiResponse<Void>> deleteDirectory(
+            @PathVariable String dirId,
+            @RequestHeader("project-id") String projectId,
+            @RequestHeader("user-id") String userId) {
+        try {
+            directoryService.deleteDirectory(dirId, projectId, userId);
+            return ResponseEntity.ok(ApiResponse.success("目录删除成功", null));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, "服务器内部错误"));
+        }
+    }
+}

@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -95,5 +96,27 @@ public class DirectoryService {
             throw new IllegalArgumentException("目录不存在");
         }
         return directory.get();
+    }
+
+    /**
+     * 删除目录
+     * @param dirId 目录ID
+     * @param projectId 项目ID
+     * @param userId 用户ID
+     */
+    public void deleteDirectory(String dirId, String projectId, String userId) {
+        // 1. 获取目录
+        Directory directory = getDirectoryById(dirId, projectId, userId);
+        
+        // 2. 检查是否有子目录（ACTIVE状态）
+        List<Directory> subDirs = directoryRepository.findByParentIdAndUserIdAndStatusOrderByDirNameAsc(
+            dirId, userId, Directory.Status.ACTIVE);
+        if (!subDirs.isEmpty()) {
+            throw new RuntimeException("无法删除：目录不为空（包含子目录）");
+        }
+        
+        // 3. 标记为删除（软删除）
+        directory.setStatus(Directory.Status.DELETED);
+        directoryRepository.save(directory);
     }
 } 

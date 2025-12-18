@@ -29,9 +29,10 @@ spring:
 # Local storage configuration (replacing MinIO)
 storage:
   local:
-    base-dir: ${STORAGE_LOCAL_BASE_DIR:/data/files}
+    # Use a path within /app to avoid permission issues with non-root user
+    base-dir: ${STORAGE_LOCAL_BASE_DIR:/app/data/files}
   # 外部可访问路径（传给非容器化的 huodian_ai 服务），可与本地不同
-  external-base-dir: ${STORAGE_EXTERNAL_BASE_DIR:/data/files}
+  external-base-dir: ${STORAGE_EXTERNAL_BASE_DIR:/app/data/files}
 
 # AI Services Configuration
 ai-services:
@@ -61,7 +62,7 @@ file-upload:
   max-total-size: ${FILE_UPLOAD_MAX_TOTAL_SIZE:10GB}
   # 本地存储配置（用于非MinIO模式）
   local:
-    base-dir: ${STORAGE_LOCAL_BASE_DIR:/data/files}
+    base-dir: ${STORAGE_LOCAL_BASE_DIR:/app/data/files}
 
 # SpringDoc OpenAPI Configuration
 springdoc:

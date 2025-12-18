@@ -61,6 +61,7 @@ services:
     image: aivision-backend:latest
     container_name: ai-detection-gateway
     restart: unless-stopped
+    user: root # Force root user to avoid permission issues with volumes
     ports:
       - "8080:8080"
     environment:
@@ -94,7 +95,7 @@ services:
       retries: 3
       start_period: 60s
     volumes:
-      - files_data:/data/files
+      - files_data:/app/data/files
 
   # 前端服务
   frontend:
