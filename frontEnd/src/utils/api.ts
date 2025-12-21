@@ -27,7 +27,7 @@ export interface PaginationParams {
 const API_BASE_URL = "";
 
 // 默认用户ID (实际应该从认证系统获取)
-export const DEFAULT_USER_ID = "user001";
+export const getUserId = () => localStorage.getItem("userId") || "user001";
 
 // 通用请求函数
 async function request<T = any>(
@@ -35,13 +35,14 @@ async function request<T = any>(
   options: RequestInit = {}
 ): Promise<ApiResponse<T>> {
   try {
+    const userId = getUserId();
     // 添加调试日志
     console.log("API请求详情:", {
       url: `${API_BASE_URL}${url}`,
       method: options.method || "GET",
       headers: {
         "Content-Type": "application/json",
-        "user-id": DEFAULT_USER_ID,
+        "user-id": userId,
         ...options.headers,
       },
     });
@@ -50,7 +51,7 @@ async function request<T = any>(
       ...options,
       headers: {
         "Content-Type": "application/json",
-        "user-id": DEFAULT_USER_ID,
+        "user-id": userId,
         ...options.headers,
       },
     });
@@ -91,7 +92,7 @@ async function request<T = any>(
     return result;
   } catch (error) {
     console.error("API请求错误:", error);
-    if (error instanceof Error && !error.message.includes("请求失败")) {
+    if (error instanceof TypeError) {
       message.error("网络请求失败，请检查网络连接");
     }
     throw error;
@@ -108,7 +109,7 @@ async function uploadRequest(
     const response = await fetch(`${API_BASE_URL}${url}`, {
       method: "POST",
       headers: {
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
         ...headers,
       },
       body: formData,
@@ -267,14 +268,14 @@ export const taskAPI = {
 
     console.log("获取任务列表 - 请求参数:", {
       projectId,
-      userId: DEFAULT_USER_ID,
+      userId: getUserId(),
       params,
     });
 
     return request<any>("/api/v1/tasks/list", {
       headers: {
         "project-id": projectId,
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
       },
     });
   },
@@ -285,7 +286,7 @@ export const taskAPI = {
       method: "POST",
       headers: {
         "project-id": projectId,
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
       },
       body: JSON.stringify(data),
     });
@@ -296,7 +297,7 @@ export const taskAPI = {
     return request<Task>(`/api/v1/tasks/${taskId}`, {
       headers: {
         "project-id": projectId,
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
       },
     });
   },
@@ -307,7 +308,7 @@ export const taskAPI = {
       method: "DELETE",
       headers: {
         "project-id": projectId,
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
       },
     });
   },
@@ -322,7 +323,7 @@ export const taskAPI = {
       method: "PUT",
       headers: {
         "project-id": projectId,
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
       },
       body: JSON.stringify(data),
     });
@@ -333,10 +334,14 @@ export const taskAPI = {
 export const userAPI = {
   // 获取用户列表
   getUsers: (params?: PaginationParams) => {
-    const query = params
-      ? `?${new URLSearchParams(params as any).toString()}`
-      : "";
-    return request<User[]>(`/api/v1/users/list${query}`);
+    const { page = 1, pageSize = 10, ...rest } = params || {};
+    // 后端分页从 0 开始，前端从 1 开始，需要减 1
+    const query = new URLSearchParams({
+      page: (page - 1).toString(),
+      size: pageSize.toString(),
+      ...rest,
+    } as any).toString();
+    return request<any>(`/api/v1/users?${query}`);
   },
 
   // 获取用户详情
@@ -344,7 +349,7 @@ export const userAPI = {
 
   // 创建用户
   createUser: (data: Partial<User>) =>
-    request<User>("/api/v1/users/create", {
+    request<User>("/api/v1/users", {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -364,6 +369,13 @@ export const userAPI = {
 
   // 获取当前用户信息
   getCurrentUser: () => request<User>("/api/v1/users/profile"),
+
+  // 用户登录
+  login: (data: any) =>
+    request<any>("/api/v1/users/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 // 检测结果相关API - 复用/api/v1/tasks/list接口
@@ -376,7 +388,7 @@ export const resultAPI = {
     return request<any>("/api/v1/tasks/list", {
       headers: {
         "project-id": projectId,
-        "user-id": DEFAULT_USER_ID,
+        "user-id": getUserId(),
       },
     });
   },

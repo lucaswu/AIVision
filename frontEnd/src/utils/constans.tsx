@@ -1,23 +1,42 @@
 import {
-  UserOutlined,
+  ProjectOutlined,
   SettingOutlined,
+  UserOutlined,
+  CloudServerOutlined,
+  FolderOutlined,
   LogoutOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 
 export const rootSidebarItems = [
   {
-    key: "projects",
+    key: "projects-group",
     label: "项目管理",
+    icon: <ProjectOutlined />,
+    children: [
+      {
+        key: "projects",
+        label: "全部项目",
+      },
+    ],
   },
   {
-    key: "users",
-    label: "用户管理",
+    key: "system-group",
+    label: "系统管理",
+    icon: <SettingOutlined />,
+    children: [
+      {
+        key: "users",
+        label: "用户管理",
+        icon: <UserOutlined />,
+      },
+      {
+        key: "models",
+        label: "模型管理",
+        icon: <CloudServerOutlined />,
+      },
+    ],
   },
-  // {
-  //   key: "settings",
-  //   label: "设置",
-  // },
 ];
 
 export const projectSidebarItems = [

@@ -33,11 +33,15 @@ public class ProjectListItem {
     @JsonProperty("TaskCount")
     @Schema(description = "任务数量", example = "3")
     private Integer taskCount;
+
+    @JsonProperty("Permission")
+    @Schema(description = "用户对该项目的权限 (OWNER, READ_ONLY, READ_WRITE)", example = "READ_ONLY")
+    private String permission;
     
     // 构造函数
     public ProjectListItem() {}
     
-    public ProjectListItem(String id, String name, String description, String createTime, String updateTime, Integer fileCount, Integer taskCount) {
+    public ProjectListItem(String id, String name, String description, String createTime, String updateTime, Integer fileCount, Integer taskCount, String permission) {
         this.id = id;
         this.name = name;
         this.description = description;
@@ -45,6 +49,7 @@ public class ProjectListItem {
         this.updateTime = updateTime;
         this.fileCount = fileCount;
         this.taskCount = taskCount;
+        this.permission = permission;
     }
     
     // Getters and Setters
@@ -102,6 +107,14 @@ public class ProjectListItem {
     
     public void setTaskCount(Integer taskCount) {
         this.taskCount = taskCount;
+    }
+
+    public String getPermission() {
+        return permission;
+    }
+
+    public void setPermission(String permission) {
+        this.permission = permission;
     }
     
     @Override

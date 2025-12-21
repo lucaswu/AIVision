@@ -155,7 +155,9 @@ public class UserService implements CommandLineRunner {
 
         // 更新权限 (全量替换)
         if (request.getProjectPermissions() != null) {
-            permissionRepository.deleteByUserId(userId);
+            List<UserProjectPermission> existingPermissions = permissionRepository.findByUserId(userId);
+            permissionRepository.deleteAll(existingPermissions);
+            permissionRepository.flush(); // 强制刷新，确保删除先执行
             
             for (CreateUserRequest.ProjectPermissionDTO dto : request.getProjectPermissions()) {
                  Project project = projectRepository.findById(dto.getProjectId())
@@ -201,8 +203,24 @@ public class UserService implements CommandLineRunner {
     /**
      * 获取用户列表
      */
-    public Page<User> getUserList(Pageable pageable) {
-        return userRepository.findAll(pageable);
+    public Page<UserResponse> getUserList(Pageable pageable) {
+        Page<User> userPage = userRepository.findAll(pageable);
+        return userPage.map(user -> {
+            List<UserProjectPermission> permissions = permissionRepository.findByUserId(user.getUserId());
+            List<UserResponse.UserProjectPermissionDTO> permissionDTOs = permissions.stream()
+                .map(p -> {
+                    String projectName = projectRepository.findById(p.getProjectId())
+                        .map(Project::getProjectName)
+                        .orElse("Unknown Project");
+                    return new UserResponse.UserProjectPermissionDTO(
+                        p.getProjectId(), 
+                        projectName, 
+                        p.getPermission().name()
+                    );
+                })
+                .collect(Collectors.toList());
+            return toUserResponse(user, permissionDTOs);
+        });
     }
 
     /**

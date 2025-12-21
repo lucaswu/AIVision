@@ -15,6 +15,7 @@ export interface Project {
   CreateTime: string;
   FileCount?: number;
   TaskCount?: number;
+  Permission?: "OWNER" | "READ_ONLY" | "READ_WRITE";
 }
 
 // 目录接口定义 (基于后端Directory实体)

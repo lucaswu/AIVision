@@ -47,12 +47,15 @@ const { RangePicker } = DatePicker;
 interface ResultsPageProps {
   projectId: string;
   projectName: string;
+  permission?: string;
 }
 
 export default function ResultsPage({
   projectId,
   projectName,
+  permission = "READ_ONLY",
 }: ResultsPageProps) {
+  const isReadOnly = permission === "READ_ONLY";
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [searchKeyword, setSearchKeyword] = useState("");

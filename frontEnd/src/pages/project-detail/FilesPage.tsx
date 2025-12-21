@@ -37,7 +37,7 @@ import type {
 } from "antd";
 import { useParams } from "react-router-dom";
 import { useRequest } from "ahooks";
-import { fileAPI, directoryAPI, DEFAULT_USER_ID } from "../../utils/api";
+import { fileAPI, directoryAPI, getUserId } from "../../utils/api";
 import { FileTreeNode } from "../../utils/data";
 import "./FilesPage.css";
 import { filePreviewPath } from "@/utils/constans";
@@ -48,12 +48,15 @@ const { Dragger } = Upload;
 interface FilesPageProps {
   projectId: string;
   projectName?: string;
+  permission?: string;
 }
 
 const FilesPage: React.FC<FilesPageProps> = ({
   projectId,
   projectName = "项目",
+  permission = "READ_ONLY",
 }) => {
+  const isReadOnly = permission === "READ_ONLY";
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selectedPath, setSelectedPath] = useState<string>("");
@@ -372,7 +375,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
             type="text"
             icon={<DownloadOutlined />}
             onClick={() => {
-              const downloadUrl = `${filePreviewPath}?FileId=${record.Id}&ProjectId=${projectId}&UseId=${DEFAULT_USER_ID}`;
+              const downloadUrl = `${filePreviewPath}?FileId=${record.Id}&ProjectId=${projectId}&UseId=${getUserId()}`;
 
               // 创建一个隐藏的a标签来触发下载
               const link = document.createElement("a");
@@ -396,6 +399,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
             danger
             icon={<DeleteOutlined />}
             onClick={() => handleDelete(record.Id)}
+            disabled={isReadOnly}
           >
             删除
           </Button>
@@ -409,13 +413,15 @@ const FilesPage: React.FC<FilesPageProps> = ({
     return dirId ? [dirId] : [];
   }, [selectedPath, allDirectories]);
 
+  const breadcrumbItems = [
+    { title: "项目管理" },
+    { title: projectName },
+    { title: "文件管理" },
+  ];
+
   return (
     <div style={{ height: "100%" }}>
-      <Breadcrumb style={{ marginBottom: "24px" }}>
-        <Breadcrumb.Item>项目管理</Breadcrumb.Item>
-        <Breadcrumb.Item>{projectName}</Breadcrumb.Item>
-        <Breadcrumb.Item>文件管理</Breadcrumb.Item>
-      </Breadcrumb>
+      <Breadcrumb items={breadcrumbItems} style={{ marginBottom: "24px" }} />
       <div
         style={{
           display: "flex",
@@ -428,16 +434,20 @@ const FilesPage: React.FC<FilesPageProps> = ({
           文件管理
         </Title>
         <Space>
-          <Button icon={<PlusOutlined />} onClick={handleCreateDirectory}>
-            新建目录
-          </Button>
-          <Button
-            type="primary"
-            icon={<UploadOutlined />}
-            onClick={() => setUploadModalVisible(true)}
-          >
-            上传文件
-          </Button>
+          {!isReadOnly && (
+            <>
+              <Button icon={<PlusOutlined />} onClick={handleCreateDirectory}>
+                新建目录
+              </Button>
+              <Button
+                type="primary"
+                icon={<UploadOutlined />}
+                onClick={() => setUploadModalVisible(true)}
+              >
+                上传文件
+              </Button>
+            </>
+          )}
         </Space>
       </div>
 
@@ -455,7 +465,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
               borderRadius: "8px",
               boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
             }}
-            bodyStyle={{ padding: "16px 0" }}
+            styles={{ body: { padding: "16px 0" } }}
             loading={loading}
           >
             <Tree
@@ -612,7 +622,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
       >
         <div style={{ textAlign: "center" }}>
           <Image
-            src={`${filePreviewPath}?FileId=${previewImage}&ProjectId=${projectId}&UseId=${DEFAULT_USER_ID}`}
+            src={`${filePreviewPath}?FileId=${previewImage}&ProjectId=${projectId}&UseId=${getUserId()}`}
             alt="预览图片"
             style={{ maxWidth: "100%", maxHeight: "60vh" }}
             preview={false}

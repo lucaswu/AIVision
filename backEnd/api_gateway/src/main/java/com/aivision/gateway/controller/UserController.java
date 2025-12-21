@@ -46,11 +46,11 @@ public class UserController {
 
     @GetMapping
     @Operation(summary = "获取用户列表")
-    public ResponseEntity<ApiResponse<Page<User>>> getUserList(
+    public ResponseEntity<ApiResponse<Page<UserResponse>>> getUserList(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
         
-        Page<User> users = userService.getUserList(PageRequest.of(page, size, Sort.by("createdAt").descending()));
+        Page<UserResponse> users = userService.getUserList(PageRequest.of(page, size, Sort.by("createdAt").descending()));
         return ResponseEntity.ok(ApiResponse.success("获取成功", users));
     }
 

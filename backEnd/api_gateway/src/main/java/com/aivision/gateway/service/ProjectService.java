@@ -1,14 +1,11 @@
 package com.aivision.gateway.service;
 
-import com.aivision.gateway.model.Project;
-import com.aivision.gateway.model.ProjectListItem;
-import com.aivision.gateway.model.ProjectFileTreeResponse;
-import com.aivision.gateway.model.ProjectFileTreeResult;
-import com.aivision.gateway.model.Directory;
-import com.aivision.gateway.model.File;
+import com.aivision.gateway.model.*;
 import com.aivision.gateway.repository.ProjectRepository;
 import com.aivision.gateway.repository.DirectoryRepository;
 import com.aivision.gateway.repository.FileRepository;
+import com.aivision.gateway.repository.UserProjectPermissionRepository;
+import com.aivision.gateway.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +26,12 @@ public class ProjectService {
     
     @Autowired
     private FileRepository fileRepository;
+
+    @Autowired
+    private UserProjectPermissionRepository permissionRepository;
+
+    @Autowired
+    private UserRepository userRepository;
     
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
@@ -44,6 +47,14 @@ public class ProjectService {
         if (ownerId == null || ownerId.trim().isEmpty()) {
             throw new IllegalArgumentException("用户ID不能为空");
         }
+
+        // 验证权限：只有管理员才能创建项目
+        User user = userRepository.findById(ownerId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        if (user.getRole() != User.Role.ADMIN) {
+            throw new RuntimeException("只有管理员才能创建项目");
+        }
+
         if (projectName == null || projectName.trim().isEmpty()) {
             throw new IllegalArgumentException("项目名称不能为空");
         }
@@ -75,18 +86,41 @@ public class ProjectService {
         if (userId == null || userId.trim().isEmpty()) {
             throw new IllegalArgumentException("用户ID不能为空");
         }
-        
-        List<Project> projects = projectRepository.findByOwnerId(userId);
-        
-        return projects.stream()
-                .map(this::convertToProjectListItem)
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+        List<Project> projects;
+        if (user.getRole() == User.Role.ADMIN) {
+            // 管理员可以看到所有项目
+            projects = projectRepository.findAll();
+            return projects.stream()
+                .map(p -> convertToProjectListItem(p, userId)) // 传递 userId 以确定权限
                 .collect(Collectors.toList());
+        } else {
+            // 非管理员（质检员）可以看到：
+            // 1. 自己创建的项目 (Owner)
+            // 2. 被授权的项目 (UserProjectPermission)
+            Set<String> projectIds = new HashSet<>();
+            
+            // 获取拥有的项目ID
+            projectRepository.findByOwnerId(userId).forEach(p -> projectIds.add(p.getProjectId()));
+            
+            // 获取被授权的项目ID
+            permissionRepository.findByUserId(userId).forEach(p -> projectIds.add(p.getProjectId()));
+            
+            projects = projectRepository.findAllById(projectIds);
+
+            return projects.stream()
+                .map(p -> convertToProjectListItem(p, userId)) // 传递 userId 以确定权限
+                .collect(Collectors.toList());
+        }
     }
     
     /**
      * 将Project实体转换为ProjectListItem DTO
      */
-    private ProjectListItem convertToProjectListItem(Project project) {
+    private ProjectListItem convertToProjectListItem(Project project, String userId) {
         String createTime = project.getCreatedAt() != null ? 
             project.getCreatedAt().format(DATE_TIME_FORMATTER) : "";
         String updateTime = project.getUpdatedAt() != null ? 
@@ -94,6 +128,20 @@ public class ProjectService {
             
         // 查询项目下的文件数量
         int fileCount = (int) fileRepository.countByProjectId(project.getProjectId());
+
+        // 确定权限
+        String permission = "READ_ONLY"; // 默认只读
+        User user = userRepository.findById(userId).orElse(null);
+
+        if (user != null && user.getRole() == User.Role.ADMIN) {
+            permission = "OWNER"; // 管理员视为所有者权限
+        } else if (project.getOwnerId().equals(userId)) {
+            permission = "OWNER";
+        } else {
+            permission = permissionRepository.findByUserIdAndProjectId(userId, project.getProjectId())
+                .map(p -> p.getPermission().name())
+                .orElse("READ_ONLY");
+        }
         
         return new ProjectListItem(
             project.getProjectId(),
@@ -102,7 +150,8 @@ public class ProjectService {
             createTime,
             updateTime,
             fileCount, 
-            0  // taskCount - 暂时固定为0，后续可类似增加 taskRepository.countByProjectId
+            0, // taskCount
+            permission
         );
     }
 
@@ -123,8 +172,17 @@ public class ProjectService {
             .orElseThrow(() -> new RuntimeException("项目不存在"));
             
         // 验证权限
-        if (!project.getOwnerId().equals(userId)) {
-            throw new RuntimeException("无权限修改该项目");
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+        if (user.getRole() != User.Role.ADMIN && !project.getOwnerId().equals(userId)) {
+            // 检查是否有 READ_WRITE 权限
+            UserProjectPermission perm = permissionRepository.findByUserIdAndProjectId(userId, projectId)
+                .orElseThrow(() -> new RuntimeException("无权限修改该项目"));
+            
+            if (perm.getPermission() != UserProjectPermission.Permission.READ_WRITE) {
+                throw new RuntimeException("无权限修改该项目（仅只读权限）");
+            }
         }
         
         boolean updated = false;
@@ -186,6 +244,14 @@ public class ProjectService {
         if (ownerId == null || ownerId.trim().isEmpty()) {
             throw new IllegalArgumentException("用户ID不能为空");
         }
+
+        // 验证权限：只有管理员才能创建项目
+        User user = userRepository.findById(ownerId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        if (user.getRole() != User.Role.ADMIN) {
+            throw new RuntimeException("只有管理员才能创建项目");
+        }
+
         if (projectName == null || projectName.trim().isEmpty()) {
             throw new IllegalArgumentException("项目名称不能为空");
         }
@@ -294,15 +360,22 @@ public class ProjectService {
             throw new IllegalArgumentException("用户ID不能为空");
         }
         
-        // 验证项目是否存在并且属于当前用户
+        // 验证项目是否存在
         Optional<Project> project = projectRepository.findById(projectId);
         if (!project.isPresent()) {
             throw new RuntimeException("项目不存在: " + projectId);
         }
+
+        // 验证权限
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         
-        // 验证项目是否属于当前用户
-        if (!project.get().getOwnerId().equals(userId)) {
-            throw new RuntimeException("无权限访问该项目: " + projectId);
+        if (user.getRole() != User.Role.ADMIN && !project.get().getOwnerId().equals(userId)) {
+            // 如果不是管理员且不是所有者，检查是否有显式授权
+            boolean hasPermission = permissionRepository.findByUserIdAndProjectId(userId, projectId).isPresent();
+            if (!hasPermission) {
+                throw new RuntimeException("无权限访问该项目: " + projectId);
+            }
         }
         
         // 获取项目下的所有目录，按层级和名称排序

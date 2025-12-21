@@ -7,32 +7,28 @@ import {
   Tag,
   Typography,
   Modal,
-  Form,
-  Input,
-  Select,
   message,
   Avatar,
+  Breadcrumb,
 } from "antd";
 import {
   PlusOutlined,
   EditOutlined,
   DeleteOutlined,
-  UserOutlined,
 } from "@ant-design/icons";
 import { useRequest } from "ahooks";
+import { useNavigate } from "react-router-dom";
 import { User } from "@/utils/data";
 import { userAPI } from "@/utils/api";
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 export default function UserManagement() {
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 10,
   });
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [form] = Form.useForm();
+  const navigate = useNavigate();
 
   // 使用useRequest获取用户列表，依赖分页参数
   const {
@@ -50,33 +46,32 @@ export default function UserManagement() {
     }
   );
 
-  const users = usersResponse?.Data || [];
-  const total = usersResponse?.Total || users.length;
+  const users = usersResponse?.Data?.content || [];
+  const total = usersResponse?.Data?.totalElements || users.length;
 
   const handleAddUser = () => {
-    setEditingUser(null);
-    setIsModalVisible(true);
-    form.resetFields();
+    navigate("/users/add");
   };
 
   const handleEditUser = (user: User) => {
-    setEditingUser(user);
-    setIsModalVisible(true);
-    form.setFieldsValue({
-      username: user.Username,
-      email: user.Email,
-      role: user.Role,
-      status: user.Status,
-    });
+    navigate(`/users/edit/${user.userId || user.Id}`);
   };
 
-  const handleDeleteUser = async (user: User) => {
+  const handleDeleteUser = async (user: any) => {
+    const username = user.username || user.Username;
+    if (username === "Admin") {
+      message.error("系统管理员账号不允许删除");
+      return;
+    }
     Modal.confirm({
       title: "确认删除",
-      content: `确定要删除用户 ${user.Username} 吗？`,
+      content: `确定要删除用户 ${user.username || user.Username} 吗？`,
+      okText: "确认删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
       async onOk() {
         try {
-          await userAPI.deleteUser(user.Id.toString());
+          await userAPI.deleteUser((user.userId || user.Id).toString());
           message.success("用户删除成功！");
           refresh();
         } catch (error) {
@@ -84,35 +79,6 @@ export default function UserManagement() {
         }
       },
     });
-  };
-
-  const handleModalOk = async () => {
-    try {
-      const values = await form.validateFields();
-
-      if (editingUser) {
-        // 编辑用户
-        await userAPI.updateUser(editingUser.Id.toString(), values);
-        message.success("用户更新成功！");
-      } else {
-        // 添加用户
-        await userAPI.createUser(values);
-        message.success("用户创建成功！");
-      }
-
-      setIsModalVisible(false);
-      form.resetFields();
-      setEditingUser(null);
-      refresh();
-    } catch (error) {
-      console.log("验证失败:", error);
-    }
-  };
-
-  const handleModalCancel = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-    setEditingUser(null);
   };
 
   // 处理分页变化
@@ -125,82 +91,83 @@ export default function UserManagement() {
 
   const columns = [
     {
-      title: "头像",
-      dataIndex: "avatar",
-      key: "avatar",
-      render: (_text: string, record: User) => (
-        <Avatar icon={<UserOutlined />} />
+      title: "ID",
+      dataIndex: "userId",
+      key: "userId",
+      width: 100,
+      render: (id: string, record: any) => id || record.Id || "-",
+    },
+    {
+      title: "姓名",
+      dataIndex: "username",
+      key: "username",
+      render: (username: string, record: any) => (
+        <Space>
+          <Avatar 
+            style={{ backgroundColor: "#1890ff", verticalAlign: "middle" }}
+            size="small"
+          >
+            {(username || record.Username || "?")[0].toUpperCase()}
+          </Avatar>
+          <Text strong>{username || record.Username}</Text>
+        </Space>
       ),
     },
     {
-      title: "用户名",
-      dataIndex: "Username",
-      key: "Username",
-    },
-    {
       title: "邮箱",
-      dataIndex: "Email",
-      key: "Email",
+      dataIndex: "email",
+      key: "email",
+      render: (email: string, record: any) => email || record.Email || "-",
     },
     {
       title: "角色",
-      dataIndex: "Role",
-      key: "Role",
-      render: (role: string) => {
-        const roleConfig = {
-          admin: { color: "red", text: "管理员" },
-          quality_inspector: { color: "blue", text: "质检员" },
-          user: { color: "green", text: "普通用户" },
-          viewer: { color: "green", text: "只读用户" },
-        };
-        const config = roleConfig[role as keyof typeof roleConfig] || {
-          color: "default",
-          text: role,
-        };
-        return <Tag color={config.color}>{config.text}</Tag>;
+      dataIndex: "role",
+      key: "role",
+      render: (role: string, record: any) => {
+        const r = (role || record.Role || "").toUpperCase();
+        if (r === "ADMIN") {
+          return (
+            <Tag color="blue" style={{ borderRadius: "10px", padding: "0 12px" }}>
+              管理员
+            </Tag>
+          );
+        }
+        return (
+          <Tag color="green" style={{ borderRadius: "10px", padding: "0 12px" }}>
+            质检员
+          </Tag>
+        );
       },
     },
     {
-      title: "状态",
-      dataIndex: "Status",
-      key: "Status",
-      render: (status: string) => {
-        const statusConfig = {
-          active: { color: "success", text: "活跃" },
-          inactive: { color: "default", text: "非活跃" },
-          disabled: { color: "error", text: "禁用" },
-        };
-        const config = statusConfig[status as keyof typeof statusConfig] || {
-          color: "default",
-          text: status,
-        };
-        return <Tag color={config.color}>{config.text}</Tag>;
-      },
-    },
-    {
-      title: "注册时间",
-      dataIndex: "CreateTime",
-      key: "CreateTime",
-      render: (time: string) => {
-        return time ? new Date(time).toLocaleDateString("zh-CN") : "-";
-      },
-    },
-    {
-      title: "最后登录",
-      dataIndex: "LastLoginTime",
-      key: "LastLoginTime",
-      render: (time: string) => {
-        return time ? new Date(time).toLocaleDateString("zh-CN") : "-";
+      title: "项目",
+      dataIndex: "permissions",
+      key: "permissions",
+      render: (permissions: any[], record: any) => {
+        const perms = permissions || record.Permissions || [];
+        if (!perms || perms.length === 0) return <Text type="secondary">无项目</Text>;
+        return (
+          <Space size={[0, 4]} wrap>
+            {perms.slice(0, 2).map((p: any) => (
+              <Tag key={p.projectId} color="cyan" style={{ border: "none" }}>
+                {p.projectName}
+              </Tag>
+            ))}
+            {perms.length > 2 && <Text type="secondary">+{perms.length - 2}</Text>}
+          </Space>
+        );
       },
     },
     {
       title: "操作",
       key: "action",
-      render: (_: any, record: User) => (
+      width: 120,
+      align: "center" as const,
+      render: (_: any, record: any) => (
         <Space size="middle">
           <Button
             type="text"
-            icon={<EditOutlined />}
+            icon={<EditOutlined style={{ color: "#1890ff" }} />}
             onClick={() => handleEditUser(record)}
           />
           <Button
@@ -208,6 +175,7 @@ export default function UserManagement() {
             danger
             icon={<DeleteOutlined />}
             onClick={() => handleDeleteUser(record)}
+            disabled={(record.username || record.Username) === "Admin"}
           />
         </Space>
       ),
@@ -215,31 +183,42 @@ export default function UserManagement() {
   ];
 
   return (
-    <div>
+    <div style={{ padding: "24px", maxWidth: "1400px", margin: "0 auto" }}>
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: "flex-start",
           marginBottom: 24,
         }}
       >
         <div>
-          <Title level={3} style={{ margin: 0 }}>
+          <Title level={2} style={{ margin: "0 0 4px 0" }}>
             用户管理
           </Title>
+          <Text type="secondary">管理用户账号和权限</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAddUser}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          size="large"
+          onClick={handleAddUser}
+          style={{ height: 48, borderRadius: 8, padding: "0 24px" }}
+        >
           添加用户
         </Button>
       </div>
 
-      <Card>
+      <Card
+        variant="none"
+        style={{ borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.05)" }}
+        styles={{ body: { padding: 0 } }}
+      >
         <Table
           columns={columns}
           dataSource={users}
           loading={loading}
-          rowKey="Id"
+          rowKey={(record: any) => record.userId || record.Id}
           pagination={{
             current: pagination.current,
             pageSize: pagination.pageSize,
@@ -251,62 +230,10 @@ export default function UserManagement() {
             pageSizeOptions: ["10", "20", "50", "100"],
             onChange: handleTableChange,
             onShowSizeChange: handleTableChange,
+            style: { padding: "16px 24px" },
           }}
         />
       </Card>
-
-      <Modal
-        title={editingUser ? "编辑用户" : "添加用户"}
-        open={isModalVisible}
-        onOk={handleModalOk}
-        onCancel={handleModalCancel}
-        width={600}
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 24 }}>
-          <Form.Item
-            name="username"
-            label="用户名"
-            rules={[{ required: true, message: "请输入用户名" }]}
-          >
-            <Input placeholder="请输入用户名" />
-          </Form.Item>
-
-          <Form.Item
-            name="email"
-            label="邮箱"
-            rules={[
-              { required: true, message: "请输入邮箱" },
-              { type: "email", message: "请输入正确的邮箱格式" },
-            ]}
-          >
-            <Input placeholder="请输入邮箱" />
-          </Form.Item>
-
-          <Form.Item
-            name="role"
-            label="角色"
-            rules={[{ required: true, message: "请选择用户角色" }]}
-          >
-            <Select placeholder="请选择用户角色">
-              <Select.Option value="admin">管理员</Select.Option>
-              <Select.Option value="user">普通用户</Select.Option>
-              <Select.Option value="viewer">只读用户</Select.Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="status"
-            label="状态"
-            rules={[{ required: true, message: "请选择用户状态" }]}
-          >
-            <Select placeholder="请选择用户状态">
-              <Select.Option value="active">活跃</Select.Option>
-              <Select.Option value="inactive">非活跃</Select.Option>
-              <Select.Option value="disabled">禁用</Select.Option>
-            </Select>
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 }

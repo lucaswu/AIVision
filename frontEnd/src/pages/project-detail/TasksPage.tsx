@@ -59,12 +59,15 @@ interface TreeNode {
 interface TasksPageProps {
   projectId: string;
   projectName?: string;
+  permission?: string;
 }
 
 const TasksPage: React.FC<TasksPageProps> = ({
   projectId,
   projectName = "项目",
+  permission = "READ_ONLY",
 }) => {
+  const isReadOnly = permission === "READ_ONLY";
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -248,12 +251,14 @@ const TasksPage: React.FC<TasksPageProps> = ({
       },
     ];
 
-    items.push({
-      key: "delete",
-      icon: <DeleteOutlined />,
-      label: "删除",
-      onClick: () => handleDelete(task),
-    });
+    if (!isReadOnly) {
+      items.push({
+        key: "delete",
+        icon: <DeleteOutlined />,
+        label: "删除",
+        onClick: () => handleDelete(task),
+      });
+    }
 
     return items;
   };
@@ -585,13 +590,15 @@ const TasksPage: React.FC<TasksPageProps> = ({
         <Title level={2} style={{ margin: 0 }}>
           任务管理
         </Title>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setShowCreateModal(true)}
-        >
-          创建任务
-        </Button>
+        {!isReadOnly && (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setShowCreateModal(true)}
+          >
+            创建任务
+          </Button>
+        )}
       </div>
 
       <Row gutter={16} style={{ marginBottom: "24px" }}>

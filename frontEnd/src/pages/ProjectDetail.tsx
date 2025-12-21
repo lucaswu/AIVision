@@ -110,16 +110,16 @@ export default function ProjectDetail() {
             <Route path="/" element={<Navigate to="files" replace />} />
             <Route
               path="/files"
-              element={<FilesPage projectId={id!} projectName={project.Name} />}
+              element={<FilesPage projectId={id!} projectName={project.Name} permission={project.Permission} />}
             />
             <Route
               path="/tasks"
-              element={<TasksPage projectId={id!} projectName={project.Name} />}
+              element={<TasksPage projectId={id!} projectName={project.Name} permission={project.Permission} />}
             />
             <Route
               path="/reports"
               element={
-                <ResultsPage projectId={id!} projectName={project.Name} />
+                <ResultsPage projectId={id!} projectName={project.Name} permission={project.Permission} />
               }
             />
           </Routes>

@@ -2,7 +2,7 @@ import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { Task, TaskFile } from "./data";
 import { filePreviewPath } from "./constans";
-import { DEFAULT_USER_ID } from "./api";
+import { getUserId } from "./api";
 
 // 创建HTML内容的辅助函数
 const createHTMLContent = (task: Task): string => {
@@ -74,7 +74,7 @@ const createHTMLContent = (task: Task): string => {
   const getFileImageUrl = (file: TaskFile, projectId: string): string => {
     const baseUrl = window.location.origin;
     // return "https://so1.360tres.com/t01822d65d3533be80c.jpg";
-    return `${baseUrl}${filePreviewPath}?FileId=${file.FileId}&ProjectId=${projectId}&UseId=${DEFAULT_USER_ID}`;
+    return `${baseUrl}${filePreviewPath}?FileId=${file.FileId}&ProjectId=${projectId}&UseId=${getUserId()}`;
   };
 
   // 构建HTML内容

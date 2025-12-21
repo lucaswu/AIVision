@@ -26,7 +26,7 @@ import {
 // 不再需要 markdownToHtml 转换函数，因为 QuillEditor 组件内部已经处理了转换
 import { Task, TaskFile } from "../utils/data";
 import { filePreviewPath } from "@/utils/constans";
-import { DEFAULT_USER_ID } from "@/utils/api";
+import { getUserId } from "@/utils/api";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -263,7 +263,7 @@ export default function ReportDetailModal({
                         icon={<DownloadOutlined />}
                         size="small"
                         onClick={() => {
-                          const downloadUrl = `${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${DEFAULT_USER_ID}`;
+                          const downloadUrl = `${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${getUserId()}`;
 
                           const link = document.createElement("a");
                           link.href = downloadUrl;
@@ -284,7 +284,7 @@ export default function ReportDetailModal({
                 >
                   <div style={{ textAlign: "center", marginBottom: 24 }}>
                     <img
-                      src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${DEFAULT_USER_ID}`}
+                      src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${getUserId()}`}
                       alt={currentFile.FileName}
                       style={{
                         width: "100%",
@@ -363,7 +363,7 @@ export default function ReportDetailModal({
             }}
           >
             <img
-              src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${DEFAULT_USER_ID}`}
+              src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${getUserId()}`}
               // src="https://img-s.msn.cn/tenant/amp/entityid/AA1IGBOh.img?w=640&h=426&m=6"
               alt={currentFile.FileName}
               style={{

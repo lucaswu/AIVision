@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Card,
@@ -10,25 +10,25 @@ import {
   Modal,
   Form,
   Input,
-  Select,
   message,
+  Breadcrumb,
+  Alert,
 } from "antd";
 import {
   PlusOutlined,
   EditOutlined,
   DeleteOutlined,
-  PlayCircleOutlined,
-  PauseCircleOutlined,
+  ExclamationCircleOutlined,
+  FileOutlined,
+  CalendarOutlined,
 } from "@ant-design/icons";
 import { useRequest } from "ahooks";
 import {
   Project,
-  CreateProjectRequest,
-  projectTypeOptions,
 } from "@/utils/data";
 import { projectAPI } from "@/utils/api";
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 export default function ProjectList() {
@@ -36,8 +36,11 @@ export default function ProjectList() {
     current: 1,
     pageSize: 10,
   });
-  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [form] = Form.useForm();
   const navigate = useNavigate();
 
@@ -50,67 +53,68 @@ export default function ProjectList() {
     refreshDeps: [],
   });
 
-  const projects = projectsResponse?.Data || [];
+  const projects = useMemo(() => {
+    return (projectsResponse?.Data || []).sort((a, b) => {
+      return (
+        new Date(b.CreateTime).getTime() - new Date(a.CreateTime).getTime()
+      );
+    });
+  }, [projectsResponse]);
+
   const total = projects.length;
+  const userRole = localStorage.getItem("role");
+  const isAdmin = userRole === "ADMIN";
 
   const handleCreateProject = () => {
-    setEditingProject(null);
-    setIsModalVisible(true);
-    form.resetFields();
+    navigate("/projects/create");
   };
 
   const handleEditProject = (project: Project) => {
     setEditingProject(project);
-    setIsModalVisible(true);
+    setIsEditModalVisible(true);
     form.setFieldsValue({
       ProjectName: project.Name,
       Description: project.Description,
     });
   };
 
-  const handleDeleteProject = async (project: Project) => {
-    Modal.confirm({
-      title: "确认删除",
-      content: `确定要删除项目 ${project.Name} 吗？`,
-      async onOk() {
-        try {
-          await projectAPI.deleteProject(project.Id);
-          message.success("项目删除成功！");
-          refresh();
-        } catch (error) {
-          // API工具已经处理了错误消息
-        }
-      },
-    });
+  const handleDeleteProject = (project: Project) => {
+    setDeletingProject(project);
+    setDeleteConfirmName("");
+    setIsDeleteModalVisible(true);
   };
 
-  const handleModalOk = async () => {
+  const handleEditOk = async () => {
     try {
       const values = await form.validateFields();
-
       if (editingProject) {
-        // 编辑项目
         await projectAPI.updateProject(editingProject.Id, values);
         message.success("项目更新成功！");
-      } else {
-        // 创建项目
-        await projectAPI.createProject(values as CreateProjectRequest);
-        message.success("项目创建成功！");
+        setIsEditModalVisible(false);
+        form.resetFields();
+        setEditingProject(null);
+        refresh();
       }
-
-      setIsModalVisible(false);
-      form.resetFields();
-      setEditingProject(null);
-      refresh();
     } catch (error) {
       console.log("验证失败:", error);
     }
   };
 
-  const handleModalCancel = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-    setEditingProject(null);
+  const handleDeleteOk = async () => {
+    if (deletingProject && deleteConfirmName === deletingProject.Name) {
+      try {
+        await projectAPI.deleteProject(deletingProject.Id);
+        message.success("项目删除成功！");
+        setIsDeleteModalVisible(false);
+        setDeletingProject(null);
+        setDeleteConfirmName("");
+        refresh();
+      } catch (error) {
+        // API工具已经处理了错误消息
+      }
+    } else {
+      message.error("输入的项目名称不匹配，请重新输入");
+    }
   };
 
   const handleViewProject = (project: Project) => {
@@ -125,21 +129,6 @@ export default function ProjectList() {
     });
   };
 
-  // 格式化显示日期
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString("zh-CN");
-  };
-
-  // 格式化文件数量显示
-  const formatFileCount = (count?: number) => {
-    return count ? `${count}个` : "0个";
-  };
-
-  // 格式化存储大小显示
-  const formatStorageSize = (size?: string) => {
-    return size || "0 MB";
-  };
-
   const columns = [
     {
       title: "项目名称",
@@ -148,7 +137,7 @@ export default function ProjectList() {
       render: (text: string, record: Project) => (
         <Button
           type="link"
-          style={{ padding: 0, height: "auto" }}
+          style={{ padding: 0, height: "auto", fontWeight: 500 }}
           onClick={() => handleViewProject(record)}
         >
           {text}
@@ -156,52 +145,52 @@ export default function ProjectList() {
       ),
     },
     {
-      title: "项目描述",
+      title: "创建日期",
+      dataIndex: "CreateTime",
+      key: "CreateTime",
+      width: 180,
+      render: (date: string) => date?.split(" ")[0] || "-",
+    },
+    {
+      title: "文件数",
+      dataIndex: "FileCount",
+      key: "FileCount",
+      width: 150,
+      render: (count: number) => `${count || 0}个文件`,
+    },
+    {
+      title: "备注",
       dataIndex: "Description",
       key: "Description",
       ellipsis: true,
       render: (text: string) => text || "-",
     },
     {
-      title: "创建时间",
-      dataIndex: "CreateTime",
-      key: "CreateTime",
-      width: 250,
-    },
-    {
-      title: "文件数",
-      dataIndex: "FileCount",
-      key: "FileCount",
-      render: (count: number) => formatFileCount(count),
-    },
-    {
-      title: "任务数",
-      dataIndex: "TaskCount",
-      key: "TaskCount",
-      render: (count: number) => formatFileCount(count),
-    },
-    {
       title: "操作",
       key: "action",
-      render: (_: unknown, record: Project) => (
-        <Space size="middle">
-          <Button
-            type="link"
-            icon={<EditOutlined />}
-            onClick={() => handleEditProject(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="link"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => handleDeleteProject(record)}
-          >
-            删除
-          </Button>
-        </Space>
-      ),
+      width: 120,
+      align: "center" as const,
+      render: (_: unknown, record: Project) => {
+        const canEdit = record.Permission === "OWNER" || record.Permission === "READ_WRITE";
+        
+        return (
+          <Space size="middle">
+            <Button
+              type="text"
+              icon={<EditOutlined style={{ color: canEdit ? "#1890ff" : "#bfbfbf" }} />}
+              onClick={() => handleEditProject(record)}
+              disabled={!canEdit}
+            />
+            <Button
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => handleDeleteProject(record)}
+              disabled={record.Permission !== "OWNER"}
+            />
+          </Space>
+        );
+      },
     },
   ];
 
@@ -212,28 +201,39 @@ export default function ProjectList() {
   );
 
   return (
-    <div style={{ padding: 24 }}>
-      <Card>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 16,
-          }}
-        >
-          <Title level={3} style={{ margin: 0 }}>
+    <div style={{ padding: "24px", maxWidth: "1400px", margin: "0 auto" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          marginBottom: 24,
+        }}
+      >
+        <div>
+          <Title level={2} style={{ margin: "0 0 4px 0" }}>
             项目管理
           </Title>
+          <Text type="secondary">管理您的检测项目和文件</Text>
+        </div>
+        {isAdmin && (
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            size="large"
             onClick={handleCreateProject}
+            style={{ height: 48, borderRadius: 8, padding: "0 24px" }}
           >
-            新建项目
+            新增项目
           </Button>
-        </div>
+        )}
+      </div>
 
+      <Card
+        variant="none"
+        style={{ borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.05)" }}
+        styles={{ body: { padding: 0 } }}
+      >
         <Table
           columns={columns}
           dataSource={paginatedData}
@@ -249,45 +249,127 @@ export default function ProjectList() {
               `第 ${range[0]}-${range[1]} 项，共 ${total} 项`,
             onChange: handleTableChange,
             onShowSizeChange: handleTableChange,
+            style: { padding: "16px 24px" },
           }}
         />
       </Card>
 
-      {/* 创建/编辑项目对话框 */}
+      {/* 编辑项目对话框 */}
       <Modal
-        title={editingProject ? "编辑项目" : "新建项目"}
-        open={isModalVisible}
-        onOk={handleModalOk}
-        onCancel={handleModalCancel}
-        width={600}
+        title={
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 600 }}>编辑项目</div>
+            <div style={{ fontSize: 14, fontWeight: 400, color: "#8c8c8c" }}>
+              修改项目的基本信息
+            </div>
+          </div>
+        }
+        open={isEditModalVisible}
+        onOk={handleEditOk}
+        onCancel={() => setIsEditModalVisible(false)}
+        width={560}
+        okText="保存修改"
+        cancelText="取消"
+        centered
       >
-        <Form
-          form={form}
-          layout="vertical"
-          initialValues={{
-            ProjectName: "",
-            Description: "",
-          }}
-        >
-          <Form.Item
-            label="项目名称"
-            name="ProjectName"
-            rules={[
-              { required: true, message: "请输入项目名称" },
-              { max: 100, message: "项目名称不能超过100个字符" },
-            ]}
-          >
-            <Input placeholder="请输入项目名称" />
-          </Form.Item>
+        <div style={{ paddingTop: 16 }}>
+          <Form form={form} layout="vertical">
+            <Form.Item
+              label="项目名称"
+              name="ProjectName"
+              rules={[{ required: true, message: "请输入项目名称" }]}
+            >
+              <Input
+                placeholder="请输入项目名称"
+                style={{ height: 44, borderRadius: 6 }}
+              />
+            </Form.Item>
 
-          <Form.Item
-            label="项目描述"
-            name="Description"
-            rules={[{ max: 500, message: "项目描述不能超过500个字符" }]}
-          >
-            <TextArea rows={4} placeholder="请输入项目描述（可选）" />
-          </Form.Item>
-        </Form>
+            <Form.Item label="项目备注" name="Description">
+              <TextArea
+                rows={4}
+                placeholder="可选填，用于记录项目的详细说明和注意事项"
+                style={{ borderRadius: 6 }}
+              />
+            </Form.Item>
+          </Form>
+
+          {editingProject && (
+            <div
+              style={{
+                background: "#f9fafb",
+                padding: "16px 20px",
+                borderRadius: 8,
+                marginTop: 24,
+              }}
+            >
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <div style={{ color: "#595959" }}>
+                  <CalendarOutlined style={{ marginRight: 8 }} />
+                  创建日期：{editingProject.CreateTime?.split(" ")[0]}
+                </div>
+                <div style={{ color: "#595959" }}>
+                  <FileOutlined style={{ marginRight: 8 }} />
+                  文件数量：{editingProject.FileCount || 0}个文件
+                </div>
+              </Space>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* 删除确认对话框 */}
+      <Modal
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <ExclamationCircleOutlined style={{ color: "#ff4d4f", fontSize: 22 }} />
+            <span style={{ fontSize: 18, fontWeight: 600 }}>确认删除项目</span>
+          </div>
+        }
+        open={isDeleteModalVisible}
+        onOk={handleDeleteOk}
+        onCancel={() => setIsDeleteModalVisible(false)}
+        width={480}
+        okText="确认删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true, size: "large", style: { borderRadius: 6 } }}
+        cancelButtonProps={{ size: "large", style: { borderRadius: 6 } }}
+        centered
+      >
+        <div style={{ paddingTop: 8 }}>
+          <div style={{ marginBottom: 16, fontSize: 16, fontWeight: 500 }}>
+            {deletingProject?.Name}
+          </div>
+
+          <Alert
+            message={
+              <div style={{ color: "#cf1322" }}>
+                <div style={{ marginBottom: 4 }}>
+                  • 将删除项目中的所有文件 ({deletingProject?.FileCount || 0}个文件)
+                </div>
+                <div style={{ marginBottom: 4 }}>• 将删除所有相关的检测报告</div>
+                <div style={{ fontWeight: 600 }}>• 此操作不可恢复，请谨慎操作</div>
+              </div>
+            }
+            type="error"
+            style={{
+              backgroundColor: "#fff1f0",
+              border: "1px solid #ffa39e",
+              borderRadius: 8,
+              marginBottom: 24,
+            }}
+          />
+
+          <div style={{ marginBottom: 8, color: "#595959" }}>
+            请输入项目名称以确认删除：
+          </div>
+          <Input
+            placeholder={deletingProject?.Name}
+            value={deleteConfirmName}
+            onChange={(e) => setDeleteConfirmName(e.target.value)}
+            style={{ height: 44, borderRadius: 6 }}
+          />
+        </div>
       </Modal>
     </div>
   );
