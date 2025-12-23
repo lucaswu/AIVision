@@ -25,11 +25,11 @@ export const rootSidebarItems = [
     label: "系统管理",
     icon: <SettingOutlined />,
     children: [
-      {
-        key: "users",
-        label: "用户管理",
+  {
+    key: "users",
+    label: "用户管理",
         icon: <UserOutlined />,
-      },
+  },
       {
         key: "models",
         label: "模型管理",

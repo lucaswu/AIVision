@@ -11,8 +11,14 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && 
 
 # 安装Java和必要工具
 RUN apt-get update && \
-    apt-get install -y openjdk-17-jdk maven curl && \
+    apt-get install -y openjdk-17-jdk maven curl locales && \
+    locale-gen zh_CN.UTF-8 && \
     rm -rf /var/lib/apt/lists/*
+
+# 设置语言环境
+ENV LANG zh_CN.UTF-8
+ENV LANGUAGE zh_CN:zh
+ENV LC_ALL zh_CN.UTF-8
 
 WORKDIR /app
 
@@ -45,8 +51,14 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # 安装Java运行时环境和必要的工具
 RUN apt-get update && \
-    apt-get install -y openjdk-17-jre-headless curl && \
+    apt-get install -y openjdk-17-jre-headless curl locales && \
+    locale-gen zh_CN.UTF-8 && \
     rm -rf /var/lib/apt/lists/*
+
+# 设置语言环境
+ENV LANG zh_CN.UTF-8
+ENV LANGUAGE zh_CN:zh
+ENV LC_ALL zh_CN.UTF-8
 
 WORKDIR /app
 

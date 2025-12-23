@@ -25,7 +25,7 @@ export default defineConfig(({ command, mode }) => {
       proxy: {
         // 将所有 /api 开头的请求代理到本地容器运行的后端
         "/api": {
-          target: "http://localhost:8080",
+          target: "http://localhost:9541",
           changeOrigin: true,
           secure: false,
           configure: (proxy, _options) => {

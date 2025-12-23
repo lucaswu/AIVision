@@ -56,7 +56,7 @@ function AppContent() {
       const projectId = key.replace("project-", "");
       navigate(`/projects/${projectId}/files`);
     } else {
-      navigate(`/${key}`);
+    navigate(`/${key}`);
     }
   };
 
@@ -142,42 +142,42 @@ function AppContent() {
                     }
                   />
 
-                  {/* ProjectDetail 独立路由，不包含侧边栏 */}
-                  <Route path="/projects/:id/*" element={<ProjectDetail />} />
+        {/* ProjectDetail 独立路由，不包含侧边栏 */}
+        <Route path="/projects/:id/*" element={<ProjectDetail />} />
 
-                  {/* 其他页面使用带侧边栏的布局 */}
-                  <Route
-                    path="/*"
-                    element={
+        {/* 其他页面使用带侧边栏的布局 */}
+        <Route
+          path="/*"
+          element={
                       <Layout
                         style={{
                           height: "calc(100vh - 64px)",
                           overflow: "auto",
                         }}
                       >
-                        <Sider width={200} style={{ background: "#fff" }}>
-                          <Menu
-                            mode="inline"
-                            selectedKeys={getSelectedKeys()}
-                            style={{ height: "100%", borderRight: 0 }}
+              <Sider width={200} style={{ background: "#fff" }}>
+                <Menu
+                  mode="inline"
+                  selectedKeys={getSelectedKeys()}
+                  style={{ height: "100%", borderRight: 0 }}
                             items={getMenuItems()}
-                            onClick={handleMenuClick}
-                          />
-                        </Sider>
-                        <Layout style={{ height: "100%", overflow: "auto" }}>
-                          <Content
-                            style={{
-                              padding: "24px",
-                              margin: 0,
-                              minHeight: "100%",
-                              backgroundColor: "#f0f2f5",
-                            }}
-                          >
-                            <Routes>
-                              <Route
-                                path="/"
-                                element={<Navigate to="/projects" replace />}
-                              />
+                  onClick={handleMenuClick}
+                />
+              </Sider>
+              <Layout style={{ height: "100%", overflow: "auto" }}>
+                <Content
+                  style={{
+                    padding: "24px",
+                    margin: 0,
+                    minHeight: "100%",
+                    backgroundColor: "#f0f2f5",
+                  }}
+                >
+                  <Routes>
+                    <Route
+                      path="/"
+                      element={<Navigate to="/projects" replace />}
+                    />
                               <Route
                                 path="/projects"
                                 element={<ProjectList />}
@@ -194,10 +194,10 @@ function AppContent() {
                                 path="/users/edit/:id"
                                 element={<UserAddEdit />}
                               />
-                            </Routes>
-                          </Content>
-                        </Layout>
-                      </Layout>
+                  </Routes>
+                </Content>
+              </Layout>
+            </Layout>
                     }
                   />
                 </Routes>

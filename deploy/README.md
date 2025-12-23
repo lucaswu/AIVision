@@ -12,7 +12,7 @@
 | **MinIO** | 9000/9001 | 对象存储 | ✅ 必需 |
 | **Vision AI** | 8001 | YOLOv8缺陷检测 | ✅ 必需 |
 | **LLM AI** | 11434 | DeepSeek文本生成 | ✅ 必需 |
-| **API Gateway** | 8080 | 主应用服务 | ✅ 必需 |
+| **API Gateway** | 9541 | 主应用服务 | ✅ 必需 |
 | **N8N** | 5678 | 工作流引擎 | 🔧 可选 |
 
 ### 🔗 服务依赖关系
@@ -89,7 +89,7 @@ docker-compose --profile n8n up -d n8n
 docker-compose ps
 
 # 检查健康状态
-curl http://localhost:8080/actuator/health
+curl http://localhost:9541/actuator/health
 curl http://localhost:8001/health
 curl http://localhost:11434/api/tags
 ```
@@ -98,8 +98,8 @@ curl http://localhost:11434/api/tags
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
-| **API Gateway** | http://localhost:8080 | 主应用 |
-| **Swagger UI** | http://localhost:8080/swagger-ui.html | API文档 |
+| **API Gateway** | http://localhost:9541 | 主应用 |
+| **Swagger UI** | http://localhost:9541/swagger-ui.html | API文档 |
 | **MinIO Console** | http://localhost:9001 | 存储管理 |
 | **N8N** | http://localhost:5678 | 工作流 (可选) |
 

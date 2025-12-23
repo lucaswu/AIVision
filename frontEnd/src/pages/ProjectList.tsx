@@ -91,9 +91,9 @@ export default function ProjectList() {
         await projectAPI.updateProject(editingProject.Id, values);
         message.success("项目更新成功！");
         setIsEditModalVisible(false);
-        form.resetFields();
-        setEditingProject(null);
-        refresh();
+      form.resetFields();
+      setEditingProject(null);
+      refresh();
       }
     } catch (error) {
       console.log("验证失败:", error);
@@ -174,21 +174,21 @@ export default function ProjectList() {
         const canEdit = record.Permission === "OWNER" || record.Permission === "READ_WRITE";
         
         return (
-          <Space size="middle">
-            <Button
+        <Space size="middle">
+          <Button
               type="text"
               icon={<EditOutlined style={{ color: canEdit ? "#1890ff" : "#bfbfbf" }} />}
-              onClick={() => handleEditProject(record)}
+            onClick={() => handleEditProject(record)}
               disabled={!canEdit}
             />
-            <Button
+          <Button
               type="text"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => handleDeleteProject(record)}
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => handleDeleteProject(record)}
               disabled={record.Permission !== "OWNER"}
             />
-          </Space>
+        </Space>
         );
       },
     },
@@ -202,14 +202,14 @@ export default function ProjectList() {
 
   return (
     <div style={{ padding: "24px", maxWidth: "1400px", margin: "0 auto" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
           alignItems: "flex-start",
           marginBottom: 24,
-        }}
-      >
+          }}
+        >
         <div>
           <Title level={2} style={{ margin: "0 0 4px 0" }}>
             项目管理
@@ -227,7 +227,7 @@ export default function ProjectList() {
             新增项目
           </Button>
         )}
-      </div>
+        </div>
 
       <Card
         variant="none"
@@ -274,16 +274,16 @@ export default function ProjectList() {
       >
         <div style={{ paddingTop: 16 }}>
           <Form form={form} layout="vertical">
-            <Form.Item
-              label="项目名称"
-              name="ProjectName"
+          <Form.Item
+            label="项目名称"
+            name="ProjectName"
               rules={[{ required: true, message: "请输入项目名称" }]}
-            >
+          >
               <Input
                 placeholder="请输入项目名称"
                 style={{ height: 44, borderRadius: 6 }}
               />
-            </Form.Item>
+          </Form.Item>
 
             <Form.Item label="项目备注" name="Description">
               <TextArea
@@ -291,8 +291,8 @@ export default function ProjectList() {
                 placeholder="可选填，用于记录项目的详细说明和注意事项"
                 style={{ borderRadius: 6 }}
               />
-            </Form.Item>
-          </Form>
+          </Form.Item>
+        </Form>
 
           {editingProject && (
             <div

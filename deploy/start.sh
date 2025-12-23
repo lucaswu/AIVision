@@ -132,7 +132,7 @@ check_services() {
     log_info "检查服务健康状态..."
     
     services=(
-        "http://localhost:8080/actuator/health|API Gateway"
+        "http://localhost:9541/actuator/health|API Gateway"
         "http://localhost:8001/health|Vision AI"
         "http://localhost:11434/api/tags|LLM AI"
         "http://localhost:9000/minio/health/live|MinIO"
@@ -153,8 +153,8 @@ show_access_info() {
     log_success "系统启动完成！"
     echo ""
     echo "🌐 访问地址："
-    echo "  📊 API Gateway:     http://localhost:8080"
-    echo "  📚 Swagger UI:      http://localhost:8080/swagger-ui.html"
+    echo "  📊 API Gateway:     http://localhost:9541"
+    echo "  📚 Swagger UI:      http://localhost:9541/swagger-ui.html"
     echo "  💾 MinIO Console:   http://localhost:9001"
     echo ""
     echo "🔑 默认凭据："

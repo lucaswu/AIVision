@@ -14,11 +14,11 @@ spring:
   jpa:
     hibernate:
       ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
-    show-sql: ${SPRING_JPA_SHOW_SQL:true}
+    show-sql: ${SPRING_JPA_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: ${SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
-        format_sql: ${SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL:true}
+        format_sql: ${SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL:false}
         
   servlet:
     multipart:
@@ -95,5 +95,5 @@ logging:
   level:
     com.aivision.gateway: ${LOGGING_LEVEL_GATEWAY:INFO}
     org.springframework.web: ${LOGGING_LEVEL_SPRING_WEB:INFO}
-    org.hibernate.SQL: ${LOGGING_LEVEL_HIBERNATE_SQL:INFO}
+    org.hibernate.SQL: ${LOGGING_LEVEL_HIBERNATE_SQL:ERROR}
     root: ${LOGGING_LEVEL_ROOT:INFO} 

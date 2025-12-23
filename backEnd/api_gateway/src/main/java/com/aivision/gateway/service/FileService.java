@@ -5,6 +5,8 @@ import com.aivision.gateway.model.*;
 import com.aivision.gateway.repository.DirectoryRepository;
 import com.aivision.gateway.repository.FileRepository;
 import com.aivision.gateway.repository.ProjectRepository;
+import com.aivision.gateway.repository.UserProjectPermissionRepository;
+import com.aivision.gateway.repository.UserRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -21,10 +23,14 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.*;
 import java.util.Base64;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 @Transactional
 public class FileService {
+    
+    private static final Logger logger = LoggerFactory.getLogger(FileService.class);
     
     @Autowired
     private FileRepository fileRepository;
@@ -36,32 +42,42 @@ public class FileService {
     private DirectoryRepository directoryRepository;
     
     @Autowired
+    private UserProjectPermissionRepository permissionRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
     private FileUploadProperties fileUploadProperties;
     
     @Value("${storage.local.base-dir:/data/files}")
     private String localBaseDir;
     
-    // 本地根目录：/data/files/{projectId}/{userId}/{dirPath}/{storedName}
-    
     /**
      * 上传多个文件
      */
     public FileUploadResponse uploadFiles(String projectId, String userId, String directoryId, MultipartFile[] files) {
+        logger.info("收到文件上传请求: project={}, user={}, directory={}, 文件数量={}", 
+            projectId, userId, directoryId, files != null ? files.length : 0);
+            
         List<FileUploadResponse.SuccessFileInfo> successFiles = new ArrayList<>();
         List<FileUploadResponse.FailedFileInfo> failedFiles = new ArrayList<>();
         
-        // 1. 验证基础参数
-        if (!validateBasicParams(projectId, userId, directoryId, failedFiles)) {
+        // 1. 验证基础参数与权限
+        if (!validateBasicParamsAndPermission(projectId, userId, directoryId, failedFiles)) {
+            logger.warn("基础参数或权限验证失败: projectId={}, userId={}, directoryId={}", projectId, userId, directoryId);
             return new FileUploadResponse(0, failedFiles.size(), successFiles, failedFiles);
         }
         
-        // 2. 获取目录信息
+        // 2. 获取目录信息 - 放宽权限检查，只要对项目有写权限即可
         Directory directory;
         try {
-            directory = directoryRepository.findByDirIdAndProjectIdAndUserIdAndStatus(
-                directoryId, projectId, userId, Directory.Status.ACTIVE)
-                .orElseThrow(() -> new IllegalArgumentException("目录不存在或无权限访问"));
+            directory = directoryRepository.findByDirIdAndProjectIdAndStatus(
+                directoryId, projectId, Directory.Status.ACTIVE)
+                .orElseThrow(() -> new IllegalArgumentException("目录不存在"));
+            logger.info("获取到目录信息: {}, Path: {}", directory.getDirName(), directory.getDirPath());
         } catch (Exception e) {
+            logger.error("获取目录信息失败: {}", e.getMessage());
             for (MultipartFile file : files) {
                 failedFiles.add(new FileUploadResponse.FailedFileInfo(
                     file.getOriginalFilename(), "目录验证失败: " + e.getMessage()));
@@ -92,23 +108,10 @@ public class FileService {
     }
     
     /**
-     * 验证基础参数
+     * 验证基础参数与权限
      */
-    private boolean validateBasicParams(String projectId, String userId, String directoryId, 
+    private boolean validateBasicParamsAndPermission(String projectId, String userId, String directoryId, 
                                        List<FileUploadResponse.FailedFileInfo> failedFiles) {
-        // 验证项目是否存在并且属于当前用户
-        Optional<Project> project = projectRepository.findById(projectId);
-        if (!project.isPresent()) {
-            failedFiles.add(new FileUploadResponse.FailedFileInfo("", "项目不存在"));
-            return false;
-        }
-        
-        // 验证项目是否属于当前用户
-        if (!project.get().getOwnerId().equals(userId)) {
-            failedFiles.add(new FileUploadResponse.FailedFileInfo("", "无权限访问该项目"));
-            return false;
-        }
-        
         if (userId == null || userId.trim().isEmpty()) {
             failedFiles.add(new FileUploadResponse.FailedFileInfo("", "用户ID不能为空"));
             return false;
@@ -117,6 +120,26 @@ public class FileService {
         if (directoryId == null || directoryId.trim().isEmpty()) {
             failedFiles.add(new FileUploadResponse.FailedFileInfo("", "目录ID不能为空"));
             return false;
+        }
+
+        // 验证项目是否存在
+        Optional<Project> projectOpt = projectRepository.findById(projectId);
+        if (!projectOpt.isPresent()) {
+            failedFiles.add(new FileUploadResponse.FailedFileInfo("", "项目不存在"));
+            return false;
+        }
+        
+        // 检查权限：只有管理员、项目所有者或有读写权限的用户可以上传
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        
+        if (user.getRole() != User.Role.ADMIN && !projectOpt.get().getOwnerId().equals(userId)) {
+            // 检查是否有读写权限
+            Optional<UserProjectPermission> permission = permissionRepository.findByUserIdAndProjectId(userId, projectId);
+            if (!permission.isPresent() || permission.get().getPermission() != UserProjectPermission.Permission.READ_WRITE) {
+                failedFiles.add(new FileUploadResponse.FailedFileInfo("", "无权限在项目中上传文件"));
+                return false;
+            }
         }
         
         return true;

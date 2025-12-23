@@ -13,6 +13,21 @@ import java.util.Optional;
 public interface DirectoryRepository extends JpaRepository<Directory, String> {
     
     /**
+     * 根据目录ID、项目ID查找目录
+     */
+    Optional<Directory> findByDirIdAndProjectIdAndStatus(String dirId, String projectId, Directory.Status status);
+    
+    /**
+     * 根据项目ID、父目录ID和目录名称查找目录（用于检查重名）
+     */
+    Optional<Directory> findByProjectIdAndParentIdAndDirNameAndStatus(String projectId, String parentId, String dirName, Directory.Status status);
+
+    /**
+     * 根据父目录ID查找所有子目录（不限用户）
+     */
+    List<Directory> findByParentIdAndStatusOrderByDirNameAsc(String parentId, Directory.Status status);
+
+    /**
      * 根据项目ID、用户ID和父目录ID查找目录
      */
     List<Directory> findByProjectIdAndUserIdAndParentIdAndStatus(String projectId, String userId, String parentId, Directory.Status status);

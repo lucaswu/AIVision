@@ -2,7 +2,7 @@ import requests
 import json
 import uuid
 
-BASE_URL = "http://localhost:8080/api/v1/projects"
+BASE_URL = "http://localhost:9541/api/v1/projects"
 USER_ID = "admin-001"  # 使用已知的 Admin 用户 ID
 
 def print_response(response, title):

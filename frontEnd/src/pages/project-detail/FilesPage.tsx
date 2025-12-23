@@ -28,6 +28,8 @@ import {
   EyeOutlined,
   FolderOpenOutlined,
   InboxOutlined,
+  FolderAddOutlined,
+  CaretDownOutlined,
 } from "@ant-design/icons";
 import type {
   TableColumnsType,
@@ -61,7 +63,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const [pageSize, setPageSize] = useState(10);
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
-  const [uploadCategory, setUploadCategory] = useState<string>("PCB图像");
+  const [uploadType, setUploadType] = useState<"file" | "directory">("file");
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewImage, setPreviewImage] = useState("");
   // 新增状态管理上传文件列表
@@ -92,55 +94,123 @@ const FilesPage: React.FC<FilesPageProps> = ({
     }
   }, [allDirectories, selectedPath]);
 
-  // 递归转换为Ant Design树形数据格式（只显示第一层目录）
+  // 递归计算目录下的总文件数
+  const calculateTotalFiles = (node: FileTreeNode): number => {
+    let count = node.Children?.filter((c) => c.Type === "file").length || 0;
+    if (node.Children) {
+      node.Children.forEach((child) => {
+        if (child.Type === "directory") {
+          count += calculateTotalFiles(child);
+        }
+      });
+    }
+    return count;
+  };
+
+  // 递归转换为Ant Design树形数据格式
   const convertToTreeData = (nodes: FileTreeNode[]): TreeDataNode[] => {
-    return nodes.map((node) => ({
-      title: (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            padding: "4px 8px",
-            borderRadius: "6px",
-            transition: "all 0.2s",
-            width: "100%",
-          }}
-        >
-          <Space size={8}>
-            <FolderOutlined style={{ color: "#faad14" }} />
-            <span style={{ fontSize: "14px", fontWeight: 500 }}>
-              {node.Name}
-            </span>
-          </Space>
-        </div>
-      ),
-      key: node.Id,
-      icon: null,
-      isLeaf: true, // 第一层目录都是叶子节点，不允许展开
-      className: "custom-tree-node",
-      children: undefined, // 不显示子节点
-      data: node,
-    }));
+    return nodes
+      .filter((node) => node.Type === "directory")
+      .map((node) => {
+        const hasDirectoryChildren = node.Children?.some(
+          (c) => c.Type === "directory"
+        );
+        const totalFiles = calculateTotalFiles(node);
+        return {
+          title: (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                width: "100%",
+              }}
+            >
+              <Space size={8}>
+                <FolderOutlined style={{ color: "#1890ff" }} />
+                <span style={{ fontSize: "14px", fontWeight: 500 }}>
+                  {node.Name}
+                </span>
+              </Space>
+              {totalFiles > 0 && (
+                <div
+                  style={{
+                    background: "#e6f7ff",
+                    padding: "0 8px",
+                    borderRadius: "10px",
+                    fontSize: "11px",
+                    color: "#1890ff",
+                    fontWeight: 600,
+                    lineHeight: "18px",
+                    minWidth: "24px",
+                    textAlign: "center",
+                    border: "1px solid #91d5ff",
+                  }}
+                >
+                  {totalFiles}
+                </div>
+              )}
+            </div>
+          ),
+          key: node.Id,
+          isLeaf: !hasDirectoryChildren,
+          children: hasDirectoryChildren
+            ? convertToTreeData(node.Children!)
+            : undefined,
+          data: node,
+        };
+      });
   };
 
   const treeData = useMemo(() => {
     return convertToTreeData(allDirectories);
   }, [allDirectories]);
 
-  // 获取当前选中路径下的文件列表
+  // 展平所有目录用于下拉选择
+  const flattenedDirectories = useMemo(() => {
+    const flatten = (nodes: FileTreeNode[]): FileTreeNode[] => {
+      let result: FileTreeNode[] = [];
+      nodes.forEach((node) => {
+        if (node.Type === "directory") {
+          result.push(node);
+          if (node.Children) {
+            result = result.concat(flatten(node.Children));
+          }
+        }
+      });
+      return result;
+    };
+    return flatten(allDirectories);
+  }, [allDirectories]);
+
+  // 递归查找指定路径的目录
+  const findDirectoryByPath = (
+    nodes: FileTreeNode[],
+    path: string
+  ): FileTreeNode | undefined => {
+    for (const node of nodes) {
+      if (node.Type === "directory" && node.Path === path) {
+        return node;
+      }
+      if (node.Children) {
+        const found = findDirectoryByPath(node.Children, path);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+
+  // 获取当前选中路径下的文件列表（过滤掉目录）
   const currentFiles = useMemo(() => {
     if (!selectedPath) {
       return [];
     }
 
-    // 根据选中的路径找到对应的文件
-    const selectedDirectory = allDirectories.find(
-      (node) => node.Type === "directory" && node.Path === selectedPath
-    );
+    const selectedDirectory = findDirectoryByPath(allDirectories, selectedPath);
 
     if (selectedDirectory && selectedDirectory.Children) {
-      return selectedDirectory.Children;
+      // 只返回类型为文件的节点
+      return selectedDirectory.Children.filter((node) => node.Type === "file");
     }
 
     return [];
@@ -234,51 +304,193 @@ const FilesPage: React.FC<FilesPageProps> = ({
   };
 
   const getSelectedDirectoryId = (path: string): string | undefined => {
-    const selectedDirectory = allDirectories.find((dir) => dir.Path === path);
+    const selectedDirectory = findDirectoryByPath(allDirectories, path);
     return selectedDirectory?.Id;
   };
 
-  // 文件上传处理 - 修改为确认后上传
+  // 根据路径在文件树中查找目录ID
+  const findDirIdByPath = (
+    path: string,
+    nodes: FileTreeNode[]
+  ): string | undefined => {
+    // 统一处理路径格式，移除首尾斜杠并拆分
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length === 0) return undefined;
+
+    let currentNodes = nodes;
+    let foundId: string | undefined = undefined;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const node = currentNodes.find(
+        (n) => n.Type === "directory" && n.Name === part
+      );
+      if (node) {
+        foundId = node.Id;
+        currentNodes = node.Children || [];
+      } else {
+        // 如果中间某一层没找到，直接返回 undefined
+        return undefined;
+      }
+    }
+    return foundId;
+  };
+
+  // 文件上传处理 - 支持文件和目录
   const handleFileUpload = async () => {
-    const selectedDirectoryId = getSelectedDirectoryId(selectedPath);
-    if (!selectedDirectoryId) {
-      message.error("请先选择一个目录");
+    const rootDirectoryId = getSelectedDirectoryId(selectedPath);
+    if (!rootDirectoryId && uploadType === "file") {
+      message.error("请先选择一个目标目录");
       return;
     }
 
     if (fileList.length === 0) {
-      message.error("请选择要上传的文件");
+      message.error("请选择要上传的内容");
       return;
     }
 
     setUploading(true);
     try {
-      // 创建FileList对象
-      const dataTransfer = new DataTransfer();
-      fileList.forEach((file) => {
-        if (file.originFileObj) {
-          dataTransfer.items.add(file.originFileObj);
+      if (uploadType === "file") {
+        // 普通多文件上传
+        const dataTransfer = new DataTransfer();
+        fileList.forEach((file) => {
+          if (file.originFileObj) {
+            dataTransfer.items.add(file.originFileObj);
+          }
+        });
+        const result = await fileAPI.uploadFiles(
+          projectId,
+          rootDirectoryId!,
+          dataTransfer.files
+        );
+        message.success(`成功上传 ${result.Data.SuccessCount} 个文件`);
+      } else {
+        // 目录上传逻辑
+        console.log("开始目录上传，文件列表:", fileList);
+        // 1. 按目录分组文件
+        const dirMap = new Map<string, File[]>();
+        fileList.forEach((file) => {
+          const originFile = file.originFileObj as File & {
+            webkitRelativePath?: string;
+          };
+          // webkitRelativePath 格式通常为 "folder/subfolder/file.png"
+          const relPath = originFile.webkitRelativePath || "";
+          console.log(`处理文件: ${originFile.name}, 相对路径: ${relPath}`);
+          const pathParts = relPath.split("/");
+          
+          if (pathParts.length > 1) {
+            // 获取文件所属的相对目录路径（不含文件名）
+            const dirPath = pathParts.slice(0, -1).join("/");
+            if (!dirMap.has(dirPath)) {
+              dirMap.set(dirPath, []);
+            }
+            dirMap.get(dirPath)!.push(originFile);
+          }
+        });
+
+        console.log("目录分组结果:", Array.from(dirMap.keys()));
+
+        // 2. 递归创建目录并上传文件
+        const pathIdMap = new Map<string, string>();
+        
+        // 获取所有唯一的目录路径并排序，确保父目录先被处理
+        const sortedPaths = Array.from(dirMap.keys()).sort(
+          (a, b) => a.split("/").length - b.split("/").length
+        );
+
+        console.log("排序后的路径列表:", sortedPaths);
+
+        if (sortedPaths.length === 0) {
+          console.warn("未发现有效目录结构，请检查是否选择了文件夹。");
+          message.warning("未发现有效目录结构，请确认选择的是文件夹。");
+          setUploading(false);
+          return;
         }
-      });
-      const files = dataTransfer.files;
 
-      const result = await fileAPI.uploadFiles(
-        projectId,
-        selectedDirectoryId,
-        files
-      );
+        let totalSuccess = 0;
+        for (const fullPath of sortedPaths) {
+          const parts = fullPath.split("/");
+          let currentParentId = rootDirectoryId; // 初始父目录为用户当前选中的目录
 
-      message.success(`成功上传 ${result.Data.SuccessCount} 个文件`);
-      if (result.Data.FailedCount > 0) {
-        message.warning(`${result.Data.FailedCount} 个文件上传失败`);
+          console.log(`正在处理目录路径: ${fullPath}, 初始父ID: ${currentParentId}`);
+
+          for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            const thisPath = parts.slice(0, i + 1).join("/");
+
+            if (pathIdMap.has(thisPath)) {
+              currentParentId = pathIdMap.get(thisPath);
+            } else {
+              // 构建在项目中的绝对逻辑路径用于查找
+              const absolutePathInProject = selectedPath
+                ? `${selectedPath}/${thisPath}`
+                : `/${thisPath}`;
+              
+              console.log(`查找已存在的目录: ${absolutePathInProject}`);
+              const existingId = findDirIdByPath(
+                absolutePathInProject,
+                allDirectories
+              );
+
+              if (existingId) {
+                console.log(`找到已存在目录 ID: ${existingId}`);
+                pathIdMap.set(thisPath, existingId);
+                currentParentId = existingId;
+              } else {
+                // 目录不存在，创建它
+                console.log(`创建新目录: ${part}, 父ID: ${currentParentId}`);
+                try {
+                  const response = await directoryAPI.createDirectory(
+                    projectId,
+                    {
+                      Name: part,
+                      ParentDirectoryId: currentParentId || undefined,
+                    }
+                  );
+                  const newDirId = response.Data.DirId;
+                  console.log(`目录创建成功，新 ID: ${newDirId}`);
+                  pathIdMap.set(thisPath, newDirId);
+                  currentParentId = newDirId;
+                } catch (err: any) {
+                  console.error(`创建目录 ${part} 失败:`, err);
+                  throw new Error(`创建目录 ${fullPath} 失败: ${err.message}`);
+                }
+              }
+            }
+          }
+
+          // 上传该目录下的所有文件
+          const filesInDir = dirMap.get(fullPath) || [];
+          console.log(`正在上传目录 ${fullPath} 下的文件，数量: ${filesInDir.length}, 目录ID: ${currentParentId}`);
+          if (filesInDir.length > 0 && currentParentId) {
+            const dataTransfer = new DataTransfer();
+            filesInDir.forEach((f) => {
+              // 核心修复：重新包装 File 对象，剥离路径，只保留文件名
+              const cleanFileName = f.name.split("/").pop()!;
+              const cleanFile = new File([f], cleanFileName, { type: f.type });
+              dataTransfer.items.add(cleanFile);
+            });
+            
+            const uploadRes = await fileAPI.uploadFiles(
+              projectId,
+              currentParentId,
+              dataTransfer.files
+            );
+            console.log(`目录 ${fullPath} 文件上传成功，数量: ${uploadRes.Data.SuccessCount}`);
+            totalSuccess += uploadRes.Data.SuccessCount;
+          }
+        }
+        message.success(`目录上传完成，共成功上传 ${totalSuccess} 个文件`);
       }
 
-      // 重置状态
+      // 重置状态并刷新
       setFileList([]);
       setUploadModalVisible(false);
-      refresh();
-    } catch (error) {
-      // 错误已在API层处理
+      await refresh(); // 等待数据刷新
+    } catch (error: any) {
+      console.error("上传过程出错:", error);
+      message.error(error.message || "上传过程中发生错误");
     } finally {
       setUploading(false);
     }
@@ -315,12 +527,16 @@ const FilesPage: React.FC<FilesPageProps> = ({
       dataIndex: "Name",
       key: "Name",
       width: 200,
-      render: (text, record) => (
-        <Space>
-          <FileImageOutlined style={{ color: "#1890ff" }} />
-          <span>{text}</span>
-        </Space>
-      ),
+      render: (text: string) => {
+        // 去除目录前缀，只显示文件名
+        const fileName = text.split("/").pop() || text;
+        return (
+          <Space>
+            <FileImageOutlined style={{ color: "#1890ff" }} />
+            <span>{fileName}</span>
+          </Space>
+        );
+      },
     },
     {
       title: "类型",
@@ -413,11 +629,22 @@ const FilesPage: React.FC<FilesPageProps> = ({
     return dirId ? [dirId] : [];
   }, [selectedPath, allDirectories]);
 
-  const breadcrumbItems = [
-    { title: "项目管理" },
-    { title: projectName },
-    { title: "文件管理" },
-  ];
+  const breadcrumbItems = useMemo(() => {
+    const items = [
+      { title: "项目管理" },
+      { title: projectName },
+      { title: "文件管理" },
+    ];
+
+    if (selectedPath) {
+      const parts = selectedPath.split("/").filter(Boolean);
+      parts.forEach((part) => {
+        items.push({ title: part });
+      });
+    }
+
+    return items;
+  }, [projectName, selectedPath]);
 
   return (
     <div style={{ height: "100%" }}>
@@ -442,9 +669,24 @@ const FilesPage: React.FC<FilesPageProps> = ({
               <Button
                 type="primary"
                 icon={<UploadOutlined />}
-                onClick={() => setUploadModalVisible(true)}
+                onClick={() => {
+                  setUploadType("file");
+                  setUploadModalVisible(true);
+                  setFileList([]);
+                }}
               >
                 上传文件
+              </Button>
+              <Button
+                type="primary"
+                icon={<FolderAddOutlined />}
+                onClick={() => {
+                  setUploadType("directory");
+                  setUploadModalVisible(true);
+                  setFileList([]);
+                }}
+              >
+                上传目录
               </Button>
             </>
           )}
@@ -470,12 +712,14 @@ const FilesPage: React.FC<FilesPageProps> = ({
           >
             <Tree
               showIcon={false}
-              showLine={false}
-              switcherIcon={false}
+              blockNode
+              showLine={{ showLeafIcon: false }}
+              switcherIcon={<CaretDownOutlined />}
               treeData={treeData}
               onSelect={handleTreeSelect}
               selectedKeys={selectedKeys}
               className="custom-file-tree"
+              defaultExpandAll
             />
           </Card>
         </Col>
@@ -527,9 +771,8 @@ const FilesPage: React.FC<FilesPageProps> = ({
         </Col>
       </Row>
 
-      {/* 上传文件弹窗 */}
       <Modal
-        title="上传文件"
+        title={uploadType === "file" ? "上传文件" : "上传目录"}
         open={uploadModalVisible}
         onCancel={handleCancelUpload}
         onOk={handleFileUpload}
@@ -548,27 +791,38 @@ const FilesPage: React.FC<FilesPageProps> = ({
               value={selectedPath}
               onChange={setSelectedPath}
               style={{ width: "100%", marginTop: 8 }}
-              placeholder="请选择目标目录"
+              placeholder="请选择目标目录 (根目录可留空)"
+              allowClear
             >
-              {allDirectories.map((dir) => (
+              {flattenedDirectories.map((dir) => (
                 <Select.Option key={dir.Id} value={dir.Path}>
-                  {dir.Name}
+                  {dir.Path}
                 </Select.Option>
               ))}
             </Select>
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <Text strong>选择文件：</Text>
+            <Text strong>{uploadType === "file" ? "选择文件" : "选择目录"}：</Text>
             <div style={{ marginTop: 8 }}>
-              <Dragger {...uploadProps}>
+              <Dragger
+                {...uploadProps}
+                directory={uploadType === "directory"}
+                showUploadList={false}
+              >
                 <p className="ant-upload-drag-icon">
-                  <InboxOutlined
-                    style={{ fontSize: "48px", color: "#1890ff" }}
-                  />
+                  {uploadType === "file" ? (
+                    <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
+                  ) : (
+                    <FolderAddOutlined style={{ fontSize: "48px", color: "#faad14" }} />
+                  )}
                 </p>
-                <p className="ant-upload-text">点击或拖拽文件到此区域</p>
-                <p className="ant-upload-hint">支持批量上传，仅支持图片格式</p>
+                <p className="ant-upload-text">
+                  {uploadType === "file" ? "点击或拖拽文件到此区域" : "点击或拖拽文件夹到此区域"}
+                </p>
+                <p className="ant-upload-hint">
+                  {uploadType === "file" ? "支持多文件批量上传" : "将自动创建对应的目录结构"}
+                </p>
               </Dragger>
             </div>
           </div>

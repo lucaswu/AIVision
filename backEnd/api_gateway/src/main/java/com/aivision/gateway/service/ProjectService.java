@@ -86,7 +86,7 @@ public class ProjectService {
         if (userId == null || userId.trim().isEmpty()) {
             throw new IllegalArgumentException("用户ID不能为空");
         }
-
+        
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
 
@@ -110,8 +110,8 @@ public class ProjectService {
             permissionRepository.findByUserId(userId).forEach(p -> projectIds.add(p.getProjectId()));
             
             projects = projectRepository.findAllById(projectIds);
-
-            return projects.stream()
+        
+        return projects.stream()
                 .map(p -> convertToProjectListItem(p, userId)) // 传递 userId 以确定权限
                 .collect(Collectors.toList());
         }
@@ -365,7 +365,7 @@ public class ProjectService {
         if (!project.isPresent()) {
             throw new RuntimeException("项目不存在: " + projectId);
         }
-
+        
         // 验证权限
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
@@ -374,7 +374,7 @@ public class ProjectService {
             // 如果不是管理员且不是所有者，检查是否有显式授权
             boolean hasPermission = permissionRepository.findByUserIdAndProjectId(userId, projectId).isPresent();
             if (!hasPermission) {
-                throw new RuntimeException("无权限访问该项目: " + projectId);
+            throw new RuntimeException("无权限访问该项目: " + projectId);
             }
         }
         

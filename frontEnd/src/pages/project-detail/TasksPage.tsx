@@ -252,12 +252,12 @@ const TasksPage: React.FC<TasksPageProps> = ({
     ];
 
     if (!isReadOnly) {
-      items.push({
-        key: "delete",
-        icon: <DeleteOutlined />,
-        label: "删除",
-        onClick: () => handleDelete(task),
-      });
+    items.push({
+      key: "delete",
+      icon: <DeleteOutlined />,
+      label: "删除",
+      onClick: () => handleDelete(task),
+    });
     }
 
     return items;
@@ -591,13 +591,13 @@ const TasksPage: React.FC<TasksPageProps> = ({
           任务管理
         </Title>
         {!isReadOnly && (
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setShowCreateModal(true)}
-          >
-            创建任务
-          </Button>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setShowCreateModal(true)}
+        >
+          创建任务
+        </Button>
         )}
       </div>
 

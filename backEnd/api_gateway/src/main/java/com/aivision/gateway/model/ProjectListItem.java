@@ -33,7 +33,7 @@ public class ProjectListItem {
     @JsonProperty("TaskCount")
     @Schema(description = "任务数量", example = "3")
     private Integer taskCount;
-
+    
     @JsonProperty("Permission")
     @Schema(description = "用户对该项目的权限 (OWNER, READ_ONLY, READ_WRITE)", example = "READ_ONLY")
     private String permission;

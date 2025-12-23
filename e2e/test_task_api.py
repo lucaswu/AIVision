@@ -5,7 +5,7 @@ import os
 import sys
 
 # Configuration
-BASE_URL = "http://localhost:8080/api/v1"
+BASE_URL = "http://localhost:9541/api/v1"
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "password"  # Using the corrected password
 

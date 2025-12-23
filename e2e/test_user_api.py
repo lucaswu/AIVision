@@ -2,7 +2,7 @@ import requests
 import json
 import pytest
 
-BASE_URL = "http://localhost:8080/api/v1/users"
+BASE_URL = "http://localhost:9541/api/v1/users"
 
 class TestUserManagement:
     

@@ -3,7 +3,7 @@ import json
 import uuid
 import os
 
-BASE_URL = "http://localhost:8080/api/v1"
+BASE_URL = "http://localhost:9541/api/v1"
 USER_ID = "admin-001"
 
 def print_response(response, title):
