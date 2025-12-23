@@ -24,6 +24,9 @@ public class TaskSubmitRequest {
 
     @JsonProperty("DirectoryIds")
     private List<String> directoryIds;
+
+    @JsonProperty("ProjectIds")
+    private List<String> projectIds;
     
     // 内部类：选择的文件信息
     public static class SelectedFile {
@@ -95,6 +98,14 @@ public class TaskSubmitRequest {
 
     public void setDirectoryIds(List<String> directoryIds) {
         this.directoryIds = directoryIds;
+    }
+
+    public List<String> getProjectIds() {
+        return projectIds;
+    }
+
+    public void setProjectIds(List<String> projectIds) {
+        this.projectIds = projectIds;
     }
     
     @Override

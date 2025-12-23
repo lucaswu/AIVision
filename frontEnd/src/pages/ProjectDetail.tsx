@@ -10,7 +10,7 @@ import { Layout, Menu, Typography, Card, Spin, Alert } from "antd";
 import { useRequest } from "ahooks";
 import { projectSidebarItems } from "../utils/constans";
 import { projectAPI } from "../utils/api";
-import { FilesPage, TasksPage, ResultsPage } from "./project-detail";
+import { FilesPage, TasksPage, ReportsPage } from "./project-detail";
 
 const { Sider, Content } = Layout;
 const { Title } = Typography;
@@ -119,7 +119,7 @@ export default function ProjectDetail() {
             <Route
               path="/reports"
               element={
-                <ResultsPage projectId={id!} projectName={project.Name} permission={project.Permission} />
+                <ReportsPage projectId={id!} projectName={project.Name} permission={project.Permission} />
               }
             />
           </Routes>

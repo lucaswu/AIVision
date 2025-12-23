@@ -59,7 +59,7 @@ const CreateProject: React.FC = () => {
 
       <Card
         title="基本信息"
-        variant="none"
+            variant="borderless"
         style={{ borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}
       >
         <Form

@@ -78,7 +78,7 @@ const UserAddEdit: React.FC = () => {
         });
         
         // 处理权限转换
-        const perms = (userData.permissions || []).map((p: any) => ({
+        const perms = (userData.projectPermissions || []).map((p: any) => ({
           projectId: p.projectId,
           projectName: p.projectName,
           permission: p.permission === "READ_ONLY" ? "read" : "edit",
@@ -247,7 +247,7 @@ const UserAddEdit: React.FC = () => {
         size="large"
       >
         <Space direction="vertical" size={24} style={{ width: "100%" }}>
-          <Card title="基本信息" variant="none" style={{ borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
+          <Card title="基本信息" variant="borderless" style={{ borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
             {isEdit && (
               <Form.Item label="用户ID">
                 <Input value={id} disabled style={{ borderRadius: 8 }} />
@@ -305,7 +305,7 @@ const UserAddEdit: React.FC = () => {
             )}
           </Card>
 
-          <Card title="角色与权限" variant="none" style={{ borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
+          <Card title="角色与权限" variant="borderless" style={{ borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}>
             <Form.Item
               label="用户角色"
               name="role"

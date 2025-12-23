@@ -54,24 +54,24 @@ export default function UserManagement() {
   };
 
   const handleEditUser = (user: User) => {
-    navigate(`/users/edit/${user.userId || user.Id}`);
+    navigate(`/users/edit/${user.userId}`);
   };
 
-  const handleDeleteUser = async (user: any) => {
-    const username = user.username || user.Username;
+  const handleDeleteUser = async (user: User) => {
+    const username = user.username;
     if (username === "Admin") {
       message.error("系统管理员账号不允许删除");
       return;
     }
     Modal.confirm({
       title: "确认删除",
-      content: `确定要删除用户 ${user.username || user.Username} 吗？`,
+      content: `确定要删除用户 ${user.username} 吗？`,
       okText: "确认删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
       async onOk() {
         try {
-          await userAPI.deleteUser((user.userId || user.Id).toString());
+          await userAPI.deleteUser(user.userId.toString());
           message.success("用户删除成功！");
           refresh();
         } catch (error) {
@@ -95,21 +95,21 @@ export default function UserManagement() {
       dataIndex: "userId",
       key: "userId",
       width: 100,
-      render: (id: string, record: any) => id || record.Id || "-",
+      render: (id: string) => id || "-",
     },
     {
       title: "姓名",
       dataIndex: "username",
       key: "username",
-      render: (username: string, record: any) => (
+      render: (username: string) => (
         <Space>
           <Avatar 
             style={{ backgroundColor: "#1890ff", verticalAlign: "middle" }}
             size="small"
           >
-            {(username || record.Username || "?")[0].toUpperCase()}
+            {(username || "?")[0].toUpperCase()}
           </Avatar>
-          <Text strong>{username || record.Username}</Text>
+          <Text strong>{username}</Text>
         </Space>
       ),
     },
@@ -117,14 +117,14 @@ export default function UserManagement() {
       title: "邮箱",
       dataIndex: "email",
       key: "email",
-      render: (email: string, record: any) => email || record.Email || "-",
+      render: (email: string) => email || "-",
     },
     {
       title: "角色",
       dataIndex: "role",
       key: "role",
-      render: (role: string, record: any) => {
-        const r = (role || record.Role || "").toUpperCase();
+      render: (role: string) => {
+        const r = (role || "").toUpperCase();
         if (r === "ADMIN") {
           return (
             <Tag color="blue" style={{ borderRadius: "10px", padding: "0 12px" }}>
@@ -141,10 +141,10 @@ export default function UserManagement() {
     },
     {
       title: "项目",
-      dataIndex: "permissions",
-      key: "permissions",
-      render: (permissions: any[], record: any) => {
-        const perms = permissions || record.Permissions || [];
+      dataIndex: "projectPermissions",
+      key: "projectPermissions",
+      render: (permissions: any[]) => {
+        const perms = permissions || [];
         if (!perms || perms.length === 0) return <Text type="secondary">无项目</Text>;
         return (
           <Space size={[0, 4]} wrap>
@@ -163,7 +163,7 @@ export default function UserManagement() {
       key: "action",
       width: 120,
       align: "center" as const,
-      render: (_: any, record: any) => (
+      render: (_: any, record: User) => (
         <Space size="middle">
           <Button
             type="text"
@@ -175,7 +175,7 @@ export default function UserManagement() {
             danger
             icon={<DeleteOutlined />}
             onClick={() => handleDeleteUser(record)}
-            disabled={(record.username || record.Username) === "Admin"}
+            disabled={record.username === "Admin"}
           />
         </Space>
       ),
@@ -210,7 +210,7 @@ export default function UserManagement() {
       </div>
 
       <Card
-        variant="none"
+        variant="borderless"
         style={{ borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.05)" }}
         styles={{ body: { padding: 0 } }}
       >

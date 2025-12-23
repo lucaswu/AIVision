@@ -13,6 +13,16 @@ import java.util.Optional;
 public interface FileRepository extends JpaRepository<File, String> {
     
     /**
+     * 根据目录ID查找文件
+     */
+    List<File> findByDirectoryId(String directoryId);
+
+    /**
+     * 根据项目ID查找所有文件
+     */
+    List<File> findByProjectId(String projectId);
+
+    /**
      * 根据项目ID和用户ID查找文件
      */
     List<File> findByProjectIdAndUserIdOrderByCreatedAtDesc(String projectId, String userId);

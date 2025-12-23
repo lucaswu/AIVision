@@ -448,7 +448,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
                       ParentDirectoryId: currentParentId || undefined,
                     }
                   );
-                  const newDirId = response.Data.DirId;
+                  const newDirId = (response.Data as any).Id || (response.Data as any).DirId;
                   console.log(`目录创建成功，新 ID: ${newDirId}`);
                   pathIdMap.set(thisPath, newDirId);
                   currentParentId = newDirId;

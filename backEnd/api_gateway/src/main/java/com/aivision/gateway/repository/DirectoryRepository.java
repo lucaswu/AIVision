@@ -25,6 +25,11 @@ public interface DirectoryRepository extends JpaRepository<Directory, String> {
     /**
      * 根据父目录ID查找所有子目录（不限用户）
      */
+    List<Directory> findByParentIdAndStatus(String parentId, Directory.Status status);
+
+    /**
+     * 根据父目录ID查找所有子目录（不限用户）
+     */
     List<Directory> findByParentIdAndStatusOrderByDirNameAsc(String parentId, Directory.Status status);
 
     /**

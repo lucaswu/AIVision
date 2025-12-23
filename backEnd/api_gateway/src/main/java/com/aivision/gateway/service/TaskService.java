@@ -40,6 +40,12 @@ public class TaskService {
     private ProjectRepository projectRepository;
     
     @Autowired
+    private UserProjectPermissionRepository permissionRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+    
+    @Autowired
     private TaskProcessService taskProcessService;
 
     @Value("${storage.local.result-dir:/app/data/results}")
@@ -53,17 +59,26 @@ public class TaskService {
     @Transactional
     public TaskSubmitResponse submitTask(String projectId, String userId, TaskSubmitRequest request) {
         validateTaskSubmitRequest(request);
+        // 校验主项目权限
         validateProjectAndUser(projectId, userId);
         
         Set<String> allFileIds = new HashSet<>();
+        // 1. 处理选中的单个文件
         if (request.getSelectedFiles() != null) {
             for (TaskSubmitRequest.SelectedFile sf : request.getSelectedFiles()) {
                 allFileIds.add(sf.getFileId());
             }
         }
+        // 2. 处理选中的目录
         if (request.getDirectoryIds() != null) {
             for (String dirId : request.getDirectoryIds()) {
-                expandDirectory(dirId, projectId, userId, allFileIds);
+                expandDirectoryWithPermissionCheck(dirId, userId, allFileIds);
+            }
+        }
+        // 3. 处理选中的项目（选中项目下所有文件）
+        if (request.getProjectIds() != null) {
+            for (String pId : request.getProjectIds()) {
+                expandProjectWithPermissionCheck(pId, userId, allFileIds);
             }
         }
 
@@ -71,7 +86,7 @@ public class TaskService {
             throw new IllegalArgumentException("未选择任何待检测文件");
         }
 
-        List<TaskFileInfo> taskFileInfos = buildFileInfos(allFileIds, projectId, userId);
+        List<TaskFileInfo> taskFileInfos = buildFileInfosWithPermissionCheck(allFileIds, userId);
         String taskId = UUID.randomUUID().toString();
         Task task = new Task(taskId, projectId, userId, request.getName(), request.getDescription(), request.getAlgorithmType(), taskFileInfos.size());
         
@@ -82,6 +97,48 @@ public class TaskService {
         scheduleAsyncProcessing(taskId);
         
         return new TaskSubmitResponse(taskId, task.getStatus().name().toLowerCase(), taskFileInfos.size(), task.getCreatedAt().format(DATE_TIME_FORMATTER));
+    }
+
+    private void expandDirectoryWithPermissionCheck(String directoryId, String userId, Set<String> allFileIds) {
+        Directory directory = directoryRepository.findById(directoryId)
+            .orElseThrow(() -> new RuntimeException("目录不存在: " + directoryId));
+        
+        // 校验对该目录所属项目的访问权限
+        validateProjectAccess(directory.getProjectId(), userId);
+
+        List<File> files = fileRepository.findByDirectoryId(directoryId);
+        for (File f : files) {
+            allFileIds.add(f.getFileId());
+        }
+
+        List<Directory> subDirs = directoryRepository.findByParentIdAndStatus(directoryId, Directory.Status.ACTIVE);
+        for (Directory d : subDirs) {
+            expandDirectoryWithPermissionCheck(d.getDirId(), userId, allFileIds);
+        }
+    }
+
+    private void expandProjectWithPermissionCheck(String projectId, String userId, Set<String> allFileIds) {
+        // 校验权限
+        validateProjectAccess(projectId, userId);
+
+        List<File> files = fileRepository.findByProjectId(projectId);
+        for (File f : files) {
+            allFileIds.add(f.getFileId());
+        }
+    }
+
+    private List<TaskFileInfo> buildFileInfosWithPermissionCheck(Set<String> fileIds, String userId) {
+        List<TaskFileInfo> taskFileInfos = new ArrayList<>();
+        for (String fileId : fileIds) {
+            Optional<File> fileOpt = fileRepository.findById(fileId);
+            if (fileOpt.isPresent()) {
+                File file = fileOpt.get();
+                // 校验权限
+                validateProjectAccess(file.getProjectId(), userId);
+                taskFileInfos.add(new TaskFileInfo(fileId, buildLogicalFilePath(file), file.getFilePath()));
+            }
+        }
+        return taskFileInfos;
     }
 
     @Transactional
@@ -147,13 +204,6 @@ public class TaskService {
         return newTaskId;
     }
 
-    private void expandDirectory(String directoryId, String projectId, String userId, Set<String> allFileIds) {
-        List<File> files = fileRepository.findByProjectIdAndUserIdAndDirectoryIdOrderByCreatedAtDesc(projectId, userId, directoryId);
-        for (File f : files) allFileIds.add(f.getFileId());
-        List<Directory> subDirs = directoryRepository.findByProjectIdAndUserIdAndParentIdAndStatus(projectId, userId, directoryId, Directory.Status.ACTIVE);
-        for (Directory d : subDirs) expandDirectory(d.getDirId(), projectId, userId, allFileIds);
-    }
-
     private void validateTaskSubmitRequest(TaskSubmitRequest request) {
         if (request == null) throw new IllegalArgumentException("任务提交请求不能为空");
         if (request.getName() == null || request.getName().trim().isEmpty()) throw new IllegalArgumentException("任务名称不能为空");
@@ -162,19 +212,45 @@ public class TaskService {
     private void validateProjectAndUser(String projectId, String userId) {
         Optional<Project> project = projectRepository.findById(projectId);
         if (!project.isPresent()) throw new RuntimeException("项目不存在: " + projectId);
-        if (!project.get().getOwnerId().equals(userId)) throw new RuntimeException("无权限访问该项目: " + projectId);
+        
+        // 检查用户是否有权限（管理员或所有者或有读写权限的用户）
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isPresent() && userOpt.get().getRole() == User.Role.ADMIN) {
+            return;
+        }
+
+        if (project.get().getOwnerId().equals(userId)) {
+            return;
+        }
+
+        Optional<UserProjectPermission> permission = permissionRepository.findByUserIdAndProjectId(userId, projectId);
+        if (permission.isPresent() && permission.get().getPermission() == UserProjectPermission.Permission.READ_WRITE) {
+            return;
+        }
+
+        throw new RuntimeException("无权限访问或操作该项目: " + projectId);
     }
 
-    private List<TaskFileInfo> buildFileInfos(Set<String> fileIds, String projectId, String userId) {
-        List<TaskFileInfo> taskFileInfos = new ArrayList<>();
-        for (String fileId : fileIds) {
-            Optional<File> fileOpt = fileRepository.findByFileIdAndProjectIdAndUserId(fileId, projectId, userId);
-            if (fileOpt.isPresent()) {
-                File file = fileOpt.get();
-                taskFileInfos.add(new TaskFileInfo(fileId, buildLogicalFilePath(file), file.getFilePath()));
-            }
+    private void validateProjectAccess(String projectId, String userId) {
+        Optional<Project> project = projectRepository.findById(projectId);
+        if (!project.isPresent()) throw new RuntimeException("项目不存在: " + projectId);
+        
+        // 管理员、所有者、或有读权限（READ_ONLY 或 READ_WRITE）
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isPresent() && userOpt.get().getRole() == User.Role.ADMIN) {
+            return;
         }
-        return taskFileInfos;
+
+        if (project.get().getOwnerId().equals(userId)) {
+            return;
+        }
+
+        Optional<UserProjectPermission> permission = permissionRepository.findByUserIdAndProjectId(userId, projectId);
+        if (permission.isPresent()) {
+            return;
+        }
+
+        throw new RuntimeException("无权限访问该项目: " + projectId);
     }
 
     private String buildLogicalFilePath(File file) {

@@ -66,6 +66,24 @@ export interface Task {
   ProcessingStartTime?: string;
   ProcessingEndTime?: string;
   TaskFiles?: TaskFile[];
+  IsArchived?: boolean;
+}
+
+// 报告接口定义
+export interface Report {
+  ReportId: string;
+  TaskId: string;
+  ProjectId: string;
+  UserId: string;
+  ReportName: string;
+  TotalFiles: number;
+  ConfirmedFiles: number;
+  TotalDefects: number;
+  SevereDefects: number;
+  NormalDefects: number;
+  Status: "PENDING" | "COMPLETED" | "ARCHIVED";
+  CreatedAt: string;
+  UpdatedAt: string;
 }
 
 // 任务文件关联接口定义 (基于后端TaskFile实体)
@@ -75,8 +93,10 @@ export interface TaskFile {
   FileId: string;
   FileName: string;
   Status: "pending" | "processing" | "completed" | "failed";
+  ReviewStatus: "PENDING" | "CONFIRMED";
   VisionResult?: string; // JSON格式的检测结果
-  LlmResult?: string; // LLM生成的报告
+  ManualResult?: string; // 人工修改后的检测结果
+  PlateQuality?: string; // 底片质量
   ProcessingStartTime?: string;
   ProcessingEndTime?: string;
   LogicalPath?: string;
@@ -106,14 +126,15 @@ export interface FileTreeNode {
 
 // 用户接口定义
 export interface User {
-  Id: string;
-  Username: string;
-  Email: string;
-  Role: "admin" | "quality_inspector";
-  Projects: string[];
-  CreateTime: string;
-  LastLoginTime: string;
-  Status: "active" | "inactive";
+  userId: string;
+  username: string;
+  email: string;
+  role: string;
+  projects: string[];
+  createTime: string;
+  lastLoginTime: string;
+  status: string;
+  projectPermissions?: any[];
 }
 
 // 请求参数接口
@@ -143,7 +164,9 @@ export interface TaskSubmitRequest {
   Name: string;
   Description?: string;
   AlgorithmType: string;
-  SelectedFiles: SelectedFile[];
+  SelectedFiles?: SelectedFile[];
+  DirectoryIds?: string[];
+  ProjectIds?: string[];
 }
 
 export interface TaskSubmitResponse {

@@ -18,43 +18,33 @@ import {
   Dropdown,
   Checkbox,
   Breadcrumb,
-  Statistic,
   Pagination,
   List,
-  Drawer,
+  Empty,
+  Tooltip,
 } from "antd";
 import {
   PlusOutlined,
   FileImageOutlined,
   FolderOutlined,
-  MoreOutlined,
   DeleteOutlined,
-  EyeOutlined,
-  EditOutlined,
+  ReloadOutlined,
+  FileTextOutlined,
+  ProjectOutlined,
+  ArrowLeftOutlined,
+  UploadOutlined,
+  CheckCircleOutlined,
+  SyncOutlined,
+  CloseCircleOutlined,
+  InfoCircleOutlined,
+  ExclamationCircleOutlined,
 } from "@ant-design/icons";
-import type { TableColumnsType, TreeDataNode, MenuProps } from "antd";
-import { useParams } from "react-router-dom";
-import { Project } from "@/utils/data";
+import type { TableColumnsType, TreeDataNode } from "antd";
 import { useRequest } from "ahooks";
-import { taskAPI, fileAPI } from "../../utils/api";
-import { Task, CreateTaskRequest, TaskStatus } from "../../utils/data";
+import { taskAPI, fileAPI, projectAPI } from "../../utils/api";
+import { Task, TaskStatus, FileTreeNode, Project, TaskSubmitRequest } from "../../utils/data";
 
-const { Title, Text } = Typography;
-const { TextArea } = Input;
-
-// 树形节点数据结构
-interface TreeNode {
-  id: string;
-  name: string;
-  type: "directory" | "file";
-  size?: string;
-  uploadDate?: string;
-  path: string;
-  projectId: string;
-  children?: TreeNode[];
-  fileType?: string;
-  category?: string;
-}
+const { Title, Text, Paragraph } = Typography;
 
 interface TasksPageProps {
   projectId: string;
@@ -68,575 +58,179 @@ const TasksPage: React.FC<TasksPageProps> = ({
   permission = "READ_ONLY",
 }) => {
   const isReadOnly = permission === "READ_ONLY";
+  const [view, setView] = useState<"list" | "create">("list");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
+  
+  // 弹窗状态
+  const [showRestartModal, setShowRestartModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showDetailModal, setShowDetailModal] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [deletingTask, setDeletingTask] = useState<Task | null>(null);
-  const [viewingTask, setViewingTask] = useState<Task | null>(null);
-  const [createForm] = Form.useForm();
-  const [editForm] = Form.useForm();
+  const [actionTask, setActionTask] = useState<Task | null>(null);
 
-  // 文件选择相关状态
-  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
-  const [fileTreeModalVisible, setFileTreeModalVisible] = useState(false);
-  const [fileCurrentPage, setFileCurrentPage] = useState(1);
-  const [filePageSize, setFilePageSize] = useState(10);
-  const [selectedDirectoryPath, setSelectedDirectoryPath] =
-    useState<string>("");
-
+  // 1. 获取任务列表
   const {
     data: tasksResponse,
     loading: tasksLoading,
     refresh: refreshTasks,
   } = useRequest(
-    () => {
-      return taskAPI.getTasks(projectId, { page: currentPage, pageSize });
-    },
+    () => taskAPI.getTasks(projectId),
     {
-      refreshDeps: [currentPage, pageSize, projectId],
-      pollingInterval: 3000, // 每3秒轮询一次任务状态
-      pollingWhenHidden: false, // 页面隐藏时停止轮询
+      refreshDeps: [projectId],
+      pollingInterval: 3000,
     }
   );
 
   const tasks = tasksResponse?.Data?.Tasks || [];
-  const total = tasksResponse?.Data?.TotalCount || 0;
+  const totalTasks = tasksResponse?.Data?.TotalCount || 0;
 
-  const handlePaginationChange = (page: number, size: number) => {
-    setCurrentPage(page);
-    setPageSize(size);
-  };
-
-  const handleShowSizeChange = (current: number, size: number) => {
-    setCurrentPage(1);
-    setPageSize(size);
-  };
-
-  const { run: createTask, loading: createLoading } = useRequest(
-    (data: any) => {
-      return taskAPI.createTask(projectId, data);
-    },
-    {
-      manual: true,
-      onSuccess: () => {
-        message.success("任务创建成功");
-        setShowCreateModal(false);
-        createForm.resetFields();
-        setSelectedFileIds([]);
-        refreshTasks();
-      },
-      onError: () => {
-        message.error("任务创建失败");
-      },
-    }
-  );
-
-  const { run: updateTask, loading: updateLoading } = useRequest(
-    ({
-      taskId,
-      data,
-    }: {
-      taskId: string;
-      data: Partial<CreateTaskRequest>;
-    }) => {
-      return taskAPI.updateTask(taskId, projectId, data);
-    },
-    {
-      manual: true,
-      onSuccess: () => {
-        message.success("任务更新成功");
-        setShowEditModal(false);
-        setEditingTask(null);
-        editForm.resetFields();
-        refreshTasks();
-      },
-      onError: () => {
-        message.error("任务更新失败");
-      },
-    }
-  );
-
-  const { run: deleteTask, loading: deleteLoading } = useRequest(
-    (taskId: string) => taskAPI.deleteTask(taskId, projectId),
-    {
-      manual: true,
-      onSuccess: () => {
-        message.success("任务删除成功");
-        setShowDeleteModal(false);
-        setDeletingTask(null);
-        refreshTasks();
-      },
-      onError: () => {
-        message.error("任务删除失败");
-      },
-    }
-  );
-
-  const handleViewDetail = (task: Task) => {
-    setViewingTask(task);
-    setShowDetailModal(true);
-  };
-
-  const handleEdit = (task: Task) => {
-    setEditingTask(task);
-    editForm.setFieldsValue({
-      Name: task.Name,
-      Description: task.Description,
-      AlgorithmType: task.AlgorithmType,
-    });
-    setShowEditModal(true);
-  };
-
-  const handleDelete = (task: Task) => {
-    setDeletingTask(task);
-    setShowDeleteModal(true);
-  };
-
-  const handleCreateSubmit = async () => {
-    try {
-      const values = await createForm.validateFields();
-      // 将选中的文件ID转换为API需要的格式
-      const taskData: CreateTaskRequest = {
-        ...values,
-        SelectedFiles: selectedFileIds.map((fileId) => ({ FileId: fileId })),
-      };
-      createTask(taskData);
-    } catch (error) {
-      console.error("表单验证失败:", error);
-    }
-  };
-
-  const handleEditSubmit = async () => {
-    try {
-      const values = await editForm.validateFields();
-      if (editingTask) {
-        updateTask({ taskId: editingTask.Id, data: values });
-      }
-    } catch (error) {
-      console.error("表单验证失败:", error);
-    }
-  };
-
-  const handleDeleteConfirm = () => {
-    if (deletingTask) {
-      deleteTask(deletingTask.Id);
-    }
-  };
-
-  const getStatusTag = (status: Task["Status"]) => {
-    const statusConfig = {
-      [TaskStatus.PENDING]: { color: "default", text: "等待中" },
-      [TaskStatus.PROCESSING]: { color: "processing", text: "处理中" },
-      [TaskStatus.COMPLETED]: { color: "success", text: "已完成" },
-      [TaskStatus.FAILED]: { color: "error", text: "失败" },
-      [TaskStatus.CANCELLED]: { color: "warning", text: "已取消" },
-    };
-
-    const config = statusConfig[status] || { color: "default", text: status };
-    return <Tag color={config.color}>{config.text}</Tag>;
-  };
-
-  const getActionMenuItems = (task: Task): MenuProps["items"] => {
-    const items: MenuProps["items"] = [
-      {
-        key: "view",
-        icon: <EyeOutlined />,
-        label: "查看详情",
-        onClick: () => handleViewDetail(task),
-      },
-    ];
-
-    if (!isReadOnly) {
-    items.push({
-      key: "delete",
-      icon: <DeleteOutlined />,
-      label: "删除",
-      onClick: () => handleDelete(task),
-    });
-    }
-
-    return items;
-  };
-
+  // 2. 任务列表列定义
   const columns: TableColumnsType<Task> = [
     {
       title: "任务名称",
       dataIndex: "Name",
       key: "Name",
       width: 200,
+      render: (text) => <Text strong>{text}</Text>,
     },
     {
-      title: "算法类型",
-      dataIndex: "AlgorithmType",
-      key: "AlgorithmType",
-      width: 150,
-    },
-    {
-      title: "文件数量",
+      title: "文件数",
       dataIndex: "FileCount",
       key: "FileCount",
-      width: 100,
+      width: 120,
+      render: (count) => `${count}个文件`,
+    },
+    {
+      title: "创建时间",
+      dataIndex: "CreateTime",
+      key: "CreateTime",
+      width: 180,
+    },
+    {
+      title: "结束时间",
+      dataIndex: "EndTime",
+      key: "EndTime",
+      width: 180,
+      render: (time) => time || "-",
     },
     {
       title: "状态",
       dataIndex: "Status",
       key: "Status",
       width: 120,
-      render: (status) => getStatusTag(status),
+      render: (status) => {
+        const config = {
+          [TaskStatus.PENDING]: { color: "default", text: "等待中", icon: <SyncOutlined spin /> },
+          [TaskStatus.PROCESSING]: { color: "processing", text: "进行中", icon: <SyncOutlined spin /> },
+          [TaskStatus.COMPLETED]: { color: "success", text: "已完成", icon: <CheckCircleOutlined /> },
+          [TaskStatus.FAILED]: { color: "error", text: "失败", icon: <CloseCircleOutlined /> },
+        };
+        const item = config[status] || { color: "default", text: status };
+        return <Tag color={item.color} icon={item.icon}>{item.text}</Tag>;
+      },
     },
     {
       title: "进度",
       dataIndex: "Progress",
       key: "Progress",
-      width: 150,
-      render: (progress) => (
-        <Progress
-          percent={progress || 0}
-          size="small"
-          status={progress === 100 ? "success" : "active"}
-        />
+      width: 180,
+      render: (progress, record) => (
+        <div style={{ width: "100%" }}>
+          <Progress
+            percent={progress}
+            size="small"
+            status={record.Status === TaskStatus.FAILED ? "exception" : progress === 100 ? "success" : "active"}
+            format={(percent) => `${percent}%`}
+          />
+        </div>
       ),
-    },
-    {
-      title: "创建时间",
-      dataIndex: "CreateTime",
-      key: "CreateTime",
-      width: 150,
     },
     {
       title: "操作",
       key: "action",
-      width: 200,
+      width: 150,
       render: (_, record) => (
-        <Space size="small">
-          <Dropdown
-            menu={{ items: getActionMenuItems(record) }}
-            trigger={["click"]}
-          >
-            <Button type="text" icon={<MoreOutlined />}>
-              操作
-            </Button>
-          </Dropdown>
+        <Space size="middle">
+          {record.Status !== TaskStatus.PROCESSING && (
+            <Tooltip title="重新执行">
+              <Button 
+                type="text" 
+                icon={<ReloadOutlined />} 
+                onClick={() => {
+                  setActionTask(record);
+                  setShowRestartModal(true);
+                }}
+              />
+            </Tooltip>
+          )}
+          {record.Status === TaskStatus.COMPLETED && (
+            <Tooltip title="查看报告">
+              <Button type="text" icon={<FileTextOutlined />} />
+            </Tooltip>
+          )}
+          {!isReadOnly && (
+            <Tooltip title="删除">
+              <Button 
+                type="text" 
+                danger 
+                icon={<DeleteOutlined />} 
+                onClick={() => {
+                  setActionTask(record);
+                  setShowDeleteModal(true);
+                }}
+              />
+            </Tooltip>
+          )}
         </Space>
       ),
     },
   ];
 
-  const stats = {
-    total: tasks.length,
-    running: tasks.filter((t) => t.Status === TaskStatus.PROCESSING).length,
-    completed: tasks.filter((t) => t.Status === TaskStatus.COMPLETED).length,
-    failed: tasks.filter((t) => t.Status === TaskStatus.FAILED).length,
-  };
-
-  // 获取文件树数据
-  const { data: filesResponse, loading: filesLoading } = useRequest(
-    () => {
-      return fileAPI.getFiles(projectId);
-    },
+  // 3. 重跑任务
+  const { run: restartTask, loading: restartLoading } = useRequest(
+    () => taskAPI.restartTask(actionTask!.Id, projectId),
     {
-      refreshDeps: [projectId],
-    }
-  );
-
-  const fileTreeData = filesResponse?.Data || [];
-
-  // 将FileTreeNode转换为TreeNode
-  const convertFileTreeNodeToTreeNode = (nodes): TreeNode[] => {
-    return nodes.map((node) => ({
-      id: node.Id,
-      name: node.Name,
-      type: node.Type as "directory" | "file",
-      size: typeof node.Size === "number" ? node.Size.toString() : node.Size,
-      uploadDate: node.UploadDate || "",
-      path: node.Path,
-      projectId: node.ProjectId,
-      children: node.Children
-        ? convertFileTreeNodeToTreeNode(node.Children)
-        : undefined,
-      fileType: node.FileType,
-      category: node.Type,
-    }));
-  };
-
-  const convertedFileTreeData = useMemo(
-    () => convertFileTreeNodeToTreeNode(fileTreeData),
-    [fileTreeData, projectId]
-  );
-
-  // 获取所有文件（扁平化）
-  const getAllFiles = (nodes: TreeNode[]): TreeNode[] => {
-    const files: TreeNode[] = [];
-    const traverse = (nodeList: TreeNode[]) => {
-      nodeList.forEach((node) => {
-        if (node.type === "file") {
-          files.push(node);
-        }
-        if (node.children) {
-          traverse(node.children);
-        }
-      });
-    };
-    traverse(nodes);
-    return files;
-  };
-
-  // 递归转换为Ant Design树形数据格式
-  const convertToTreeData = (nodes: TreeNode[]): TreeDataNode[] => {
-    return nodes
-      .filter((node) => node.type === "directory") // 只显示目录
-      .map((node) => ({
-        title: (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <Space size={8}>
-              <FolderOutlined style={{ color: "#faad14" }} />
-              <span>{node.name}</span>
-            </Space>
-            <Text
-              type="secondary"
-              style={{ fontSize: "12px", marginLeft: "16px" }}
-            >
-              {/* 显示目录下文件数量 */}
-              {node.children ? getAllFiles([node]).length : 0} 个文件
-            </Text>
-          </div>
-        ),
-        key: node.id,
-        isLeaf: false,
-        children: node.children ? convertToTreeData(node.children) : undefined,
-        data: node,
-      }));
-  };
-
-  const treeData = useMemo(
-    () => convertToTreeData(convertedFileTreeData),
-    [convertedFileTreeData]
-  );
-
-  const allFiles = useMemo(
-    () => getAllFiles(convertedFileTreeData),
-    [convertedFileTreeData]
-  );
-
-  // 根据选择的目录获取文件
-  const getFilesInDirectory = (
-    nodes: TreeNode[],
-    targetPath: string
-  ): TreeNode[] => {
-    if (!targetPath) {
-      return getAllFiles(nodes); // 如果没有选择目录，返回所有文件
-    }
-
-    const files: TreeNode[] = [];
-    const findDirectory = (
-      nodeList: TreeNode[],
-      path: string
-    ): TreeNode | null => {
-      for (const node of nodeList) {
-        if (node.path === path && node.type === "directory") {
-          return node;
-        }
-        if (node.children) {
-          const found = findDirectory(node.children, path);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    const targetDirectory = findDirectory(nodes, targetPath);
-    if (targetDirectory && targetDirectory.children) {
-      return getAllFiles([targetDirectory]);
-    }
-    return [];
-  };
-
-  const filteredFiles = useMemo(
-    () => getFilesInDirectory(convertedFileTreeData, selectedDirectoryPath),
-    [convertedFileTreeData, selectedDirectoryPath]
-  );
-
-  // 默认选择第一个目录
-  useEffect(() => {
-    if (convertedFileTreeData.length > 0 && !selectedDirectoryPath) {
-      const getFirstDirectory = (nodes: TreeNode[]): TreeNode | null => {
-        for (const node of nodes) {
-          if (node.type === "directory") {
-            return node;
-          }
-          if (node.children) {
-            const found = getFirstDirectory(node.children);
-            if (found) return found;
-          }
-        }
-        return null;
-      };
-
-      const firstDirectory = getFirstDirectory(convertedFileTreeData);
-      if (firstDirectory) {
-        setSelectedDirectoryPath(firstDirectory.path);
-        setExpandedKeys([firstDirectory.id]); // 展开第一个目录
+      manual: true,
+      onSuccess: () => {
+        message.success("任务已重新开始执行");
+        setShowRestartModal(false);
+        refreshTasks();
       }
     }
-  }, [convertedFileTreeData, selectedDirectoryPath]);
+  );
 
-  // 分页处理
-  const paginatedFiles = useMemo(() => {
-    const startIndex = (fileCurrentPage - 1) * filePageSize;
-    const endIndex = startIndex + filePageSize;
-    return filteredFiles.slice(startIndex, endIndex);
-  }, [filteredFiles, fileCurrentPage, filePageSize]);
-
-  // 处理文件选择
-  const handleFileSelect = (fileId: string, checked: boolean) => {
-    if (checked) {
-      setSelectedFileIds((prev) => [...prev, fileId]);
-    } else {
-      setSelectedFileIds((prev) => prev.filter((id) => id !== fileId));
-    }
-  };
-
-  // 处理全选/取消全选
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      const allFileIds = filteredFiles.map((file) => file.id);
-      setSelectedFileIds((prev) => [...new Set([...prev, ...allFileIds])]);
-    } else {
-      const filteredFileIds = filteredFiles.map((file) => file.id);
-      setSelectedFileIds((prev) =>
-        prev.filter((id) => !filteredFileIds.includes(id))
-      );
-    }
-  };
-
-  // 获取选中文件的详细信息
-  const getSelectedFilesInfo = () => {
-    return selectedFileIds
-      .map((id) => {
-        const file = allFiles.find((f) => f.id === id);
-        if (!file) return null;
-
-        // 构建显示路径：移除项目根路径，只显示相对路径
-        const displayPath = file.path.startsWith("/")
-          ? file.path.substring(1)
-          : file.path;
-
-        return {
-          value: file.id,
-          label: `${displayPath}/${file.name}`,
-          fileName: file.name,
-        };
-      })
-      .filter(Boolean);
-  };
-
-  // 处理目录选择
-  const handleDirectorySelect = (selectedKeys: React.Key[]) => {
-    if (selectedKeys.length > 0) {
-      const selectedKey = selectedKeys[0] as string;
-      // 根据key找到对应的目录节点
-      const findNodeByKey = (
-        nodes: TreeNode[],
-        key: string
-      ): TreeNode | null => {
-        for (const node of nodes) {
-          if (node.id === key) {
-            return node;
-          }
-          if (node.children) {
-            const found = findNodeByKey(node.children, key);
-            if (found) return found;
-          }
-        }
-        return null;
-      };
-
-      const selectedNode = findNodeByKey(convertedFileTreeData, selectedKey);
-      if (selectedNode) {
-        setSelectedDirectoryPath(selectedNode.path);
-        setFileCurrentPage(1); // 重置页码
+  // 4. 删除任务
+  const { run: deleteTask, loading: deleteLoading } = useRequest(
+    () => taskAPI.deleteTask(actionTask!.Id, projectId),
+    {
+      manual: true,
+      onSuccess: () => {
+        message.success("任务删除成功");
+        setShowDeleteModal(false);
+        refreshTasks();
       }
     }
-    // 移除了取消选择的逻辑，确保始终有目录被选中
-  };
+  );
 
-  return (
-    <div>
-      <Breadcrumb style={{ marginBottom: "24px" }}>
-        <Breadcrumb.Item>项目管理</Breadcrumb.Item>
-        <Breadcrumb.Item>{projectName}</Breadcrumb.Item>
-        <Breadcrumb.Item>任务管理</Breadcrumb.Item>
-      </Breadcrumb>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "24px",
-        }}
-      >
-        <Title level={2} style={{ margin: 0 }}>
-          任务管理
-        </Title>
+  // 渲染主列表视图
+  const renderListView = () => (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
+        <div>
+          <Title level={2} style={{ margin: 0 }}>任务管理</Title>
+          <Text type="secondary">创建和管理图像处理任务</Text>
+        </div>
         {!isReadOnly && (
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setShowCreateModal(true)}
-        >
-          创建任务
-        </Button>
+          <Button type="primary" size="large" onClick={() => setView("create")}>创建新任务</Button>
         )}
       </div>
 
-      <Row gutter={16} style={{ marginBottom: "24px" }}>
-        <Col span={6}>
-          <Card>
-            <Statistic title="总任务数" value={stats.total} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="处理中"
-              value={stats.running}
-              valueStyle={{ color: "#1890ff" }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="已完成"
-              value={stats.completed}
-              valueStyle={{ color: "#52c41a" }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="失败"
-              value={stats.failed}
-              valueStyle={{ color: "#ff4d4f" }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      <Card>
+      <Card title={
+        <Space>
+          <FileTextOutlined />
+          <span>任务列表</span>
+          <Button type="text" icon={<ReloadOutlined />} onClick={refreshTasks} />
+        </Space>
+      }>
         <Table
           columns={columns}
           dataSource={tasks}
@@ -645,510 +239,391 @@ const TasksPage: React.FC<TasksPageProps> = ({
           pagination={{
             current: currentPage,
             pageSize: pageSize,
-            total: total,
-            showSizeChanger: true,
-            showQuickJumper: true,
-            showTotal: (total, range) =>
-              `第 ${range[0]}-${range[1]} 条/共 ${total} 条`,
-            pageSizeOptions: ["10", "20", "50", "100"],
-            onChange: handlePaginationChange,
-            onShowSizeChange: handleShowSizeChange,
+            total: totalTasks,
+            onChange: (p, s) => { setCurrentPage(p); setPageSize(s); },
+            showTotal: (t) => `共 ${t} 条`,
           }}
         />
       </Card>
 
-      <Drawer
-        title="创建新任务"
-        placement="right"
-        width={800}
-        visible={showCreateModal}
-        onClose={() => {
-          setShowCreateModal(false);
-          createForm.resetFields();
-          setSelectedFileIds([]);
-        }}
-        footer={
-          <div style={{ textAlign: "right" }}>
-            <Space>
-              <Button
-                onClick={() => {
-                  setShowCreateModal(false);
-                  createForm.resetFields();
-                  setSelectedFileIds([]);
-                }}
-              >
-                取消
-              </Button>
-              <Button type="primary" onClick={handleCreateSubmit}>
-                创建
-              </Button>
+      {/* 重新执行确认框 */}
+      <Modal
+        title={
+          <Space>
+            <ReloadOutlined style={{ color: "#faad14" }} />
+            <span>确认重新执行任务</span>
+          </Space>
+        }
+        open={showRestartModal}
+        onOk={restartTask}
+        onCancel={() => setShowRestartModal(false)}
+        confirmLoading={restartLoading}
+        okText="确认重新执行"
+        okButtonProps={{ danger: false, type: "primary", style: { backgroundColor: "#faad14", borderColor: "#faad14" } }}
+      >
+        <div style={{ padding: "12px 0" }}>
+          <Paragraph>任务名称：<Text strong>{actionTask?.Name}</Text></Paragraph>
+          <div style={{ backgroundColor: "#fffbe6", padding: "16px", borderRadius: "8px", border: "1px solid #ffe58f", marginBottom: 16 }}>
+            <Space direction="vertical">
+              <Space><Text type="warning"><ReloadOutlined /></Text><Text>将删除该任务的所有执行记录</Text></Space>
+              <Space><Text type="warning"><ReloadOutlined /></Text><Text>将删除所有未归档的检测报告</Text></Space>
+              <Space><Text type="warning"><ReloadOutlined /></Text><Text>任务将使用相同配置重新执行</Text></Space>
             </Space>
           </div>
+          <Row gutter={16}>
+            <Col span={12}><Text type="secondary">任务名称：</Text></Col>
+            <Col span={12} style={{ textAlign: "right" }}><Text>{actionTask?.Name}</Text></Col>
+            <Col span={12}><Text type="secondary">包含文件：</Text></Col>
+            <Col span={12} style={{ textAlign: "right" }}><Text>{actionTask?.FileCount}个文件</Text></Col>
+          </Row>
+        </div>
+      </Modal>
+
+      {/* 删除确认框 */}
+      <Modal
+        title={
+          <Space>
+            <ExclamationCircleOutlined style={{ color: "#ff4d4f" }} />
+            <span>确认删除任务</span>
+          </Space>
         }
-      >
-        <Form form={createForm} layout="vertical" style={{ marginTop: "24px" }}>
-          <Form.Item
-            name="Name"
-            label="任务名称"
-            rules={[{ required: true, message: "请输入任务名称" }]}
-          >
-            <Input placeholder="请输入任务名称" />
-          </Form.Item>
-
-          <Form.Item name="Description" label="任务描述">
-            <TextArea rows={3} placeholder="请输入任务描述（可选）" />
-          </Form.Item>
-
-          <Form.Item
-            name="AlgorithmType"
-            label="算法类型"
-            rules={[{ required: true, message: "请选择算法类型" }]}
-          >
-            <Select placeholder="请选择算法类型">
-              <Select.Option value="object-detection">目标检测</Select.Option>
-              <Select.Option value="defect-detection">缺陷检测</Select.Option>
-              <Select.Option value="classification">图像分类</Select.Option>
-              <Select.Option value="segmentation">图像分割</Select.Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="SelectedFiles"
-            label="选择文件"
-            required
-            rules={[
-              {
-                required: true,
-                validator: () => {
-                  if (selectedFileIds.length === 0) {
-                    return Promise.reject(new Error("请选择要处理的文件"));
-                  }
-                  return Promise.resolve();
-                },
-              },
-            ]}
-          >
-            <div
-              style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}
-            >
-              <div style={{ flex: 1 }}>
-                <div
-                  style={{
-                    minHeight: "32px",
-                    border: "1px solid #d9d9d9",
-                    borderRadius: "6px",
-                    padding: "4px 11px",
-                    backgroundColor:
-                      selectedFileIds.length > 0 ? "#f6ffed" : "#fafafa",
-                  }}
-                >
-                  {selectedFileIds.length > 0 ? (
-                    <Space wrap>
-                      {getSelectedFilesInfo().map((file: any) => (
-                        <Tag
-                          key={file.value}
-                          closable
-                          onClose={() => handleFileSelect(file.value, false)}
-                        >
-                          {file.label}
-                        </Tag>
-                      ))}
-                    </Space>
-                  ) : (
-                    <Text type="secondary">请选择要处理的文件</Text>
-                  )}
-                </div>
-                {selectedFileIds.length > 0 && (
-                  <Text
-                    type="secondary"
-                    style={{
-                      fontSize: "12px",
-                      marginTop: "4px",
-                      display: "block",
-                    }}
-                  >
-                    已选择 {selectedFileIds.length} 个文件
-                  </Text>
-                )}
-              </div>
-              <Button
-                icon={<FolderOutlined />}
-                onClick={() => setFileTreeModalVisible(true)}
-              >
-                选择文件
-              </Button>
-            </div>
-          </Form.Item>
-        </Form>
-      </Drawer>
-
-
-
-      <Modal
-        title="删除任务"
         open={showDeleteModal}
-        onOk={handleDeleteConfirm}
-        onCancel={() => {
-          setShowDeleteModal(false);
-          setDeletingTask(null);
-        }}
+        onOk={deleteTask}
+        onCancel={() => setShowDeleteModal(false)}
         confirmLoading={deleteLoading}
+        okText="确认删除"
+        okButtonProps={{ danger: true }}
       >
-        <p>确定要删除任务 "{deletingTask?.Name}" 吗？此操作不可撤销。</p>
-      </Modal>
-
-      {/* 任务详情模态框 */}
-      <Modal
-        title="任务详情"
-        open={showDetailModal}
-        onCancel={() => {
-          setShowDetailModal(false);
-          setViewingTask(null);
-        }}
-        footer={[
-          <Button key="close" onClick={() => {
-            setShowDetailModal(false);
-            setViewingTask(null);
-          }}>
-            关闭
-          </Button>
-        ]}
-        width={800}
-      >
-        {viewingTask && (
-          <div>
-            <Row gutter={[16, 16]}>
-              <Col span={12}>
-                <Card size="small" title="基本信息">
-                  <p><strong>任务名称：</strong>{viewingTask.Name}</p>
-                  <p><strong>算法类型：</strong>{viewingTask.AlgorithmType}</p>
-                  <p><strong>任务描述：</strong>{viewingTask.Description || '无'}</p>
-                  <p><strong>状态：</strong>{getStatusTag(viewingTask.Status)}</p>
-                </Card>
-              </Col>
-              <Col span={12}>
-                <Card size="small" title="执行信息">
-                  <p><strong>创建时间：</strong>{viewingTask.CreateTime}</p>
-                  <p><strong>更新时间：</strong>{viewingTask.UpdatedAt}</p>
-                  <p><strong>开始时间：</strong>{viewingTask.ProcessingStartTime || '未开始'}</p>
-                  <p><strong>结束时间：</strong>{viewingTask.ProcessingEndTime || '未结束'}</p>
-                </Card>
-              </Col>
-            </Row>
-            
-            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-              <Col span={12}>
-                <Card size="small" title="文件统计">
-                  <p><strong>总文件数：</strong>{viewingTask.FileCount}</p>
-                  <p><strong>已处理：</strong>{viewingTask.ProcessedFiles}</p>
-                  <p><strong>成功：</strong>{viewingTask.SuccessFiles}</p>
-                  <p><strong>失败：</strong>{viewingTask.FailedFiles}</p>
-                </Card>
-              </Col>
-              <Col span={12}>
-                <Card size="small" title="执行进度">
-                  <Progress 
-                    percent={viewingTask.Progress || 0} 
-                    status={viewingTask.Progress === 100 ? "success" : "active"}
-                    strokeWidth={8}
-                  />
-                  <p style={{ textAlign: 'center', marginTop: 8 }}>
-                    {viewingTask.Progress || 0}% 完成
-                  </p>
-                </Card>
-              </Col>
-            </Row>
-
-            {viewingTask.TaskFiles && viewingTask.TaskFiles.length > 0 && (
-              <Card size="small" title="任务文件详情" style={{ marginTop: 16 }}>
-                <Table
-                  dataSource={viewingTask.TaskFiles}
-                  rowKey="TaskFileId"
-                  size="small"
-                  pagination={false}
-                  scroll={{ y: 300 }}
-                  columns={[
-                    {
-                      title: '文件名',
-                      dataIndex: 'FileName',
-                      key: 'FileName',
-                      width: 200,
-                    },
-                    {
-                      title: '状态',
-                      dataIndex: 'Status',
-                      key: 'Status',
-                      width: 100,
-                      render: (status) => getStatusTag(status),
-                    },
-                    {
-                      title: '开始时间',
-                      dataIndex: 'ProcessingStartTime',
-                      key: 'ProcessingStartTime',
-                      width: 150,
-                      render: (time) => time || '-',
-                    },
-                    {
-                      title: '结束时间',
-                      dataIndex: 'ProcessingEndTime',
-                      key: 'ProcessingEndTime',
-                      width: 150,
-                      render: (time) => time || '-',
-                    },
-                    {
-                      title: '错误信息',
-                      dataIndex: 'ErrorMessage',
-                      key: 'ErrorMessage',
-                      render: (error) => error || '-',
-                    }
-                  ]}
-                />
-              </Card>
-            )}
+        <div style={{ padding: "12px 0" }}>
+          <Paragraph>任务名称：<Text strong>{actionTask?.Name}</Text></Paragraph>
+          <div style={{ backgroundColor: "#fff1f0", padding: "16px", borderRadius: "8px", border: "1px solid #ffa39e", marginBottom: 16 }}>
+            <Space direction="vertical">
+              <Space><Text type="danger"><DeleteOutlined /></Text><Text>将永久删除该任务的所有执行记录</Text></Space>
+              <Space><Text type="danger"><DeleteOutlined /></Text><Text>将永久删除所有未归档的检测报告</Text></Space>
+              <Space><Text type="danger"><InfoCircleOutlined /></Text><Text strong>此操作不可恢复，请谨慎操作</Text></Space>
+            </Space>
           </div>
-        )}
+          <Row gutter={16}>
+            <Col span={12}><Text type="secondary">任务名称：</Text></Col>
+            <Col span={12} style={{ textAlign: "right" }}><Text>{actionTask?.Name}</Text></Col>
+            <Col span={12}><Text type="secondary">包含文件：</Text></Col>
+            <Col span={12} style={{ textAlign: "right" }}><Text>{actionTask?.FileCount}个文件</Text></Col>
+            <Col span={12}><Text type="secondary">创建时间：</Text></Col>
+            <Col span={12} style={{ textAlign: "right" }}><Text>{actionTask?.CreateTime}</Text></Col>
+          </Row>
+        </div>
       </Modal>
+    </>
+  );
 
-      {/* 文件选择模态框 */}
-      <Modal
-        title="选择文件"
-        visible={fileTreeModalVisible}
-        onCancel={() => setFileTreeModalVisible(false)}
-        onOk={() => {
-          // 处理确认选择
-          console.log("选中的文件:", getSelectedFilesInfo());
-          setFileTreeModalVisible(false);
-        }}
-        width={1000}
-        className="file-selection-modal"
-      >
-        <div style={{ display: "flex", gap: "16px" }}>
-          {/* 左侧文件树 */}
-          <div
-            style={{
-              width: "350px",
-              borderRight: "1px solid #f0f0f0",
-              paddingRight: "16px",
-            }}
-          >
-            <div style={{ marginBottom: "16px" }}>
-              <Text strong>文件目录</Text>
+  // 渲染创建任务视图
+  const renderCreateView = () => <CreateTaskView onBack={() => setView("list")} projectId={projectId} onCreated={() => { setView("list"); refreshTasks(); }} />;
+
+  return (
+    <div style={{ height: "100%" }}>
+      <Breadcrumb style={{ marginBottom: "24px" }}>
+        <Breadcrumb.Item>项目</Breadcrumb.Item>
+        <Breadcrumb.Item>{projectName}</Breadcrumb.Item>
+        <Breadcrumb.Item onClick={() => setView("list")}>任务管理</Breadcrumb.Item>
+        {view === "create" && <Breadcrumb.Item>创建新任务</Breadcrumb.Item>}
+      </Breadcrumb>
+      {view === "list" ? renderListView() : renderCreateView()}
+    </div>
+  );
+};
+
+// --- 创建任务视图组件 ---
+interface CreateTaskViewProps {
+  onBack: () => void;
+  projectId: string;
+  onCreated: () => void;
+}
+
+const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCreated }) => {
+  const [form] = Form.useForm();
+  const [showFileModal, setShowFileModal] = useState(false);
+  const [selectedItems, setSelectedItems] = useState<{
+    files: Set<string>;
+    directories: Set<string>;
+    projects: Set<string>;
+  }>({
+    files: new Set(),
+    directories: new Set(),
+    projects: new Set(),
+  });
+
+  const { run: submitTask, loading: submitting } = useRequest(
+    (values: any) => {
+      const payload: TaskSubmitRequest = {
+        Name: values.Name,
+        Description: values.Description,
+        AlgorithmType: "object-detection",
+        SelectedFiles: Array.from(selectedItems.files).map(id => ({ FileId: id })),
+        DirectoryIds: Array.from(selectedItems.directories),
+        ProjectIds: Array.from(selectedItems.projects),
+      };
+      return taskAPI.createTask(projectId, payload);
+    },
+    {
+      manual: true,
+      onSuccess: () => {
+        message.success("任务创建成功并已开始执行");
+        onCreated();
+      }
+    }
+  );
+
+  const totalSelectedCount = selectedItems.files.size + selectedItems.directories.size + selectedItems.projects.size;
+
+  return (
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      <div style={{ marginBottom: 24 }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={onBack} type="text">返回</Button>
+        <Title level={2} style={{ marginTop: 16 }}>创建新任务</Title>
+        <Text type="secondary">配置检测任务的文件和参数</Text>
+      </div>
+
+      <Card title="任务设置" style={{ marginBottom: 24 }}>
+        <Form form={form} layout="vertical" initialValues={{ Name: `检测任务_${new Date().getTime().toString().slice(-6)}` }}>
+          <Form.Item name="Name" label="任务名称" rules={[{ required: true, message: "请输入任务名称" }]}>
+            <Input placeholder="请输入任务名称" size="large" />
+          </Form.Item>
+          
+          <div style={{ marginTop: 24 }}>
+            <Text strong style={{ display: "block", marginBottom: 8 }}>选择文件或文件夹</Text>
+            <div 
+              style={{ 
+                border: "1px dashed #d9d9d9", 
+                borderRadius: "8px", 
+                padding: "40px", 
+                textAlign: "center",
+                backgroundColor: "#fafafa",
+                cursor: "pointer"
+              }}
+              onClick={() => setShowFileModal(true)}
+            >
+              <UploadOutlined style={{ fontSize: 32, color: "#bfbfbf", marginBottom: 16 }} />
+              <Paragraph>请选择需要处理的文件</Paragraph>
+              <Button type="primary" icon={<PlusOutlined />}>浏览文件</Button>
             </div>
-            <Tree
-              treeData={treeData}
-              expandedKeys={expandedKeys}
-              selectedKeys={
-                selectedDirectoryPath
-                  ? [
-                      // 根据path找到对应的key
-                      (() => {
-                        const findKeyByPath = (
-                          nodes: TreeNode[],
-                          path: string
-                        ): string => {
-                          for (const node of nodes) {
-                            if (node.path === path) {
-                              return node.id;
-                            }
-                            if (node.children) {
-                              const found = findKeyByPath(node.children, path);
-                              if (found) return found;
-                            }
-                          }
-                          return "";
-                        };
-                        return findKeyByPath(
-                          convertedFileTreeData,
-                          selectedDirectoryPath
-                        );
-                      })(),
-                    ]
-                  : []
-              }
-              onExpand={setExpandedKeys}
-              onSelect={handleDirectorySelect}
-              showIcon={false}
-              blockNode
-              height={400}
-              style={{ overflow: "auto" }}
-            />
           </div>
 
-          {/* 右侧文件列表 */}
-          <div style={{ flex: 1 }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "16px",
-              }}
-            >
-              <Space>
-                <Text strong>文件列表</Text>
-                <Text type="secondary">
-                  当前目录: {filteredFiles.length} 个文件
-                </Text>
-              </Space>
-              <Space>
-                <Checkbox
-                  checked={
-                    filteredFiles.length > 0 &&
-                    filteredFiles.every((file) =>
-                      selectedFileIds.includes(file.id)
-                    )
-                  }
-                  indeterminate={
-                    filteredFiles.some((file) =>
-                      selectedFileIds.includes(file.id)
-                    ) &&
-                    !filteredFiles.every((file) =>
-                      selectedFileIds.includes(file.id)
-                    )
-                  }
-                  onChange={(e) => handleSelectAll(e.target.checked)}
-                >
-                  全选当前页
-                </Checkbox>
-                <Text type="secondary">
-                  已选择 {selectedFileIds.length} 个文件
-                </Text>
-              </Space>
-            </div>
-
-            {/* 文件列表 */}
-            <div
-              style={{
-                maxHeight: "320px",
-                overflow: "auto",
-                border: "1px solid #f0f0f0",
-                borderRadius: "6px",
-              }}
-            >
+          {totalSelectedCount > 0 && (
+            <div style={{ marginTop: 24 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+                <Text strong>已选择的文件</Text>
+                <Text type="secondary">共 {totalSelectedCount} 项</Text>
+              </div>
               <List
-                dataSource={paginatedFiles}
-                renderItem={(file) => (
-                  <List.Item
-                    key={file.id}
-                    style={{
-                      padding: "12px 16px",
-                      borderBottom: "1px solid #f5f5f5",
-                    }}
-                  >
-                    <List.Item.Meta
-                      avatar={
-                        <Checkbox
-                          checked={selectedFileIds.includes(file.id)}
-                          onChange={(e) =>
-                            handleFileSelect(file.id, e.target.checked)
-                          }
-                        />
-                      }
-                      title={
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                          }}
-                        >
-                          <FileImageOutlined
-                            style={{ color: "#1890ff", fontSize: "16px" }}
-                          />
-                          <Text>{file.name}</Text>
-                        </div>
-                      }
-                      description={
-                        <Space>
-                          <Text type="secondary" style={{ fontSize: "12px" }}>
-                            {file.size}
-                          </Text>
-                          <Text type="secondary" style={{ fontSize: "12px" }}>
-                            {file.uploadDate}
-                          </Text>
-                        </Space>
-                      }
-                    />
+                bordered
+                dataSource={[
+                  ...Array.from(selectedItems.projects).map(id => ({ id, type: 'project', name: `项目: ${id}` })),
+                  ...Array.from(selectedItems.directories).map(id => ({ id, type: 'directory', name: `目录: ${id}` })),
+                  ...Array.from(selectedItems.files).map(id => ({ id, type: 'file', name: `文件: ${id}` })),
+                ]}
+                renderItem={(item) => (
+                  <List.Item extra={
+                    <Button type="text" icon={<DeleteOutlined />} onClick={() => {
+                      const newItems = { ...selectedItems };
+                      if (item.type === 'file') newItems.files.delete(item.id);
+                      else if (item.type === 'directory') newItems.directories.delete(item.id);
+                      else if (item.type === 'project') newItems.projects.delete(item.id);
+                      setSelectedItems({ ...newItems });
+                    }} />
+                  }>
+                    <Space>
+                      {item.type === 'project' ? <ProjectOutlined style={{ color: '#1890ff' }} /> : 
+                       item.type === 'directory' ? <FolderOutlined style={{ color: '#faad14' }} /> : 
+                       <FileImageOutlined style={{ color: '#8c8c8c' }} />}
+                      <Text>{item.name}</Text>
+                    </Space>
                   </List.Item>
                 )}
+                style={{ maxHeight: 300, overflow: "auto", backgroundColor: "#fff" }}
               />
             </div>
+          )}
+        </Form>
+      </Card>
 
-            {/* 分页 */}
-            {filteredFiles.length > filePageSize && (
-              <div style={{ marginTop: "16px", textAlign: "center" }}>
-                <Pagination
-                  current={fileCurrentPage}
-                  pageSize={filePageSize}
-                  total={filteredFiles.length}
-                  onChange={(page, size) => {
-                    setFileCurrentPage(page);
-                    setFilePageSize(size || 10);
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginBottom: 40 }}>
+        <Button size="large" onClick={onBack}>取消</Button>
+        <Button 
+          type="primary" 
+          size="large" 
+          icon={<ReloadOutlined />} 
+          loading={submitting}
+          disabled={totalSelectedCount === 0}
+          onClick={() => form.validateFields().then(submitTask)}
+        >
+          启动任务
+        </Button>
+      </div>
+
+      <FileSelectionModal 
+        open={showFileModal} 
+        onCancel={() => setShowFileModal(false)} 
+        onConfirm={(items) => {
+          setSelectedItems(items);
+          setShowFileModal(false);
+        }}
+        initialSelected={selectedItems}
+      />
+    </div>
+  );
+};
+
+// --- 文件选择弹窗组件 ---
+interface FileSelectionModalProps {
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: (items: { files: Set<string>; directories: Set<string>; projects: Set<string> }) => void;
+  initialSelected: { files: Set<string>; directories: Set<string>; projects: Set<string> };
+}
+
+const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel, onConfirm, initialSelected }) => {
+  const [selectedItems, setSelectedItems] = useState(initialSelected);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) setSelectedItems(initialSelected);
+  }, [open, initialSelected]);
+
+  // 1. 获取所有可选项目
+  const { data: projectsResp, loading: projectsLoading } = useRequest(projectAPI.getProjects);
+  const projects = projectsResp?.Data || [];
+
+  // 2. 获取当前项目的文件树
+  const { data: filesResp, loading: filesLoading, run: fetchFiles } = useRequest(
+    (pid: string) => fileAPI.getFiles(pid),
+    { manual: true }
+  );
+
+  useEffect(() => {
+    if (currentProjectId) fetchFiles(currentProjectId);
+  }, [currentProjectId]);
+
+  const treeData = useMemo(() => {
+    const convert = (nodes: FileTreeNode[]): TreeDataNode[] => {
+      return nodes.map(node => ({
+        title: (
+          <Space>
+            {node.Type === 'directory' ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileImageOutlined style={{ color: '#1890ff' }} />}
+            <span>{node.Name}</span>
+          </Space>
+        ),
+        key: node.Id,
+        isLeaf: node.Type === 'file',
+        children: node.Children ? convert(node.Children) : undefined,
+        data: node,
+      }));
+    };
+    return convert(filesResp?.Data || []);
+  }, [filesResp]);
+
+  const handleCheck = (checkedKeys: any, info: any) => {
+    const newSelected = { ...selectedItems };
+    const node = info.node.data as FileTreeNode;
+    
+    // 如果是勾选
+    if (info.checked) {
+      if (node.Type === 'directory') newSelected.directories.add(node.Id);
+      else newSelected.files.add(node.Id);
+    } else {
+      if (node.Type === 'directory') newSelected.directories.delete(node.Id);
+      else newSelected.files.delete(node.Id);
+    }
+    
+    setSelectedItems({ ...newSelected });
+  };
+
+  const totalCount = selectedItems.files.size + selectedItems.directories.size + selectedItems.projects.size;
+
+  return (
+    <Modal
+      title="选择文件"
+      open={open}
+      onCancel={onCancel}
+      onOk={() => onConfirm(selectedItems)}
+      width={900}
+      okText="确认选择"
+      cancelText="取消"
+      className="file-selection-modal"
+    >
+      <div style={{ height: 500, display: "flex" }}>
+        {/* 左侧项目列表 */}
+        <div style={{ width: 240, borderRight: "1px solid #f0f0f0", padding: "0 16px 0 0", overflowY: "auto" }}>
+          <div style={{ marginBottom: 12, padding: "8px 0" }}><Text strong>项目列表</Text></div>
+          <List
+            loading={projectsLoading}
+            dataSource={projects}
+            renderItem={(p) => (
+              <div 
+                style={{ 
+                  padding: "10px 12px", 
+                  cursor: "pointer", 
+                  borderRadius: "6px",
+                  backgroundColor: currentProjectId === p.Id ? "#e6f7ff" : "transparent",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 4
+                }}
+                onClick={() => setCurrentProjectId(p.Id)}
+              >
+                <Space>
+                  <ProjectOutlined style={{ color: currentProjectId === p.Id ? "#1890ff" : "#8c8c8c" }} />
+                  <Text ellipsis={{ tooltip: p.Name }} style={{ width: 120 }}>{p.Name}</Text>
+                </Space>
+                <Checkbox 
+                  checked={selectedItems.projects.has(p.Id)}
+                  onChange={(e) => {
+                    const newItems = { ...selectedItems };
+                    if (e.target.checked) newItems.projects.add(p.Id);
+                    else newItems.projects.delete(p.Id);
+                    setSelectedItems({ ...newItems });
                   }}
-                  showSizeChanger
-                  showQuickJumper
-                  showTotal={(total, range) =>
-                    `第 ${range[0]}-${range[1]} 项，共 ${total} 项`
-                  }
                 />
               </div>
             )}
-          </div>
+          />
         </div>
 
-        {/* 底部已选文件显示区域 */}
-        {selectedFileIds.length > 0 && (
-          <div
-            style={{
-              marginTop: "24px",
-              padding: "16px",
-              backgroundColor: "#f6ffed",
-              border: "1px solid #b7eb8f",
-              borderRadius: "6px",
-            }}
-          >
-            <div style={{ marginBottom: "12px" }}>
-              <Text strong>已选文件 ({selectedFileIds.length} 个)</Text>
-              <Button
-                type="link"
-                size="small"
-                style={{ padding: 0, marginLeft: "8px" }}
-                onClick={() => setSelectedFileIds([])}
-              >
-                清空选择
-              </Button>
+        {/* 右侧文件树 */}
+        <div style={{ flex: 1, padding: "0 0 0 16px", overflowY: "auto" }}>
+          {currentProjectId ? (
+            <>
+              <div style={{ marginBottom: 12, padding: "8px 0", display: "flex", justifyContent: "space-between" }}>
+                <Text strong>文件目录</Text>
+                <Text type="secondary">{projects.find(p => p.Id === currentProjectId)?.Name}</Text>
+              </div>
+              {filesLoading ? (
+                <div style={{ textAlign: "center", paddingTop: 100 }}><SyncOutlined spin /></div>
+              ) : treeData.length > 0 ? (
+                <Tree
+                  checkable
+                  treeData={treeData}
+                  onCheck={handleCheck}
+                  checkedKeys={[...Array.from(selectedItems.files), ...Array.from(selectedItems.directories)]}
+                  height={400}
+                  selectable={false}
+                />
+              ) : (
+                <Empty description="该项目下暂无文件" style={{ marginTop: 100 }} />
+              )}
+            </>
+          ) : (
+            <div style={{ textAlign: "center", paddingTop: 200 }}>
+              <Empty description="请从左侧选择一个项目来浏览文件" />
             </div>
-            <div
-              style={{
-                maxHeight: "120px",
-                overflow: "auto",
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "8px",
-              }}
-            >
-              {getSelectedFilesInfo().map((file: any) => (
-                <Tag
-                  key={file.value}
-                  closable
-                  onClose={() => handleFileSelect(file.value, false)}
-                  style={{
-                    marginBottom: "4px",
-                    padding: "4px 8px",
-                    borderRadius: "4px",
-                    backgroundColor: "#ffffff",
-                    border: "1px solid #52c41a",
-                    color: "#389e0d",
-                  }}
-                >
-                  {file.label}
-                </Tag>
-              ))}
-            </div>
-          </div>
-        )}
-      </Modal>
-    </div>
+          )}
+        </div>
+      </div>
+      <div style={{ marginTop: 16, borderTop: "1px solid #f0f0f0", paddingTop: 16, display: "flex", alignItems: "center" }}>
+        <InfoCircleOutlined style={{ color: "#1890ff", marginRight: 8 }} />
+        <Text>已从授权项目中选择 <Text strong>{totalCount}</Text> 个资源</Text>
+      </div>
+    </Modal>
   );
 };
 

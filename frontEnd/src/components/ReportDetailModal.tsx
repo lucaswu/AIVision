@@ -52,8 +52,8 @@ export default function ReportDetailModal({
 
   const handleFileClick = (file: TaskFile) => {
     setCurrentFile(file);
-    // 确保 LlmResult 是 HTML 格式，如果不是，可能需要转换
-    setEditableMarkdown(file.LlmResult || "");
+    // 确保 ManualResult 是 HTML 格式，如果不是，可能需要转换
+    setEditableMarkdown(file.ManualResult || file.VisionResult || "");
     setVerificationStatus("");
     setVerificationNotes("");
     setIsEditing(false);
@@ -145,9 +145,10 @@ export default function ReportDetailModal({
                     ),
                 },
                 {
-                  title: "分析报告",
-                  dataIndex: "LlmResult",
+                  title: "分析结果",
+                  dataIndex: "ManualResult",
                   ellipsis: true,
+                  render: (val, record) => val || record.VisionResult,
                 },
                 {
                   title: "处理时间",
@@ -227,7 +228,7 @@ export default function ReportDetailModal({
                 >
                   {/* AI分析报告 - 使用 Quill 富文本编辑器 */}
                   <QuillEditor
-                    value={currentFile.LlmResult || ""}
+                    value={currentFile.ManualResult || currentFile.VisionResult || ""}
                     onChange={(content) => setEditableMarkdown(content)}
                     editable={isEditing}
                     placeholder="暂无分析结果..."

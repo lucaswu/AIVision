@@ -49,7 +49,7 @@ const Login: React.FC = () => {
       }}
     >
       <Card
-        variant="none"
+            variant="borderless"
         style={{
           width: "100%",
           maxWidth: "480px",

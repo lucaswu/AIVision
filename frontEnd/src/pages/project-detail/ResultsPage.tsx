@@ -91,8 +91,8 @@ export default function ResultsPage({
     }
   );
 
-  const results: Task[] = resultResponse?.Data?.Tasks || [];
-  const total = resultResponse?.Data?.TotalCount || 0;
+  const results: Task[] = (resultResponse?.Data as any)?.Tasks || [];
+  const total = (resultResponse?.Data as any)?.TotalCount || 0;
 
   // 处理分页变化
   const handlePaginationChange = (page: number, size: number) => {

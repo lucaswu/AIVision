@@ -36,6 +36,9 @@ public class TaskProcessService {
     private TaskFileRepository taskFileRepository;
     
     @Autowired
+    private ReportService reportService;
+    
+    @Autowired
     private AiServiceClient aiServiceClient;
     
     @Value("${storage.local.result-dir:/app/data/results}")
@@ -84,6 +87,13 @@ public class TaskProcessService {
                 int batchIndex = (i / BATCH_SIZE) + 1;
 
                 logger.info("处理批次 {}: taskId={}, range=[{}, {}]", batchIndex, taskId, i, endIndex);
+
+                // 模拟处理耗时，增加 1 秒延迟
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    logger.warn("处理批次时的睡眠被中断: {}", e.getMessage());
+                }
 
                 // 更新状态
                 for (TaskFile tf : batch) {
@@ -141,6 +151,13 @@ public class TaskProcessService {
             finalTask.setStatus(Task.Status.COMPLETED);
             finalTask.setEndTime(LocalDateTime.now());
             taskRepository.save(finalTask);
+            
+            // 任务完成，生成报告
+            try {
+                reportService.generateReportForTask(taskId);
+            } catch (Exception e) {
+                logger.error("生成报告失败: taskId={}, error={}", taskId, e.getMessage());
+            }
             
             logger.info("任务处理完成 (结果已存入 JSON): taskId={}", taskId);
             

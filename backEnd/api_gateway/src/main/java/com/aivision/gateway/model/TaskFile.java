@@ -10,6 +10,10 @@ public class TaskFile {
     public enum Status {
         PENDING, PROCESSING, COMPLETED, FAILED
     }
+
+    public enum ReviewStatus {
+        PENDING, CONFIRMED
+    }
     
     @Id
     @Column(name = "task_file_id", length = 255)
@@ -39,6 +43,16 @@ public class TaskFile {
     
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "review_status", length = 20)
+    private ReviewStatus reviewStatus = ReviewStatus.PENDING;
+
+    @Column(name = "manual_result", columnDefinition = "TEXT")
+    private String manualResult;
+
+    @Column(name = "plate_quality", length = 50)
+    private String plateQuality;
     
     @Column(name = "processing_start_time")
     private LocalDateTime processingStartTime;
@@ -63,6 +77,7 @@ public class TaskFile {
         this.logicalFilePath = logicalFilePath;
         this.minioFilePath = minioFilePath;
         this.status = Status.PENDING;
+        this.reviewStatus = ReviewStatus.PENDING;
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
     }
@@ -147,6 +162,33 @@ public class TaskFile {
         this.errorMessage = errorMessage;
         this.updatedAt = LocalDateTime.now();
     }
+
+    public ReviewStatus getReviewStatus() {
+        return reviewStatus;
+    }
+
+    public void setReviewStatus(ReviewStatus reviewStatus) {
+        this.reviewStatus = reviewStatus;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getManualResult() {
+        return manualResult;
+    }
+
+    public void setManualResult(String manualResult) {
+        this.manualResult = manualResult;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getPlateQuality() {
+        return plateQuality;
+    }
+
+    public void setPlateQuality(String plateQuality) {
+        this.plateQuality = plateQuality;
+        this.updatedAt = LocalDateTime.now();
+    }
     
     public LocalDateTime getProcessingStartTime() {
         return processingStartTime;
@@ -212,6 +254,7 @@ public class TaskFile {
                 ", logicalFilePath='" + logicalFilePath + '\'' +
                 ", minioFilePath='" + minioFilePath + '\'' +
                 ", status=" + status +
+                ", reviewStatus=" + reviewStatus +
                 ", reportPath='" + reportPath + '\'' +
                 ", errorMessage='" + errorMessage + '\'' +
                 ", processingStartTime=" + processingStartTime +
@@ -220,4 +263,4 @@ public class TaskFile {
                 ", updatedAt=" + updatedAt +
                 '}';
     }
-} 
+}

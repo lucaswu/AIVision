@@ -452,12 +452,12 @@ const createHTMLContent = (task: Task): string => {
             }
             
             ${
-              file.LlmResult
+              file.ManualResult || file.VisionResult
                 ? `
             <div class="content-block">
-              <div class="content-title">AI分析报告</div>
+              <div class="content-title">分析报告</div>
               <div class="markdown-content">
-                ${formatMarkdown(file.LlmResult)}
+                ${formatMarkdown(file.ManualResult || file.VisionResult || "")}
               </div>
             </div>
             `

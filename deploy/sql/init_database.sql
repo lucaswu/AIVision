@@ -204,6 +204,38 @@ CREATE INDEX IF NOT EXISTS idx_task_file_created_at ON task_file(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_file_processing_times ON task_file(processing_start_time, processing_end_time);
 
 -- =====================================================
+-- 4.1 报告管理表
+-- =====================================================
+
+-- Create report table
+CREATE TABLE IF NOT EXISTS report (
+    report_id VARCHAR(255) PRIMARY KEY,
+    task_id VARCHAR(255) NOT NULL UNIQUE,
+    project_id VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    report_name VARCHAR(255) NOT NULL,
+    total_files INTEGER DEFAULT 0,
+    confirmed_files INTEGER DEFAULT 0,
+    total_defects INTEGER DEFAULT 0,
+    severe_defects INTEGER DEFAULT 0,
+    normal_defects INTEGER DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'PENDING',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_report_task FOREIGN KEY (task_id) REFERENCES task(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_report_project FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE
+);
+
+-- Add review fields to task_file
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) DEFAULT 'PENDING';
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS manual_result TEXT;
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS plate_quality VARCHAR(50);
+
+-- Create index for report
+CREATE INDEX IF NOT EXISTS idx_report_project_id ON report(project_id);
+CREATE INDEX IF NOT EXISTS idx_report_task_id ON report(task_id);
+
+-- =====================================================
 -- 5. 触发器和函数
 -- =====================================================
 
@@ -239,6 +271,11 @@ CREATE TRIGGER update_task_updated_at
 
 CREATE TRIGGER update_task_file_updated_at 
     BEFORE UPDATE ON task_file 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_report_updated_at 
+    BEFORE UPDATE ON report 
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 

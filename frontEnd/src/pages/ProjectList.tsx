@@ -230,7 +230,7 @@ export default function ProjectList() {
         </div>
 
       <Card
-        variant="none"
+            variant="borderless"
         style={{ borderRadius: 12, boxShadow: "0 2px 12px rgba(0,0,0,0.05)" }}
         styles={{ body: { padding: 0 } }}
       >
