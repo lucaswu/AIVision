@@ -1,5 +1,6 @@
 package com.aivision.gateway.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import javax.persistence.*;
 import java.time.LocalDateTime;
 
@@ -17,55 +18,75 @@ public class TaskFile {
     
     @Id
     @Column(name = "task_file_id", length = 255)
+    @JsonProperty("TaskFileId")
     private String taskFileId;
     
     @Column(name = "task_id", nullable = false, length = 255)
+    @JsonProperty("TaskId")
     private String taskId;
     
     @Column(name = "file_id", nullable = false, length = 255)
+    @JsonProperty("FileId")
     private String fileId;
     
     @Column(name = "logical_file_path", nullable = false, length = 500)
+    @JsonProperty("LogicalPath")
     private String logicalFilePath;
     
     @Column(name = "minio_file_path", length = 500)
+    @JsonProperty("MinioFilePath")
     private String minioFilePath;
     
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
+    @JsonProperty("Status")
     private Status status = Status.PENDING;
     
     @Column(name = "vision_result", columnDefinition = "TEXT")
+    @JsonProperty("VisionResult")
     private String visionResult;
     
     @Column(name = "report_path", length = 500)
+    @JsonProperty("ReportPath")
     private String reportPath;
     
     @Column(name = "error_message", columnDefinition = "TEXT")
+    @JsonProperty("ErrorMessage")
     private String errorMessage;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "review_status", length = 20)
+    @JsonProperty("ReviewStatus")
     private ReviewStatus reviewStatus = ReviewStatus.PENDING;
 
     @Column(name = "manual_result", columnDefinition = "TEXT")
+    @JsonProperty("ManualResult")
     private String manualResult;
 
     @Column(name = "plate_quality", length = 50)
+    @JsonProperty("PlateQuality")
     private String plateQuality;
     
     @Column(name = "processing_start_time")
+    @JsonProperty("ProcessingStartTime")
     private LocalDateTime processingStartTime;
     
     @Column(name = "processing_end_time")
+    @JsonProperty("ProcessingEndTime")
     private LocalDateTime processingEndTime;
     
     @Column(name = "created_at")
+    @JsonProperty("CreatedAt")
     private LocalDateTime createdAt;
     
     @Column(name = "updated_at")
+    @JsonProperty("UpdatedAt")
     private LocalDateTime updatedAt;
     
+    @Transient
+    @JsonProperty("FileName")
+    private String fileName;
+
     // 构造函数
     public TaskFile() {}
     
@@ -222,6 +243,14 @@ public class TaskFile {
     
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+    
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
     }
     
     @PrePersist

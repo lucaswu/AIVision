@@ -24,7 +24,7 @@ public class TaskSubmitRequest {
 
     @JsonProperty("DirectoryIds")
     private List<String> directoryIds;
-
+    
     @JsonProperty("ProjectIds")
     private List<String> projectIds;
     

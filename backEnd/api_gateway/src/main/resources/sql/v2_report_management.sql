@@ -20,3 +20,4 @@ ALTER TABLE task_file ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) DEFAULT
 ALTER TABLE task_file ADD COLUMN IF NOT EXISTS manual_result TEXT; -- 存储 JSONB 格式的字符串
 ALTER TABLE task_file ADD COLUMN IF NOT EXISTS plate_quality VARCHAR(50);
 
+

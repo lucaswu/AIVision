@@ -170,7 +170,7 @@ public class FileController {
         @RequestParam("ProjectId") String projectId,
         
         @Parameter(description = "用户ID", required = true, example = "user001")
-        @RequestParam("UseId") String userId) {
+        @RequestParam("UserId") String userId) {
         
         try {
             // 基础验证

@@ -248,7 +248,7 @@ public class TaskService {
         Optional<UserProjectPermission> permission = permissionRepository.findByUserIdAndProjectId(userId, projectId);
         if (permission.isPresent()) {
             return;
-        }
+            }
 
         throw new RuntimeException("无权限访问该项目: " + projectId);
     }

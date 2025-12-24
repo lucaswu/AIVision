@@ -73,6 +73,7 @@ export interface Task {
 export interface Report {
   ReportId: string;
   TaskId: string;
+  TaskName?: string; // 关联的任务名称
   ProjectId: string;
   UserId: string;
   ReportName: string;

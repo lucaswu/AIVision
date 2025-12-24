@@ -32,18 +32,28 @@ public class ReportService {
     @Autowired
     private ProjectRepository projectRepository;
 
+    @Autowired
+    private FileRepository fileRepository;
+
     /**
      * 获取报告列表
      */
     public List<Report> getReportsByProject(String projectId) {
-        return reportRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        List<Report> reports = reportRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        // 填充任务名称
+        for (Report r : reports) {
+            taskRepository.findById(r.getTaskId()).ifPresent(t -> r.setTaskName(t.getTaskName()));
+        }
+        return reports;
     }
 
     /**
      * 获取报告详情
      */
     public Optional<Report> getReportByTaskId(String taskId) {
-        return reportRepository.findByTaskId(taskId);
+        Optional<Report> report = reportRepository.findByTaskId(taskId);
+        report.ifPresent(r -> taskRepository.findById(r.getTaskId()).ifPresent(t -> r.setTaskName(t.getTaskName())));
+        return report;
     }
 
     /**
@@ -51,6 +61,12 @@ public class ReportService {
      */
     public List<TaskFile> getReportFiles(String taskId, String status) {
         List<TaskFile> files = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
+        
+        // 填充文件名
+        for (TaskFile tf : files) {
+            fileRepository.findById(tf.getFileId()).ifPresent(f -> tf.setFileName(f.getOriginalName()));
+        }
+
         if (status == null || status.isEmpty() || "all".equalsIgnoreCase(status)) {
             return files;
         }

@@ -48,6 +48,7 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
       <ReportPreviewPage
         taskId={selectedTaskId}
         projectId={projectId}
+        projectName={projectName || "项目"}
         onBack={handleBack}
       />
     );
@@ -64,4 +65,5 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
 };
 
 export default ReportsContainer;
+
 

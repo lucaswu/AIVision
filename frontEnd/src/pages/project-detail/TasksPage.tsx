@@ -41,6 +41,7 @@ import {
 } from "@ant-design/icons";
 import type { TableColumnsType, TreeDataNode } from "antd";
 import { useRequest } from "ahooks";
+import { useNavigate } from "react-router-dom";
 import { taskAPI, fileAPI, projectAPI } from "../../utils/api";
 import { Task, TaskStatus, FileTreeNode, Project, TaskSubmitRequest } from "../../utils/data";
 
@@ -58,6 +59,7 @@ const TasksPage: React.FC<TasksPageProps> = ({
   permission = "READ_ONLY",
 }) => {
   const isReadOnly = permission === "READ_ONLY";
+  const navigate = useNavigate();
   const [view, setView] = useState<"list" | "create">("list");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -164,7 +166,11 @@ const TasksPage: React.FC<TasksPageProps> = ({
           )}
           {record.Status === TaskStatus.COMPLETED && (
             <Tooltip title="查看报告">
-              <Button type="text" icon={<FileTextOutlined />} />
+              <Button 
+                type="text" 
+                icon={<FileTextOutlined />} 
+                onClick={() => navigate(`/projects/${projectId}/reports`)}
+              />
             </Tooltip>
           )}
           {!isReadOnly && (
@@ -321,12 +327,19 @@ const TasksPage: React.FC<TasksPageProps> = ({
 
   return (
     <div style={{ height: "100%" }}>
-      <Breadcrumb style={{ marginBottom: "24px" }}>
-        <Breadcrumb.Item>项目</Breadcrumb.Item>
-        <Breadcrumb.Item>{projectName}</Breadcrumb.Item>
-        <Breadcrumb.Item onClick={() => setView("list")}>任务管理</Breadcrumb.Item>
-        {view === "create" && <Breadcrumb.Item>创建新任务</Breadcrumb.Item>}
-      </Breadcrumb>
+      <Breadcrumb 
+        style={{ marginBottom: "24px" }}
+        items={[
+          { title: '项目' },
+          { title: projectName },
+          { 
+            title: '任务管理', 
+            onClick: () => setView("list"),
+            className: "breadcrumb-link"
+          },
+          ...(view === "create" ? [{ title: '创建新任务' }] : []),
+        ]}
+      />
       {view === "list" ? renderListView() : renderCreateView()}
     </div>
   );

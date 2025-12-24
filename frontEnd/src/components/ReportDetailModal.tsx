@@ -264,7 +264,7 @@ export default function ReportDetailModal({
                         icon={<DownloadOutlined />}
                         size="small"
                         onClick={() => {
-                          const downloadUrl = `${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${getUserId()}`;
+                          const downloadUrl = `${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UserId=${getUserId()}`;
 
                           const link = document.createElement("a");
                           link.href = downloadUrl;
@@ -285,7 +285,7 @@ export default function ReportDetailModal({
                 >
                   <div style={{ textAlign: "center", marginBottom: 24 }}>
                     <img
-                      src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${getUserId()}`}
+                      src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UserId=${getUserId()}`}
                       alt={currentFile.FileName}
                       style={{
                         width: "100%",
@@ -364,7 +364,7 @@ export default function ReportDetailModal({
             }}
           >
             <img
-              src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UseId=${getUserId()}`}
+              src={`${filePreviewPath}?FileId=${currentFile.FileId}&ProjectId=${reportData.ProjectId}&UserId=${getUserId()}`}
               // src="https://img-s.msn.cn/tenant/amp/entityid/AA1IGBOh.img?w=640&h=426&m=6"
               alt={currentFile.FileName}
               style={{

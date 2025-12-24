@@ -22,13 +22,16 @@ import {
   ClockCircleOutlined,
   FileDoneOutlined,
   ExclamationCircleOutlined,
+  ExportOutlined,
+  InboxOutlined,
 } from "@ant-design/icons";
 import type { TableColumnsType } from "antd";
 import { useRequest } from "ahooks";
+import { useNavigate } from "react-router-dom";
 import { reportAPI } from "../../utils/api";
 import { Report } from "../../utils/data";
 
-const { Title, Text } = Typography;
+const { Title, Text, Link } = Typography;
 
 interface ReportsPageProps {
   projectId: string;
@@ -43,6 +46,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
   onReview,
   onPreview,
 }) => {
+  const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -61,34 +65,59 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
       title: "报告名称",
       dataIndex: "ReportName",
       key: "ReportName",
-      render: (text) => <Text strong>{text}</Text>,
+      width: 250,
+      render: (text) => (
+        <div>
+          <Text strong>{text}</Text>
+          <div style={{ fontSize: '12px', color: '#8c8c8c' }}>质检员 生成</div>
+        </div>
+      ),
+    },
+    {
+      title: "检测任务",
+      dataIndex: "TaskName",
+      key: "TaskName",
+      width: 200,
+      render: (text, record) => (
+        <Space>
+          <Link onClick={() => navigate(`/projects/${projectId}/tasks`)}>
+            {text || `检测任务 #${record.TaskId.slice(-4)}`}
+          </Link>
+          <ExportOutlined style={{ fontSize: '12px', color: '#1890ff' }} />
+        </Space>
+      ),
     },
     {
       title: "文件数",
       dataIndex: "TotalFiles",
       key: "TotalFiles",
-      width: 100,
+      width: 120,
       render: (count) => `${count}个文件`,
     },
     {
       title: "缺陷概览",
       key: "defects",
-      width: 250,
+      width: 280,
       render: (_, record) => (
-        <Space size="middle">
+        <Space size="large">
           {record.SevereDefects > 0 ? (
-            <Tag color="error">
-              <ExclamationCircleOutlined /> {record.SevereDefects}处严重
-            </Tag>
+            <span style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ff4d4f', marginRight: 8 }} />
+              <Text type="danger">{record.SevereDefects}处严重</Text>
+            </span>
           ) : null}
           {record.NormalDefects > 0 ? (
-            <Tag color="warning">
-              {record.NormalDefects}处一般
-            </Tag>
+            <span style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#faad14', marginRight: 8 }} />
+              <Text style={{ color: '#faad14' }}>{record.NormalDefects}处一般</Text>
+            </span>
           ) : null}
-          {record.SevereDefects === 0 && record.NormalDefects === 0 ? (
-            <Tag color="success">未检测到缺陷</Tag>
-          ) : null}
+          {record.SevereDefects === 0 && record.NormalDefects === 0 && (
+            <span style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#52c41a', marginRight: 8 }} />
+              <Text type="success">未检测到缺陷</Text>
+            </span>
+          )}
         </Space>
       ),
     },
@@ -104,22 +133,31 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
       key: "Status",
       width: 120,
       render: (status) => {
-        const config = {
-          PENDING: { color: "default", text: "审核中", icon: <ClockCircleOutlined /> },
-          COMPLETED: { color: "success", text: "已审核", icon: <CheckCircleOutlined /> },
-          ARCHIVED: { color: "blue", text: "已归档", icon: <FileDoneOutlined /> },
-        };
-        const item = config[status] || { color: "default", text: status };
-        return <Tag color={item.color} icon={item.icon}>{item.text}</Tag>;
+        const isArchived = status === "ARCHIVED";
+        return (
+          <span style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: isArchived ? '#d9d9d9' : '#52c41a', marginRight: 8 }} />
+            <Text style={{ color: isArchived ? '#8c8c8c' : '#52c41a' }}>
+              {isArchived ? '已归档' : '未归档'}
+            </Text>
+          </span>
+        );
       },
     },
     {
       title: "操作",
       key: "action",
-      width: 180,
+      width: 200,
       render: (_, record) => (
         <Space size="middle">
-          <Tooltip title="结果审核">
+          <Tooltip title="查看">
+            <Button
+              type="text"
+              icon={<EyeOutlined />}
+              onClick={() => onPreview(record.TaskId)}
+            />
+          </Tooltip>
+          <Tooltip title="审核">
             <Button
               type="text"
               icon={<FileSearchOutlined />}
@@ -127,34 +165,26 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
               disabled={record.Status === "ARCHIVED"}
             />
           </Tooltip>
-          <Tooltip title="预览报告">
-            <Button
-              type="text"
-              icon={<EyeOutlined />}
-              onClick={() => onPreview(record.TaskId)}
-            />
-          </Tooltip>
-          <Tooltip title="下载 PDF">
+          <Tooltip title="下载">
             <Button
               type="text"
               icon={<DownloadOutlined />}
-              onClick={() => message.info("PDF 生成功能开发中")}
+              onClick={() => message.info("PDF 生成中...")}
             />
           </Tooltip>
-          {record.Status !== "ARCHIVED" && (
-            <Tooltip title="归档报告">
-              <Button
-                type="text"
-                icon={<CloudUploadOutlined />}
-                onClick={() => {
-                  reportAPI.archiveReport(record.ReportId, true).then(() => {
-                    message.success("报告已归档");
-                    refresh();
-                  });
-                }}
-              />
-            </Tooltip>
-          )}
+          <Tooltip title={record.Status === "ARCHIVED" ? "取消归档" : "归档"}>
+            <Button
+              type="text"
+              icon={<InboxOutlined />}
+              onClick={() => {
+                const newStatus = record.Status === "ARCHIVED";
+                reportAPI.archiveReport(record.ReportId, !newStatus).then(() => {
+                  message.success(newStatus ? "已取消归档" : "报告已归档");
+                  refresh();
+                });
+              }}
+            />
+          </Tooltip>
         </Space>
       ),
     },
@@ -168,11 +198,14 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
 
   return (
     <div style={{ height: "100%" }}>
-      <Breadcrumb style={{ marginBottom: "24px" }}>
-        <Breadcrumb.Item>项目</Breadcrumb.Item>
-        <Breadcrumb.Item>{projectName}</Breadcrumb.Item>
-        <Breadcrumb.Item>报告管理</Breadcrumb.Item>
-      </Breadcrumb>
+      <Breadcrumb 
+        style={{ marginBottom: "24px" }}
+        items={[
+          { title: '项目' },
+          { title: projectName },
+          { title: '报告管理' },
+        ]}
+      />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
         <div>
@@ -223,4 +256,5 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
 };
 
 export default ReportsPage;
+
 

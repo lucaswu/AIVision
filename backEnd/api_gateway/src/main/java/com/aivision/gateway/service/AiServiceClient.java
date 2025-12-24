@@ -9,9 +9,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 @Service
 public class AiServiceClient {
@@ -19,7 +21,13 @@ public class AiServiceClient {
     private static final Logger logger = LoggerFactory.getLogger(AiServiceClient.class);
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final Random random = new Random();
     
+    private static final String[] DEFECT_TYPES = {
+        "crack", "porosity", "inclusion", "lack_of_fusion", 
+        "undercut", "slag_inclusion", "incomplete_penetration", "concave"
+    };
+
     @Value("${ai-services.vision-ai.url}")
     private String visionAiUrl;
     
@@ -37,28 +45,59 @@ public class AiServiceClient {
         
         Map<String, String> results = new HashMap<>();
         
-        // 模拟批量算法处理 (实际生产中这里是一次 HTTP POST 传列表)
         for (String path : relativeStoredPaths) {
-            String mockResult = "{" +
-                "\"metadata\": {" +
-                    "\"image_path\": \"" + path + "\"," +
-                    "\"total_defects\": \"2\"," +
-                    "\"suggested_quality_level\": \"II\"" +
-                "}," +
-                "\"results\": [" +
-                    "{" +
-                        "\"strName\": \"porosity\"," +
-                        "\"score\": 0.95," +
-                        "\"vvContour\": [[100, 100], [120, 100], [120, 120], [100, 120]]" +
-                    "}," +
-                    "{" +
-                        "\"strName\": \"crack\"," +
-                        "\"score\": 0.88," +
-                        "\"vvContour\": [[200, 200], [250, 210], [240, 220]]" +
-                    "}" +
-                "]" +
-            "}";
-            results.put(path, postProcessVisionResult(mockResult, taskId));
+            // 70% 概率有缺陷
+            boolean hasDefects = random.nextDouble() < 0.7;
+            
+            StringBuilder mockResult = new StringBuilder();
+            mockResult.append("{");
+            mockResult.append("\"metadata\": {");
+            mockResult.append("\"image_path\": \"").append(path).append("\",");
+            mockResult.append("\"width\": 1920,");
+            mockResult.append("\"height\": 1080,");
+            
+            if (!hasDefects) {
+                mockResult.append("\"total_defects\": \"0\",");
+                mockResult.append("\"suggested_quality_level\": \"I\"");
+                mockResult.append("},");
+                mockResult.append("\"results\": []");
+            } else {
+                int defectCount = random.nextInt(3) + 1; // 1 到 3 个缺陷
+                mockResult.append("\"total_defects\": \"").append(defectCount).append("\",");
+                mockResult.append("\"suggested_quality_level\": \"III\"");
+                mockResult.append("},");
+                mockResult.append("\"results\": [");
+                
+                for (int i = 0; i < defectCount; i++) {
+                    String type = DEFECT_TYPES[random.nextInt(DEFECT_TYPES.length)];
+                    double score = 0.7 + (0.99 - 0.7) * random.nextDouble();
+                    
+                    // 随机生成坐标和尺寸
+                    int x = random.nextInt(1500) + 100;
+                    int y = random.nextInt(800) + 100;
+                    int w = random.nextInt(100) + 20;
+                    int h = random.nextInt(100) + 20;
+                    
+                    mockResult.append("{");
+                    mockResult.append("\"strName\": \"").append(type).append("\",");
+                    mockResult.append("\"score\": ").append(String.format("%.4f", score)).append(",");
+                    mockResult.append("\"vvContour\": [");
+                    mockResult.append("[").append(x).append(",").append(y).append("],");
+                    mockResult.append("[").append(x + w).append(",").append(y).append("],");
+                    mockResult.append("[").append(x + w).append(",").append(y + h).append("],");
+                    mockResult.append("[").append(x).append(",").append(y + h).append("]");
+                    mockResult.append("]");
+                    mockResult.append("}");
+                    
+                    if (i < defectCount - 1) {
+                        mockResult.append(",");
+                    }
+                }
+                mockResult.append("]");
+            }
+            mockResult.append("}");
+            
+            results.put(path, postProcessVisionResult(mockResult.toString(), taskId));
         }
         
         return results;

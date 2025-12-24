@@ -117,21 +117,21 @@ const FilesPage: React.FC<FilesPageProps> = ({
         );
         const totalFiles = calculateTotalFiles(node);
         return {
-          title: (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                width: "100%",
-              }}
-            >
-              <Space size={8}>
+      title: (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            width: "100%",
+          }}
+        >
+          <Space size={8}>
                 <FolderOutlined style={{ color: "#1890ff" }} />
-                <span style={{ fontSize: "14px", fontWeight: 500 }}>
-                  {node.Name}
-                </span>
-              </Space>
+            <span style={{ fontSize: "14px", fontWeight: 500 }}>
+              {node.Name}
+            </span>
+          </Space>
               {totalFiles > 0 && (
                 <div
                   style={{
@@ -150,14 +150,14 @@ const FilesPage: React.FC<FilesPageProps> = ({
                   {totalFiles}
                 </div>
               )}
-            </div>
-          ),
-          key: node.Id,
+        </div>
+      ),
+      key: node.Id,
           isLeaf: !hasDirectoryChildren,
           children: hasDirectoryChildren
             ? convertToTreeData(node.Children!)
             : undefined,
-          data: node,
+      data: node,
         };
       });
   };
@@ -353,18 +353,18 @@ const FilesPage: React.FC<FilesPageProps> = ({
     try {
       if (uploadType === "file") {
         // 普通多文件上传
-        const dataTransfer = new DataTransfer();
-        fileList.forEach((file) => {
-          if (file.originFileObj) {
-            dataTransfer.items.add(file.originFileObj);
-          }
-        });
-        const result = await fileAPI.uploadFiles(
-          projectId,
+      const dataTransfer = new DataTransfer();
+      fileList.forEach((file) => {
+        if (file.originFileObj) {
+          dataTransfer.items.add(file.originFileObj);
+        }
+      });
+      const result = await fileAPI.uploadFiles(
+        projectId,
           rootDirectoryId!,
           dataTransfer.files
-        );
-        message.success(`成功上传 ${result.Data.SuccessCount} 个文件`);
+      );
+      message.success(`成功上传 ${result.Data.SuccessCount} 个文件`);
       } else {
         // 目录上传逻辑
         console.log("开始目录上传，文件列表:", fileList);
@@ -531,10 +531,10 @@ const FilesPage: React.FC<FilesPageProps> = ({
         // 去除目录前缀，只显示文件名
         const fileName = text.split("/").pop() || text;
         return (
-          <Space>
-            <FileImageOutlined style={{ color: "#1890ff" }} />
+        <Space>
+          <FileImageOutlined style={{ color: "#1890ff" }} />
             <span>{fileName}</span>
-          </Space>
+        </Space>
         );
       },
     },
@@ -663,20 +663,20 @@ const FilesPage: React.FC<FilesPageProps> = ({
         <Space>
           {!isReadOnly && (
             <>
-              <Button icon={<PlusOutlined />} onClick={handleCreateDirectory}>
-                新建目录
-              </Button>
-              <Button
-                type="primary"
-                icon={<UploadOutlined />}
+          <Button icon={<PlusOutlined />} onClick={handleCreateDirectory}>
+            新建目录
+          </Button>
+          <Button
+            type="primary"
+            icon={<UploadOutlined />}
                 onClick={() => {
                   setUploadType("file");
                   setUploadModalVisible(true);
                   setFileList([]);
                 }}
-              >
-                上传文件
-              </Button>
+          >
+            上传文件
+          </Button>
               <Button
                 type="primary"
                 icon={<FolderAddOutlined />}
