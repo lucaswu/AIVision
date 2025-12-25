@@ -202,7 +202,7 @@ export const reportAPI = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
-  batchConfirm: (taskFileIds: string[]) =>
+  batchConfirmFiles: (taskFileIds: string[]) =>
     request<void>("/api/v1/reports/files/batch-confirm", {
       method: "POST",
       body: JSON.stringify(taskFileIds),

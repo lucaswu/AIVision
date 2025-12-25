@@ -647,7 +647,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
   }, [projectName, selectedPath]);
 
   return (
-    <div style={{ height: "100%" }}>
+    <div style={{ padding: 24, minHeight: "100%" }}>
       <Breadcrumb items={breadcrumbItems} style={{ marginBottom: "24px" }} />
       <div
         style={{

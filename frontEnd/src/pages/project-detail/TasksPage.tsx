@@ -326,7 +326,7 @@ const TasksPage: React.FC<TasksPageProps> = ({
   const renderCreateView = () => <CreateTaskView onBack={() => setView("list")} projectId={projectId} onCreated={() => { setView("list"); refreshTasks(); }} />;
 
   return (
-    <div style={{ height: "100%" }}>
+    <div style={{ padding: 24, minHeight: "100%" }}>
       <Breadcrumb 
         style={{ marginBottom: "24px" }}
         items={[
@@ -356,13 +356,13 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
   const [form] = Form.useForm();
   const [showFileModal, setShowFileModal] = useState(false);
   const [selectedItems, setSelectedItems] = useState<{
-    files: Set<string>;
-    directories: Set<string>;
-    projects: Set<string>;
+    files: Map<string, string>;
+    directories: Map<string, string>;
+    projects: Map<string, string>;
   }>({
-    files: new Set(),
-    directories: new Set(),
-    projects: new Set(),
+    files: new Map(),
+    directories: new Map(),
+    projects: new Map(),
   });
 
   const { run: submitTask, loading: submitting } = useRequest(
@@ -371,9 +371,9 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
         Name: values.Name,
         Description: values.Description,
         AlgorithmType: "object-detection",
-        SelectedFiles: Array.from(selectedItems.files).map(id => ({ FileId: id })),
-        DirectoryIds: Array.from(selectedItems.directories),
-        ProjectIds: Array.from(selectedItems.projects),
+        SelectedFiles: Array.from(selectedItems.files.keys()).map(id => ({ FileId: id })),
+        DirectoryIds: Array.from(selectedItems.directories.keys()),
+        ProjectIds: Array.from(selectedItems.projects.keys()),
       };
       return taskAPI.createTask(projectId, payload);
     },
@@ -424,24 +424,28 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
           {totalSelectedCount > 0 && (
             <div style={{ marginTop: 24 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                <Text strong>已选择的文件</Text>
+                <Text strong>已选择的内容</Text>
                 <Text type="secondary">共 {totalSelectedCount} 项</Text>
               </div>
               <List
                 bordered
                 dataSource={[
-                  ...Array.from(selectedItems.projects).map(id => ({ id, type: 'project', name: `项目: ${id}` })),
-                  ...Array.from(selectedItems.directories).map(id => ({ id, type: 'directory', name: `目录: ${id}` })),
-                  ...Array.from(selectedItems.files).map(id => ({ id, type: 'file', name: `文件: ${id}` })),
+                  ...Array.from(selectedItems.projects.entries()).map(([id, name]) => ({ id, type: 'project', name })),
+                  ...Array.from(selectedItems.directories.entries()).map(([id, name]) => ({ id, type: 'directory', name })),
+                  ...Array.from(selectedItems.files.entries()).map(([id, name]) => ({ id, type: 'file', name })),
                 ]}
                 renderItem={(item) => (
                   <List.Item extra={
                     <Button type="text" icon={<DeleteOutlined />} onClick={() => {
-                      const newItems = { ...selectedItems };
+                      const newItems = { 
+                        files: new Map(selectedItems.files),
+                        directories: new Map(selectedItems.directories),
+                        projects: new Map(selectedItems.projects)
+                      };
                       if (item.type === 'file') newItems.files.delete(item.id);
                       else if (item.type === 'directory') newItems.directories.delete(item.id);
                       else if (item.type === 'project') newItems.projects.delete(item.id);
-                      setSelectedItems({ ...newItems });
+                      setSelectedItems(newItems);
                     }} />
                   }>
                     <Space>
@@ -490,8 +494,8 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
 interface FileSelectionModalProps {
   open: boolean;
   onCancel: () => void;
-  onConfirm: (items: { files: Set<string>; directories: Set<string>; projects: Set<string> }) => void;
-  initialSelected: { files: Set<string>; directories: Set<string>; projects: Set<string> };
+  onConfirm: (items: { files: Map<string, string>; directories: Map<string, string>; projects: Map<string, string> }) => void;
+  initialSelected: { files: Map<string, string>; directories: Map<string, string>; projects: Map<string, string> };
 }
 
 const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel, onConfirm, initialSelected }) => {
@@ -535,19 +539,23 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
   }, [filesResp]);
 
   const handleCheck = (checkedKeys: any, info: any) => {
-    const newSelected = { ...selectedItems };
+    const newSelected = { 
+      files: new Map(selectedItems.files),
+      directories: new Map(selectedItems.directories),
+      projects: new Map(selectedItems.projects)
+    };
     const node = info.node.data as FileTreeNode;
     
     // 如果是勾选
     if (info.checked) {
-      if (node.Type === 'directory') newSelected.directories.add(node.Id);
-      else newSelected.files.add(node.Id);
+      if (node.Type === 'directory') newSelected.directories.set(node.Id, node.Name);
+      else newSelected.files.set(node.Id, node.Name);
     } else {
       if (node.Type === 'directory') newSelected.directories.delete(node.Id);
       else newSelected.files.delete(node.Id);
     }
     
-    setSelectedItems({ ...newSelected });
+    setSelectedItems(newSelected);
   };
 
   const totalCount = selectedItems.files.size + selectedItems.directories.size + selectedItems.projects.size;
@@ -591,10 +599,14 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
                 <Checkbox 
                   checked={selectedItems.projects.has(p.Id)}
                   onChange={(e) => {
-                    const newItems = { ...selectedItems };
-                    if (e.target.checked) newItems.projects.add(p.Id);
+                    const newItems = { 
+                      files: new Map(selectedItems.files),
+                      directories: new Map(selectedItems.directories),
+                      projects: new Map(selectedItems.projects)
+                    };
+                    if (e.target.checked) newItems.projects.set(p.Id, p.Name);
                     else newItems.projects.delete(p.Id);
-                    setSelectedItems({ ...newItems });
+                    setSelectedItems(newItems);
                   }}
                 />
               </div>
@@ -617,7 +629,7 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
                   checkable
                   treeData={treeData}
                   onCheck={handleCheck}
-                  checkedKeys={[...Array.from(selectedItems.files), ...Array.from(selectedItems.directories)]}
+                  checkedKeys={[...Array.from(selectedItems.files.keys()), ...Array.from(selectedItems.directories.keys())]}
                   height={400}
                   selectable={false}
                 />

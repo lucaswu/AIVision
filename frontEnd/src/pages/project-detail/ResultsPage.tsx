@@ -276,7 +276,7 @@ export default function ResultsPage({
   };
 
   return (
-    <div>
+    <div style={{ padding: 24, minHeight: "100%" }}>
       <Breadcrumb style={{ marginBottom: "24px" }}>
         <Breadcrumb.Item>项目管理</Breadcrumb.Item>
         <Breadcrumb.Item>{projectName}</Breadcrumb.Item>

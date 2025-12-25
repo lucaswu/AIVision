@@ -239,9 +239,10 @@ public class ReportService {
     private boolean isSevere(String defectType) {
         // 映射关系
         // SEVERE: crack, lack_of_fusion, incomplete_penetration
-        // 这里的 type 可能是 A_crack, B_unfused, C_incomplete_penetration (见 AiServiceClient)
+        // 支持英文和中文名称
         String t = defectType.toLowerCase();
-        return t.contains("crack") || t.contains("unfused") || t.contains("incomplete_penetration");
+        return t.contains("crack") || t.contains("unfused") || t.contains("incomplete_penetration") ||
+               t.contains("裂纹") || t.contains("未熔合") || t.contains("未焊透");
     }
 }
 

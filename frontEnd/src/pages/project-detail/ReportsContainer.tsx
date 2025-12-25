@@ -39,6 +39,7 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
         projectId={projectId}
         projectName={projectName}
         onBack={handleBack}
+        onPreview={() => setView("preview")}
       />
     );
   }

@@ -197,7 +197,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
   };
 
   return (
-    <div style={{ height: "100%" }}>
+    <div style={{ padding: 24, minHeight: "100%" }}>
       <Breadcrumb 
         style={{ marginBottom: "24px" }}
         items={[

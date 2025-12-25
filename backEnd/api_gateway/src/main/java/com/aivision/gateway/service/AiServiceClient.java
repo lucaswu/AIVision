@@ -24,8 +24,8 @@ public class AiServiceClient {
     private final Random random = new Random();
     
     private static final String[] DEFECT_TYPES = {
-        "crack", "porosity", "inclusion", "lack_of_fusion", 
-        "undercut", "slag_inclusion", "incomplete_penetration", "concave"
+        "裂纹", "气孔", "夹渣", "未熔合", 
+        "未焊透", "咬边", "凹坑", "夹钨"
     };
 
     @Value("${ai-services.vision-ai.url}")
@@ -33,6 +33,23 @@ public class AiServiceClient {
     
     @Value("${storage.external-base-dir:/data/files}")
     private String externalBaseDir;
+
+    /**
+     * 将内部缺陷代码映射为友好的中文名称
+     */
+    private String getFriendlyName(String originalType) {
+        switch (originalType.toLowerCase()) {
+            case "crack": return "裂纹";
+            case "porosity": return "气孔";
+            case "slag_inclusion": return "夹渣";
+            case "lack_of_fusion": return "未熔合";
+            case "incomplete_penetration": return "未焊透";
+            case "undercut": return "咬边";
+            case "concave": return "凹坑";
+            case "tungsten_inclusion": return "夹钨";
+            default: return originalType;
+        }
+    }
 
     /**
      * 批量调用视觉AI检测服务
@@ -62,7 +79,17 @@ public class AiServiceClient {
                 mockResult.append("},");
                 mockResult.append("\"results\": []");
             } else {
-                int defectCount = random.nextInt(3) + 1; // 1 到 3 个缺陷
+                // 有缺陷的图片中：30% 是 1 个，60% 是 2 个，10% 是 3 个
+                double defectCountRand = random.nextDouble();
+                int defectCount;
+                if (defectCountRand < 0.3) {
+                    defectCount = 1;
+                } else if (defectCountRand < 0.9) {
+                    defectCount = 2;
+                } else {
+                    defectCount = 3;
+                }
+                
                 mockResult.append("\"total_defects\": \"").append(defectCount).append("\",");
                 mockResult.append("\"suggested_quality_level\": \"III\"");
                 mockResult.append("},");
@@ -170,6 +197,10 @@ public class AiServiceClient {
                 for (JsonNode result : resultNode.get("results")) {
                     if (result.has("strName")) {
                         String originalType = result.get("strName").asText();
+                        // 如果已经是中文或者已经是映射后的格式，就不再映射
+                        if (isFriendlyName(originalType)) {
+                            continue;
+                        }
                         String mappedType = mapToRadiographicStandard(originalType);
                         if (!originalType.equals(mappedType)) {
                             ((com.fasterxml.jackson.databind.node.ObjectNode) result).put("strName", mappedType);
@@ -181,19 +212,34 @@ public class AiServiceClient {
             logger.warn("缺陷类型映射失败: taskId={}, error={}", taskId, e.getMessage());
         }
     }
+
+    private boolean isFriendlyName(String type) {
+        for (String friendly : DEFECT_TYPES) {
+            if (friendly.equals(type)) return true;
+        }
+        return false;
+    }
     
     private String mapToRadiographicStandard(String originalType) {
         switch (originalType.toLowerCase()) {
-            case "crack": return "A_crack";
-            case "porosity": return "E_round_defect";
-            case "inclusion": return "D_linear_defect";
-            case "lack_of_fusion": return "B_unfused";
-            case "undercut": return "F_undercut";
-            case "slag_inclusion": return "D_linear_defect";
-            case "incomplete_penetration": return "C_incomplete_penetration";
-            case "concave": return "G_concave";
+            case "crack": 
+            case "a_crack": return "裂纹";
+            case "porosity": 
+            case "e_round_defect": return "气孔";
+            case "inclusion": 
+            case "d_linear_defect": return "夹渣";
+            case "lack_of_fusion": 
+            case "b_unfused": return "未熔合";
+            case "undercut": 
+            case "f_undercut": return "咬边";
+            case "slag_inclusion": return "夹渣";
+            case "incomplete_penetration": 
+            case "c_incomplete_penetration": return "未焊透";
+            case "concave": 
+            case "g_concave": return "凹坑";
+            case "tungsten_inclusion": return "夹钨";
             case "normal": return "normal";
-            default: return "H_other";
+            default: return originalType;
         }
     }
     

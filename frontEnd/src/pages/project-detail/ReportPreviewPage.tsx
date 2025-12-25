@@ -124,7 +124,7 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
   };
 
   return (
-    <Layout style={{ height: "calc(100vh - 120px)", background: "#f0f2f5" }}>
+    <Layout style={{ height: "100%", background: "#f0f2f5", margin: 0, padding: 0 }}>
       {/* 左侧固定统计栏 */}
       <Sider width={300} theme="light" style={{ borderRight: "1px solid #f0f0f0", padding: '24px', overflowY: 'auto' }}>
         <Button icon={<ArrowLeftOutlined />} onClick={onBack} type="text" style={{ marginBottom: 24, padding: 0 }}>返回任务列表</Button>
