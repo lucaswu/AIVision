@@ -5,9 +5,14 @@ import com.aivision.gateway.service.ReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
@@ -19,6 +24,8 @@ public class ReportController {
     
     @Autowired
     private ReportService reportService;
+
+    private static final DateTimeFormatter FILE_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy_MM_dd_HH_mm");
     
     @GetMapping("/list")
     @Operation(summary = "获取报告列表")
@@ -29,6 +36,33 @@ public class ReportController {
             return ResponseEntity.ok(ApiResponse.success("获取成功", reports));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{reportId}/download")
+    @Operation(summary = "导出/下载报告")
+    public ResponseEntity<byte[]> downloadReport(@PathVariable String reportId) {
+        try {
+            Report report = reportService.getReportById(reportId)
+                .orElseThrow(() -> new RuntimeException("报告不存在"));
+            
+            String csvContent = reportService.exportReport(reportId);
+            byte[] bytes = csvContent.getBytes(StandardCharsets.UTF_8);
+            
+            // 构建人性化的文件名: [任务名]的检测报告_[时间].csv
+            String taskName = report.getTaskName() != null ? report.getTaskName() : "未知任务";
+            String timestamp = report.getCreatedAt().format(FILE_DATE_FORMATTER);
+            String fileName = String.format("%s的检测报告_%s.csv", taskName, timestamp);
+            
+            // 对文件名进行编码，防止中文乱码
+            String encodedFileName = URLEncoder.encode(fileName, StandardCharsets.UTF_8.toString()).replace("+", "%20");
+            
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedFileName)
+                .contentType(MediaType.parseMediaType("text/csv"))
+                .body(bytes);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(null);
         }
     }
 

@@ -169,7 +169,15 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
             <Button
               type="text"
               icon={<DownloadOutlined />}
-              onClick={() => message.info("PDF 生成中...")}
+              onClick={() => {
+                const url = reportAPI.downloadReport(record.ReportId);
+                const link = document.createElement('a');
+                link.href = url;
+                // 后端已经设置了 Content-Disposition 文件名，这里不需要手动指定
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}
             />
           </Tooltip>
           <Tooltip title={record.Status === "ARCHIVED" ? "取消归档" : "归档"}>

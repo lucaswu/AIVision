@@ -211,6 +211,7 @@ export const reportAPI = {
     request<void>(`/api/v1/reports/${reportId}/archive?archived=${archived}`, {
       method: "PUT",
     }),
+  downloadReport: (reportId: string) => `/api/v1/reports/${reportId}/download`,
 };
 
 // 历史遗留兼容：检测结果相关API (内部复用 reportAPI)

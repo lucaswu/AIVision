@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Service
@@ -19,6 +20,7 @@ public class ReportService {
     
     private static final Logger logger = LoggerFactory.getLogger(ReportService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
     @Autowired
     private ReportRepository reportRepository;
@@ -45,6 +47,15 @@ public class ReportService {
             taskRepository.findById(r.getTaskId()).ifPresent(t -> r.setTaskName(t.getTaskName()));
         }
         return reports;
+    }
+
+    /**
+     * 根据报告ID获取详情
+     */
+    public Optional<Report> getReportById(String reportId) {
+        Optional<Report> report = reportRepository.findById(reportId);
+        report.ifPresent(r -> taskRepository.findById(r.getTaskId()).ifPresent(t -> r.setTaskName(t.getTaskName())));
+        return report;
     }
 
     /**
@@ -234,6 +245,96 @@ public class ReportService {
         
         report.setUpdatedAt(LocalDateTime.now());
         reportRepository.save(report);
+    }
+
+    /**
+     * 导出报告 (CSV 格式)
+     */
+    public String exportReport(String reportId) {
+        Report report = reportRepository.findById(reportId)
+            .orElseThrow(() -> new RuntimeException("报告不存在"));
+        
+        // 填充任务名称
+        taskRepository.findById(report.getTaskId()).ifPresent(t -> report.setTaskName(t.getTaskName()));
+        
+        StringBuilder sb = new StringBuilder();
+        // UTF-8 BOM for Excel
+        sb.append("\uFEFF");
+        sb.append("报告名称,检测任务,总文件数,已确认数,严重缺陷,一般缺陷,生成时间,状态\n");
+        sb.append(String.format("\"%s\",\"%s\",%d,%d,%d,%d,\"%s\",\"%s\"\n\n",
+            report.getReportName(),
+            report.getTaskName() != null ? report.getTaskName() : "未知任务",
+            report.getTotalFiles(),
+            report.getConfirmedFiles(),
+            report.getSevereDefects(),
+            report.getNormalDefects(),
+            report.getCreatedAt().format(DATE_FORMATTER),
+            report.getStatus().toString()
+        ));
+        
+        sb.append("详细检测结果\n");
+        sb.append("文件名,审核状态,缺陷详情 (类型 | 位置 | 尺寸)\n");
+        
+        List<TaskFile> files = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(report.getTaskId());
+        for (TaskFile tf : files) {
+            String fileName = fileRepository.findById(tf.getFileId())
+                .map(File::getOriginalName)
+                .orElse("未知文件");
+            
+            String resultStr = tf.getManualResult() != null ? tf.getManualResult() : tf.getVisionResult();
+            StringBuilder defects = new StringBuilder();
+            if (resultStr != null) {
+                try {
+                    JsonNode node = objectMapper.readTree(resultStr);
+                    if (node.has("results") && node.get("results").isArray()) {
+                        for (JsonNode res : node.get("results")) {
+                            String type = res.get("strName").asText();
+                            if ("normal".equalsIgnoreCase(type)) continue;
+                            
+                            if (defects.length() > 0) defects.append("; ");
+                            
+                            defects.append("[").append(type);
+                            
+                            // 提取位置和尺寸 (从 vvContour 计算)
+                            if (res.has("vvContour") && res.get("vvContour").isArray() && res.get("vvContour").size() > 0) {
+                                int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+                                int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+                                boolean hasValidPoints = false;
+                                
+                                for (JsonNode point : res.get("vvContour")) {
+                                    if (point.isArray() && point.size() >= 2) {
+                                        int x = point.get(0).asInt();
+                                        int y = point.get(1).asInt();
+                                        minX = Math.min(minX, x);
+                                        maxX = Math.max(maxX, x);
+                                        minY = Math.min(minY, y);
+                                        maxY = Math.max(maxY, y);
+                                        hasValidPoints = true;
+                                    }
+                                }
+                                
+                                if (hasValidPoints) {
+                                    defects.append(String.format(" | 位置:(%d, %d) | 尺寸:%dx%dpx", 
+                                        minX, minY, (maxX - minX), (maxY - minY)));
+                                }
+                            }
+                            
+                            defects.append("]");
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.warn("导出报告解析缺陷详情失败: {}", e.getMessage());
+                }
+            }
+            
+            sb.append(String.format("\"%s\",\"%s\",\"%s\"\n",
+                fileName,
+                tf.getReviewStatus(),
+                defects.length() == 0 ? "无缺陷" : defects.toString()
+            ));
+        }
+        
+        return sb.toString();
     }
 
     private boolean isSevere(String defectType) {
