@@ -27,14 +27,15 @@ jobs:
         with:
           context: ./backEnd/api_gateway
           push: true
-          tags: ghcr.io/${{ github.repository }}/api-gateway:latest
+          # Docker 镜像名必须全部小写
+          tags: ghcr.io/mzyfree/aivision/api-gateway:latest
 
       - name: Build and push Frontend image
         uses: docker/build-push-action@v4
         with:
           context: ./frontEnd
           push: true
-          tags: ghcr.io/${{ github.repository }}/frontend:latest
+          tags: ghcr.io/mzyfree/aivision/frontend:latest
 
   deploy:
     needs: build-and-push
@@ -61,7 +62,7 @@ jobs:
           password: ${{ secrets.ALIYUN_PASSWORD }}
           script: |
             cd /root/aivision
-            echo "GITHUB_REPOSITORY=${{ github.repository }}" > .env
+            echo "GITHUB_REPOSITORY=mzyfree/aivision" > .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -69,4 +70,3 @@ jobs:
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
             docker image prune -f
-

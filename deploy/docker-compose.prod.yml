@@ -19,7 +19,8 @@ services:
       retries: 5
 
   api-gateway:
-    image: ghcr.io/${GITHUB_REPOSITORY}/api-gateway:latest
+    # 镜像路径必须全部小写
+    image: ghcr.io/mzyfree/aivision/api-gateway:latest
     container_name: ai-detection-gateway
     restart: unless-stopped
     user: root
@@ -39,7 +40,8 @@ services:
       - files_data:/app/data/files
 
   frontend:
-    image: ghcr.io/${GITHUB_REPOSITORY}/frontend:latest
+    # 镜像路径必须全部小写
+    image: ghcr.io/mzyfree/aivision/frontend:latest
     container_name: ai-detection-frontend
     restart: unless-stopped
     ports:
@@ -60,4 +62,3 @@ networks:
   ai-services:
     name: ai-services
     driver: bridge
-
