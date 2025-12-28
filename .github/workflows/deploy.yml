@@ -20,6 +20,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
+          # 构建阶段使用 GITHUB_TOKEN 即可
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Backend image
@@ -27,7 +28,6 @@ jobs:
         with:
           context: ./backEnd/api_gateway
           push: true
-          # Docker 镜像名必须全部小写
           tags: ghcr.io/mzyfree/aivision/api-gateway:latest
 
       - name: Build and push Frontend image
@@ -65,7 +65,8 @@ jobs:
             echo "GITHUB_REPOSITORY=mzyfree/aivision" > .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # 关键修改：使用您配置的 GH_PAT 登录，以确保有权限拉取私有镜像
+            echo ${{ secrets.GH_PAT }} | docker login ghcr.io -u mzyfree --password-stdin
             
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
