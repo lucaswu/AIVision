@@ -19,8 +19,8 @@ services:
       retries: 5
 
   api-gateway:
-    # 简化后的镜像名
-    image: ghcr.io/mzyfree/aivision-backend:latest
+    # 动态使用阿里云仓库地址，并修正命名空间
+    image: ${ACR_REGISTRY}/my_vision/api-gateway:latest
     container_name: ai-detection-gateway
     restart: unless-stopped
     user: root
@@ -40,8 +40,8 @@ services:
       - files_data:/app/data/files
 
   frontend:
-    # 简化后的镜像名
-    image: ghcr.io/mzyfree/aivision-frontend:latest
+    # 动态使用阿里云仓库地址，并修正命名空间
+    image: ${ACR_REGISTRY}/my_vision/frontend:latest
     container_name: ai-detection-frontend
     restart: unless-stopped
     ports:
