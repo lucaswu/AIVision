@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:14.12-alpine
+    container_name: ai-detection-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_detection
+      POSTGRES_USER: aiuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init_database.sql:/docker-entrypoint-initdb.d/init_database.sql:ro
+    networks:
+      - ai-services
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiuser -d ai_detection"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    image: ghcr.io/${GITHUB_REPOSITORY}/api-gateway:latest
+    container_name: ai-detection-gateway
+    restart: unless-stopped
+    user: root
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/ai_detection
+      - SPRING_DATASOURCE_USERNAME=aiuser
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      - SPRING_PROFILES_ACTIVE=docker
+      - SERVER_PORT=8080
+      - JAVA_OPTS=-Xmx1g -Xms512m
+    networks:
+      - ai-services
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - files_data:/app/data/files
+
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY}/frontend:latest
+    container_name: ai-detection-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    networks:
+      - ai-services
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: ai-detection-postgres-data
+  files_data:
+    name: ai-detection-files-data
+
+networks:
+  ai-services:
+    name: ai-services
+    driver: bridge
+

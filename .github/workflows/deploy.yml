@@ -1,0 +1,72 @@
+name: CI/CD Pipeline (Develop)
+
+on:
+  push:
+    branches: [ develop ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Backend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backEnd/api_gateway
+          push: true
+          tags: ghcr.io/${{ github.repository }}/api-gateway:latest
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontEnd
+          push: true
+          tags: ghcr.io/${{ github.repository }}/frontend:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Copy deployment files to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.ALIYUN_HOST }}
+          username: root
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+          source: "deploy/docker-compose.prod.yml,deploy/sql/init_database.sql"
+          target: "/root/aivision"
+          strip_components: 1
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.ALIYUN_HOST }}
+          username: root
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+          script: |
+            cd /root/aivision
+            echo "GITHUB_REPOSITORY=${{ github.repository }}" > .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
+            docker image prune -f
+
