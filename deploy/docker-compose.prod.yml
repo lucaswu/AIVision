@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:14.12-alpine
+    # 修改为阿里云私有路径
+    image: ${ACR_REGISTRY}/my_vision/postgres:14.12-alpine
     container_name: ai-detection-postgres
     restart: unless-stopped
     environment:
@@ -19,7 +20,6 @@ services:
       retries: 5
 
   api-gateway:
-    # 动态使用阿里云仓库地址，并修正命名空间
     image: ${ACR_REGISTRY}/my_vision/api-gateway:latest
     container_name: ai-detection-gateway
     restart: unless-stopped
@@ -40,7 +40,6 @@ services:
       - files_data:/app/data/files
 
   frontend:
-    # 动态使用阿里云仓库地址，并修正命名空间
     image: ${ACR_REGISTRY}/my_vision/frontend:latest
     container_name: ai-detection-frontend
     restart: unless-stopped

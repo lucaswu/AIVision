@@ -23,7 +23,6 @@ jobs:
         with:
           context: ./backEnd/api_gateway
           push: true
-          # 修正命名空间为 my_vision
           tags: ${{ secrets.ACR_REGISTRY }}/my_vision/api-gateway:latest
 
       - name: Build and push Frontend image
@@ -32,6 +31,12 @@ jobs:
           context: ./frontEnd
           push: true
           tags: ${{ secrets.ACR_REGISTRY }}/my_vision/frontend:latest
+
+      - name: Proxy pull and push Postgres (To Aliyun)
+        run: |
+          docker pull postgres:14.12-alpine
+          docker tag postgres:14.12-alpine ${{ secrets.ACR_REGISTRY }}/my_vision/postgres:14.12-alpine
+          docker push ${{ secrets.ACR_REGISTRY }}/my_vision/postgres:14.12-alpine
 
   deploy:
     needs: build-and-push
@@ -50,21 +55,30 @@ jobs:
           target: "/root/aivision"
           strip_components: 1
 
-      - name: Deploy to Server via SSH
+      - name: Execute Remote Deploy
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.ALIYUN_HOST }}
           username: root
           password: ${{ secrets.ALIYUN_PASSWORD }}
           script: |
+            set -e
             cd /root/aivision
-            # 写入阿里云仓库配置到环境变量
+            
+            # 1. 更新环境变量文件
             echo "ACR_REGISTRY=${{ secrets.ACR_REGISTRY }}" > .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             
-            # 使用阿里云凭证登录
-            echo ${{ secrets.ACR_PASSWORD }} | docker login ${{ secrets.ACR_REGISTRY }} -u ${{ secrets.ACR_USERNAME }} --password-stdin
+            # 2. 登录阿里云仓库
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_REGISTRY }} --username ${{ secrets.ACR_USERNAME }} --password-stdin
             
+            # 3. 拉取最新镜像并重启服务
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d
+            
+            # 4. 清理残留
             docker image prune -f
+            
+            # 5. 打印状态供 CI 日志查看
+            echo "Deployment successful! Current containers:"
+            docker compose -f docker-compose.prod.yml ps
