@@ -1,0 +1,697 @@
+"""
+脚本名称: seg2det.py
+功能概述: YOLO数据集格式转换工具（分割→检测/分类）
+详细说明:
+    - 输入格式: YOLO分割格式数据集
+    - 处理流程: 读取多边形标注 → 计算边界框 → 转换为检测格式或分类格式
+    - 输出格式: YOLO检测格式或分类格式数据集
+依赖模块: utils.label_processing, utils.dataset_management
+使用示例:
+    # 转换为检测格式
+    python seg2det.py --input_dir ./seg_dataset --output_dir ./det_dataset --mode det
+
+    # 转换为分类格式
+    python seg2det.py --input_dir ./seg_dataset --output_dir ./cls_dataset --mode cls
+
+    # 转换为检测格式但不复制图像
+    python seg2det.py --input_dir ./seg_dataset --output_dir ./det_dataset --mode det --no_copy_images
+"""
+
+import os
+import sys
+import argparse
+import shutil
+import random
+from pathlib import Path
+from typing import Optional
+from tqdm import tqdm
+
+# 添加项目根目录到路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+current_script_path = os.path.abspath(__file__)
+pj_dir = os.path.dirname(current_script_path)
+convert_dir = os.path.dirname(pj_dir)
+dataprocess_dir = os.path.dirname(convert_dir)
+# 5. 将 dataprocess 目录添加到 Python 搜索路径
+sys.path.append(dataprocess_dir)
+
+from utils import (
+    read_yolo_labels,
+    save_yolo_labels,
+    find_image_files,
+    create_directory_structure,
+    read_dataset_yaml,
+    update_dataset_yaml
+)
+from utils.constants import IMAGE_EXTENSIONS
+
+
+class YOLOFormatConverter:
+    """YOLO格式转换器"""
+
+    def __init__(self, input_dir: str, output_dir: str, mode: str = 'det',
+                 balance_data: bool = False, balance_ratio: float = 1.0):
+        """
+        初始化转换器
+
+        Args:
+            input_dir: 输入数据集目录
+            output_dir: 输出数据集目录
+            mode: 转换模式 ('det'、'cls' 或 'balance')
+            balance_data: 是否执行数据平衡（检测模式按有/无缺陷比例、分类模式按类别均衡）
+            balance_ratio: 检测平衡时负样本相对于正样本的目标比例 (>0)
+        """
+        self.input_dir = Path(input_dir)
+        self.output_dir = Path(output_dir)
+        self.mode = mode
+        self.balance_data = balance_data
+        self.balance_ratio = float(balance_ratio)
+
+        # 验证输入目录
+        if not self.input_dir.exists():
+            raise ValueError(f"输入目录不存在: {input_dir}")
+
+        if self.balance_ratio <= 0:
+            raise ValueError("平衡比例必须大于0，例如0.5表示负样本=正样本*0.5")
+
+        # 统计信息
+        self.total_converted = 0
+        self.total_with_labels = 0
+        self.total_without_labels = 0
+        self.class_distribution = {}
+
+        print(f"YOLO格式转换器初始化:")
+        print(f"  - 输入目录: {input_dir}")
+        print(f"  - 输出目录: {output_dir}")
+        print(f"  - 转换模式: {mode}")
+        if mode in {'det', 'balance'}:
+            print(f"  - 目标负/正比例: {self.balance_ratio}")
+
+    def seg_to_det_line(self, seg_line: list) -> list:
+        """
+        将一行分割标注转换为检测标注
+
+        Args:
+            seg_line: [class_id, x1, y1, x2, y2, ...] 多边形标注
+
+        Returns:
+            [class_id, x_center, y_center, width, height] 检测框标注
+        """
+        if len(seg_line) < 7:  # 至少需要class_id + 3个点
+            return None
+
+        class_id = seg_line[0]
+        points = seg_line[1:]
+
+        # 提取x和y坐标
+        x_coords = []
+        y_coords = []
+        for i in range(0, len(points), 2):
+            if i + 1 < len(points):
+                x_coords.append(points[i])
+                y_coords.append(points[i + 1])
+
+        if not x_coords or not y_coords:
+            return None
+
+        # 计算边界框
+        x_min = min(x_coords)
+        x_max = max(x_coords)
+        y_min = min(y_coords)
+        y_max = max(y_coords)
+
+        # 计算中心点和宽高
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
+        width = x_max - x_min
+        height = y_max - y_min
+
+        # 确保值在[0, 1]范围内
+        x_center = max(0, min(1, x_center))
+        y_center = max(0, min(1, y_center))
+        width = max(0, min(1, width))
+        height = max(0, min(1, height))
+
+        return [class_id, x_center, y_center, width, height]
+
+    def get_primary_class(self, labels: list) -> int:
+        """
+        获取主要类别（出现次数最多的类别）
+
+        Args:
+            labels: 标签列表
+
+        Returns:
+            主要类别ID，如果没有标签返回-1
+        """
+        if not labels:
+            return -1
+
+        # 统计每个类别出现的次数
+        class_counts = {}
+        for label in labels:
+            if len(label) > 0:
+                class_id = int(label[0])
+                class_counts[class_id] = class_counts.get(class_id, 0) + 1
+
+        if not class_counts:
+            return -1
+
+        # 返回出现次数最多的类别
+        return max(class_counts, key=class_counts.get)
+
+    def convert_to_det(self, copy_images: bool = True):
+        """转换为检测格式"""
+        print("开始转换为检测格式...")
+
+        if self.balance_data:
+            print(f"⚖️ 已启用数据平衡，目标负样本/正样本比例为 {self.balance_ratio}。")
+
+        # 创建输出目录结构
+        create_directory_structure(self.output_dir)
+
+        # 处理图像
+        if copy_images:
+            print("建立图像软链接...")
+            self._copy_images()
+
+        # 处理标签
+        print("转换标签文件...")
+        self._convert_labels_to_det()
+
+        if self.balance_data:
+            self._balance_detection_dataset()
+
+        # 复制并更新dataset.yaml
+        self._copy_and_update_yaml()
+
+        if self.balance_data:
+            self._recalculate_det_statistics()
+
+        # 打印统计信息
+        self._print_statistics()
+
+    def balance_detection_only(self, dataset_root: Optional[Path] = None):
+        """仅对已有检测数据集执行平衡"""
+        target_root = Path(dataset_root) if dataset_root else self.output_dir
+        if not (target_root / 'images').exists() or not (target_root / 'labels').exists():
+            # 尝试使用输入目录
+            alt_root = self.input_dir
+            if (alt_root / 'images').exists() and (alt_root / 'labels').exists():
+                target_root = alt_root
+            else:
+                raise ValueError("balance模式需要已存在的检测数据集(images/labels目录)")
+
+        print("开始平衡现有检测数据集...")
+        print(f"  - 数据集目录: {target_root}")
+        print(f"  - 目标负/正比例: {self.balance_ratio}")
+
+        self._balance_detection_dataset(target_root)
+        self._recalculate_det_statistics(target_root)
+        # 确保统计输出路径正确
+        self.output_dir = target_root
+        self._print_statistics()
+
+    def convert_to_cls(self):
+        """转换为分类格式"""
+        print("开始转换为分类格式...")
+        if self.balance_data:
+            print("⚖️ 已启用数据平衡，转换完成后将对各类别数量进行对齐。")
+
+        # 创建输出目录
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 查找输入目录结构
+        input_images_dir = self.input_dir / 'images'
+        input_labels_dir = self.input_dir / 'labels'
+
+        if not input_images_dir.exists():
+            raise ValueError(f"未找到images目录: {input_images_dir}")
+
+        # 获取所有split
+        splits = [d.name for d in input_images_dir.iterdir() if d.is_dir()]
+
+        print(f"找到splits: {splits}")
+
+        # 处理每个split
+        for split in splits:
+            print(f"\n处理{split}集...")
+            self._process_split_to_cls(split)
+
+            if self.balance_data:
+                self._balance_class_distribution(split)
+
+        # 打印统计信息
+        if self.balance_data:
+            self._recalculate_statistics()
+        self._print_statistics()
+
+    @staticmethod
+    def _link_image_file(source: Path, target: Path):
+        """为图像创建软链接，失败时回退到复制。"""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        try:
+            os.symlink(source.resolve(), target)
+        except OSError:
+            shutil.copy2(source, target)
+
+    def _copy_images(self):
+        """链接图像目录（软链接，必要时回退复制）"""
+        input_images_dir = self.input_dir / 'images'
+        output_images_dir = self.output_dir / 'images'
+
+        if not input_images_dir.exists():
+            print(f"警告: 未找到图像目录 {input_images_dir}")
+            return
+
+        output_images_dir.mkdir(parents=True, exist_ok=True)
+        split_dirs = [d for d in input_images_dir.iterdir() if d.is_dir()]
+
+        if split_dirs:
+            for split_dir in sorted(split_dirs, key=lambda p: p.name):
+                target_split_dir = output_images_dir / split_dir.name
+                target_split_dir.mkdir(parents=True, exist_ok=True)
+                image_files = find_image_files(str(split_dir))
+                for image_path in image_files:
+                    target_path = target_split_dir / image_path.name
+                    self._link_image_file(image_path, target_path)
+        else:
+            image_files = find_image_files(str(input_images_dir))
+            for image_path in image_files:
+                target_path = output_images_dir / image_path.name
+                self._link_image_file(image_path, target_path)
+
+        print("图像链接完成")
+
+    def _convert_labels_to_det(self):
+        """转换标签为检测格式"""
+        input_labels_dir = self.input_dir / 'labels'
+        output_labels_dir = self.output_dir / 'labels'
+
+        if not input_labels_dir.exists():
+            print(f"警告: 未找到标签目录 {input_labels_dir}")
+            return
+
+        # 获取所有split
+        splits = [d.name for d in input_labels_dir.iterdir() if d.is_dir()]
+
+        for split in splits:
+            input_split_dir = input_labels_dir / split
+            output_split_dir = output_labels_dir / split
+            output_split_dir.mkdir(parents=True, exist_ok=True)
+
+            # 获取所有标签文件
+            txt_files = list(input_split_dir.glob('*.txt'))
+
+            print(f"处理{split}集: {len(txt_files)}个文件")
+
+            for txt_file in tqdm(txt_files, desc=f"转换{split}"):
+                # 读取分割标签
+                seg_labels = read_yolo_labels(str(txt_file), mode='seg')
+
+                # 转换为检测标签
+                det_labels = []
+                for seg_label in seg_labels:
+                    det_label = self.seg_to_det_line(seg_label)
+                    if det_label:
+                        det_labels.append(det_label)
+
+                # 保存检测标签
+                output_label_path = output_split_dir / txt_file.name
+                save_yolo_labels(det_labels, str(output_label_path), mode='det')
+
+                # 更新统计
+                self.total_converted += 1
+                if det_labels:
+                    self.total_with_labels += 1
+                else:
+                    self.total_without_labels += 1
+
+    def _balance_detection_dataset(self, dataset_root: Optional[Path] = None):
+        """在检测模式下对正负样本执行平衡"""
+        root = dataset_root or self.output_dir
+        labels_root = root / 'labels'
+        images_root = root / 'images'
+
+        if not labels_root.exists() or not images_root.exists():
+            print("⚠️ 数据平衡: 检测模式输出缺少images/labels目录，跳过。")
+            return
+
+        split_names = set()
+        split_names.update(d.name for d in labels_root.iterdir() if d.is_dir())
+        split_names.update(d.name for d in images_root.iterdir() if d.is_dir())
+
+        if not split_names:
+            print("⚠️ 数据平衡: 未找到可用的split目录，跳过。")
+            return
+
+        for split in sorted(split_names):
+            self._balance_detection_split(split, root)
+
+    def _balance_detection_split(self, split: str, dataset_root: Path):
+        """按照设定比例平衡单个split中的有/无缺陷样本"""
+        split_labels_dir = dataset_root / 'labels' / split
+        split_images_dir = dataset_root / 'images' / split
+
+        if not split_labels_dir.exists() or not split_images_dir.exists():
+            print(f"  ⚠️ 数据平衡: {split} 缺少labels或images目录，跳过。")
+            return
+
+        image_files = find_image_files(str(split_images_dir))
+        if not image_files:
+            print(f"  ⚠️ 数据平衡: {split} 无图像文件，跳过。")
+            return
+
+        positives = []
+        negatives = []
+
+        for image_path in image_files:
+            label_path = split_labels_dir / f"{image_path.stem}.txt"
+            labels = []
+            if label_path.exists():
+                labels = read_yolo_labels(str(label_path), mode='det')
+            if labels:
+                positives.append((image_path, label_path))
+            else:
+                negatives.append((image_path, label_path))
+
+        if not positives:
+            print(f"  ⚠️ 数据平衡: {split} 没有缺陷样本，无法平衡。")
+            return
+        if not negatives:
+            print(f"  ⚠️ 数据平衡: {split} 没有无缺陷样本，无法平衡。")
+            return
+
+        pos_count = len(positives)
+        neg_count = len(negatives)
+
+        if pos_count == 0 or neg_count == 0:
+            print(f"  ⚠️ 数据平衡: {split} 正负样本不足，跳过。")
+            return
+
+        desired_neg = int(round(pos_count * self.balance_ratio))
+        desired_neg = max(0, desired_neg)
+
+        rng = random.Random(42)
+        removed_pos = removed_neg = 0
+
+        if neg_count > desired_neg:
+            # 负样本过多，随机移除
+            rng.shuffle(negatives)
+            to_remove = neg_count - desired_neg
+            for image_path, label_path in negatives[desired_neg:]:
+                if label_path.exists():
+                    try:
+                        label_path.unlink()
+                    except OSError as exc:
+                        print(f"    ⚠️ 无法删除标签 {label_path}: {exc}")
+                if image_path.exists():
+                    try:
+                        image_path.unlink()
+                    except OSError as exc:
+                        print(f"    ⚠️ 无法删除图像 {image_path}: {exc}")
+                        continue
+                removed_neg += 1
+            neg_count -= removed_neg
+        elif neg_count < desired_neg and self.balance_ratio > 0:
+            # 负样本不足，需要裁剪正样本以满足比例
+            target_pos = int(round(neg_count / self.balance_ratio)) if self.balance_ratio > 0 else pos_count
+            target_pos = max(1, target_pos)
+            target_pos = min(target_pos, pos_count)
+            if target_pos < pos_count:
+                rng.shuffle(positives)
+                for image_path, label_path in positives[target_pos:]:
+                    if label_path.exists():
+                        try:
+                            label_path.unlink()
+                        except OSError as exc:
+                            print(f"    ⚠️ 无法删除标签 {label_path}: {exc}")
+                    if image_path.exists():
+                        try:
+                            image_path.unlink()
+                        except OSError as exc:
+                            print(f"    ⚠️ 无法删除图像 {image_path}: {exc}")
+                            continue
+                    removed_pos += 1
+                pos_count -= removed_pos
+
+        new_ratio = (neg_count / pos_count) if pos_count else 0
+        print(
+            f"  ⚖️ 数据平衡: {split} 调整后正样本 {pos_count} 张、负样本 {neg_count} 张，"\
+            f"移除正样本 {removed_pos} 张、负样本 {removed_neg} 张 (目标比例 {self.balance_ratio}, 实际 {new_ratio:.3f})")
+
+    def _process_split_to_cls(self, split: str):
+        """处理单个split转换为分类格式"""
+        split_images_dir = self.input_dir / 'images' / split
+        split_labels_dir = self.input_dir / 'labels' / split
+        split_output_dir = self.output_dir / split
+
+        # 获取所有图像文件
+        image_files = find_image_files(str(split_images_dir))
+
+        print(f"  找到{len(image_files)}个图像")
+
+        for image_file in tqdm(image_files, desc=f"处理{split}"):
+            # 查找对应的标签文件
+            label_file = split_labels_dir / f"{image_file.stem}.txt"
+
+            # 判断图像属于哪个类别
+            class_folder = "none"
+            if label_file.exists():
+                labels = read_yolo_labels(str(label_file), mode='seg')
+                primary_class = self.get_primary_class(labels)
+
+                if primary_class >= 0:
+                    class_folder = f"class_{primary_class}"
+                    self.total_with_labels += 1
+
+                    # 更新类别分布统计
+                    if split not in self.class_distribution:
+                        self.class_distribution[split] = {}
+                    self.class_distribution[split][class_folder] = \
+                        self.class_distribution[split].get(class_folder, 0) + 1
+                else:
+                    self.total_without_labels += 1
+            else:
+                self.total_without_labels += 1
+
+            # 创建目标文件夹并复制图像
+            target_dir = split_output_dir / class_folder
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            target_path = target_dir / image_file.name
+            self._link_image_file(image_file, target_path)
+
+            self.total_converted += 1
+
+    def _copy_and_update_yaml(self):
+        """复制并更新dataset.yaml文件"""
+        input_yaml = self.input_dir / 'dataset.yaml'
+        output_yaml = self.output_dir / 'dataset.yaml'
+
+        if input_yaml.exists():
+            # 读取原始yaml
+            yaml_data = read_dataset_yaml(str(input_yaml))
+
+            # 更新路径
+            yaml_data['train'] = str(self.output_dir / 'images' / 'train')
+            yaml_data['val'] = str(self.output_dir / 'images' / 'val')
+
+            # 添加转换信息
+            yaml_data['conversion_info'] = {
+                'source_format': 'segmentation',
+                'target_format': 'detection',
+                'converter': 'seg2det.py'
+            }
+
+            # 保存更新后的yaml
+            update_dataset_yaml(str(output_yaml), yaml_data)
+
+            print(f"dataset.yaml已保存到: {output_yaml}")
+        else:
+            print(f"警告: 未找到dataset.yaml文件")
+
+    def _print_statistics(self):
+        """打印统计信息"""
+        print(f"\n{'=' * 50}")
+        print(f"✅ 转换完成！")
+        print(f"📊 统计信息:")
+        print(f"  - 总文件数: {self.total_converted}")
+        print(f"  - 有标签文件: {self.total_with_labels}")
+        print(f"  - 无标签文件: {self.total_without_labels}")
+        print(f"  - 输出目录: {self.output_dir}")
+
+        if self.class_distribution:
+            print(f"\n📈 类别分布:")
+            for split, classes in self.class_distribution.items():
+                print(f"  {split}:")
+                for class_name, count in sorted(classes.items()):
+                    print(f"    - {class_name}: {count}个图像")
+
+    def _balance_class_distribution(self, split: str):
+        """在分类模式下对指定split的类别数量进行平衡"""
+        split_output_dir = self.output_dir / split
+        if not split_output_dir.exists():
+            print(f"  ⚠️ 数据平衡: 未找到{split}输出目录，跳过。")
+            return
+
+        class_dirs = [d for d in split_output_dir.iterdir() if d.is_dir()]
+        class_files = {}
+        for class_dir in class_dirs:
+            files = [
+                f for f in class_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+            ]
+            if files:
+                class_files[class_dir] = files
+
+        if len(class_files) < 2:
+            print(f"  ⚖️ 数据平衡: {split} 可用类别不足，无需调整。")
+            return
+
+        counts = {cls_dir.name: len(files) for cls_dir, files in class_files.items()}
+        min_count = min(counts.values())
+        max_count = max(counts.values())
+
+        if min_count == max_count:
+            print(f"  ⚖️ 数据平衡: {split} 已平衡，各类别均为 {min_count} 张。")
+            return
+
+        rng = random.Random(42)
+        removed_total = 0
+        for class_dir, files in class_files.items():
+            if len(files) <= min_count:
+                continue
+            rng.shuffle(files)
+            for file_path in files[min_count:]:
+                try:
+                    file_path.unlink()
+                    removed_total += 1
+                except OSError as exc:
+                    print(f"    ⚠️ 无法删除 {file_path}: {exc}")
+
+        print(f"  ⚖️ 数据平衡: {split} 已统一为每类 {min_count} 张，移除 {removed_total} 张。")
+
+    def _recalculate_statistics(self):
+        """重新统计分类模式下的数量信息"""
+        self.total_converted = 0
+        self.total_with_labels = 0
+        self.total_without_labels = 0
+        self.class_distribution = {}
+
+        for split_dir in self.output_dir.iterdir():
+            if not split_dir.is_dir():
+                continue
+
+            for class_dir in split_dir.iterdir():
+                if not class_dir.is_dir():
+                    continue
+
+                files = [
+                    f for f in class_dir.iterdir()
+                    if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+                ]
+                num_files = len(files)
+                if num_files == 0:
+                    continue
+
+                self.total_converted += num_files
+                if class_dir.name == 'none':
+                    self.total_without_labels += num_files
+                else:
+                    self.total_with_labels += num_files
+                    split_name = split_dir.name
+                    if split_name not in self.class_distribution:
+                        self.class_distribution[split_name] = {}
+                    self.class_distribution[split_name][class_dir.name] = num_files
+
+    def _recalculate_det_statistics(self, dataset_root: Optional[Path] = None):
+        """在检测模式下重新统计正负样本数量"""
+        self.total_converted = 0
+        self.total_with_labels = 0
+        self.total_without_labels = 0
+        self.class_distribution = {}
+
+        root = dataset_root or self.output_dir
+        images_root = root / 'images'
+        labels_root = root / 'labels'
+
+        if not images_root.exists():
+            return
+
+        splits = [d.name for d in images_root.iterdir() if d.is_dir()]
+        for split in splits:
+            split_images_dir = images_root / split
+            split_labels_dir = labels_root / split
+            image_files = find_image_files(str(split_images_dir))
+
+            for image_path in image_files:
+                label_path = split_labels_dir / f"{image_path.stem}.txt"
+                labels = []
+                if label_path.exists():
+                    labels = read_yolo_labels(str(label_path), mode='det')
+
+                if labels:
+                    self.total_with_labels += 1
+                else:
+                    self.total_without_labels += 1
+
+                self.total_converted += 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='YOLO数据集格式转换工具（分割/检测/分类）',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例:
+  # 转换为检测格式
+  python seg2det.py --input_dir ./seg_dataset --output_dir ./det_dataset --mode det
+
+  # 转换为分类格式
+  python seg2det.py --input_dir ./seg_dataset --output_dir ./cls_dataset --mode cls
+
+  # 转换为检测格式但不复制图像（节省空间）
+  python seg2det.py --input_dir ./seg_dataset --output_dir ./det_dataset --mode det --no_copy_images
+        """
+    )
+
+    parser.add_argument('--input_dir', type=str, required=True,
+                        help='输入数据集目录')
+    parser.add_argument('--output_dir', type=str, required=True,
+                        help='输出数据集目录')
+    parser.add_argument('--mode', type=str, choices=['det', 'cls', 'balance'], default='det',
+                        help='转换模式: det=转检测, cls=转分类, balance=仅数据平衡')
+    parser.add_argument('--no_copy_images', action='store_true',
+                        help='不复制图像到输出目录 (仅对det模式有效)')
+    parser.add_argument('--balance_data', action='store_true',
+                        help='启用数据平衡（检测模式按指定比例，分类模式下类别对齐）')
+    parser.add_argument('--balance_ratio', type=float, default=1.0,
+                        help='检测数据平衡时的负/正目标比例，例如0.5表示负样本数量为正样本的0.5倍')
+
+    args = parser.parse_args()
+
+    # 创建转换器
+    converter = YOLOFormatConverter(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        mode=args.mode,
+        balance_data=args.balance_data,
+        balance_ratio=args.balance_ratio
+    )
+
+    # 根据模式执行转换
+    if args.mode == 'cls':
+        converter.convert_to_cls()
+    elif args.mode == 'det':
+        converter.convert_to_det(copy_images=not args.no_copy_images)
+    else:
+        converter.balance_detection_only()
+
+
+
+if __name__ == "__main__":
+    main()

@@ -80,7 +80,7 @@ public class TaskProcessServiceTest {
         when(taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).thenReturn(taskFiles);
 
         // 模拟 Vision AI 返回结果
-        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId))).thenAnswer(invocation -> {
+        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any())).thenAnswer(invocation -> {
             List<String> paths = invocation.getArgument(0);
             Map<String, String> results = new HashMap<>();
             for (String path : paths) {

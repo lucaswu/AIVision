@@ -1,0 +1,16 @@
+/preprocessed_data
+/preprocessed_data2
+/alldata
+/testdata
+/YOLODataset_seg
+/.idea
+/__pycache__
+/train/runs
+/runs
+*.pyc
+*.pt
+*.pth
+/outputs
+/outputs
+/mlruns
+/train/outputs

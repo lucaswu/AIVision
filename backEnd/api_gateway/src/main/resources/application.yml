@@ -38,7 +38,14 @@ storage:
 # AI Services Configuration
 ai-services:
   vision-ai:
-    url: ${AI_SERVICES_VISION_AI_URL:http://host.docker.internal:8001}
+    # 移除旧的 HTTP URL，新增 Python 脚本配置
+    python-path: ${AI_SERVICES_PYTHON_PATH:python3}
+    script-path: ${AI_SERVICES_SCRIPT_PATH:/app/model/run_inference_pipeline.py}
+    # 模型路径（可通过环境变量覆盖）
+    roi-weights: ${AI_SERVICES_ROI_WEIGHTS:/app/model/model/weldDetect.pt}
+    seg-weights: ${AI_SERVICES_SEG_WEIGHTS:/app/model/train/yolo11n.pt}
+    inference-mode: ${AI_SERVICES_INFERENCE_MODE:seg}
+    device: ${AI_SERVICES_DEVICE:cpu}
 
 # Default User Configuration (临时配置，用于未实现认证时的默认用户)
 default-user:
