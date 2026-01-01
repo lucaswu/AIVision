@@ -21,7 +21,8 @@ jobs:
       - name: Build and push Backend image
         uses: docker/build-push-action@v4
         with:
-          context: ./backEnd/api_gateway
+          context: .
+          file: ./backEnd/api_gateway/Dockerfile
           push: true
           tags: ${{ secrets.ACR_REGISTRY }}/my_vision/api-gateway:latest
 
