@@ -56,6 +56,7 @@ import {
 import { useRequest } from "ahooks";
 import { reportAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report } from "../../utils/data";
+import GeometricMeasureTool from './GeometricMeasureTool';
 
 const { Content, Sider } = Layout;
 const { Title, Text, Link } = Typography;
@@ -81,17 +82,46 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const pageSize = 10;
   const [form] = Form.useForm();
 
+  // 记录当前激活的工具 ('measure', 'pan' 等)
+  const [activeTool, setActiveTool] = useState<string>('pan'); 
+  
+  // 获取图片容器的实际尺寸，用于计算
+  const imageWrapperRef = React.useRef<HTMLDivElement>(null);
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
   const report = reportResp?.Data;
 
-  // 2. 获取文件列表
+  // 2. 获取文件列表 (在这里定义了 files)
   const {
     data: filesResp,
     loading: filesLoading,
     refresh: refreshFiles,
   } = useRequest(() => reportAPI.getReportFiles(taskId));
   const files = filesResp?.Data || [];
+
+  // 监听窗口大小变化或图片加载，更新尺寸
+  useEffect(() => {
+    if (!imageWrapperRef.current) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        // 只有当尺寸真的变化且不为0时才更新，避免无限重绘
+        if (width > 0 && height > 0) {
+            setImgSize({ w: width, h: height });
+        }
+      }
+    });
+
+    resizeObserver.observe(imageWrapperRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [selectedFile]); // 依赖 selectedFile，确保切图后重新绑定
+
 
   const confirmedCount = files.filter(f => f.ReviewStatus === "CONFIRMED").length;
   const unconfirmedCount = files.length - confirmedCount;
@@ -314,8 +344,62 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <Tooltip title="文本标注 (T)"><Button type="text" ghost icon={<FontSizeOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             <Tooltip title="箭头 (A)"><Button type="text" ghost icon={<ArrowRightOutlined style={{ transform: 'rotate(-45deg)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             <Tooltip title="多边形 (P)"><Button type="text" ghost icon={<HighlightOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="标尺 (M)"><Button type="text" ghost icon={<ColumnWidthOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="详情 (I)"><Button type="text" ghost icon={<InfoCircleOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            
+            {/* 几何测量按钮 */}
+            <Tooltip title="几何测量 (M)">
+              <Button 
+                type={activeTool === 'measure' ? 'primary' : 'text'} 
+                ghost={activeTool !== 'measure'} 
+                onClick={() => setActiveTool(activeTool === 'measure' ? 'pan' : 'measure')} 
+                icon={
+                  <img 
+                    src="/geometric_measurement.svg" 
+                    alt="measurement"
+                    style={{ 
+                      width: 20, 
+                      height: 20, 
+                      //filter: 'brightness(0) invert(1)' 
+                    }} 
+                  />
+                } 
+                style={{ 
+                  color: '#fff', width: 36, height: 36, padding: 0,
+                  background: activeTool === 'measure' ? '#1890ff' : 'transparent' 
+                }} 
+              />
+            </Tooltip>
+
+            {/* 其他工具按钮... */}
+            <Tooltip title="负片 "><Button type="text" ghost icon={
+                  <img 
+                    src="/negative.svg" 
+                    alt="negative"
+                    style={{ 
+                      width: 32, 
+                      height: 32, 
+                      // filter: 'brightness(0) invert(1)' 
+                    }} 
+                  />
+                }  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+               <Tooltip title="窗宽窗位 "><Button type="text" ghost icon={
+                  <img 
+                    src="/windowing.svg" 
+                    alt="windowing"
+                    style={{ 
+                      width: 32, 
+                      height: 32, 
+                    }} 
+                  />
+                }  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+
+                {/* ...其他图标省略了 style 修改，只关注报错点 */}
+                <Tooltip title="左旋转90度"><Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+                <Tooltip title="右旋转90度"><Button type="text" ghost icon={<img src="/rotate_right.svg" alt="rotate_right" style={{ width: 32, height: 32 }} />}  style={{ color: '#0c0b0bff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+                <Tooltip title="旋转180度"><Button type="text" ghost icon={<img src="/rotate_180_degrees.svg" alt="rotate_180_degrees" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+                <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/vertical_flip.svg" alt="vertical_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+                <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/horizontal_flip.svg" alt="horizontal_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+                <Tooltip title="还原"><Button type="text" ghost icon={<img src="/reset.svg" alt="reset" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+
             <Tooltip title="平移 (Space)"><Button type="text" ghost icon={<DragOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             <Tooltip title="新增 (N)"><Button type="text" ghost icon={<PlusOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             
@@ -376,25 +460,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#e9ecef' }}>
           {selectedFile ? (
-            <div style={{ position: "relative" }}>
+            <div 
+              ref={imageWrapperRef} 
+              style={{ position: "relative", display: 'inline-block' }} 
+            >
+              {/* 图片本身 */}
               <img 
                 src={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
                 alt="preview" 
-                style={{ maxHeight: "calc(100vh - 280px)", maxWidth: "100%", boxShadow: "0 8px 24px rgba(0,0,0,0.2)" }} 
+                draggable={false} 
+                onLoad={(e) => {
+                  setImgSize({ w: e.currentTarget.clientWidth, h: e.currentTarget.clientHeight });
+                }}
+                style={{ 
+                  maxHeight: "calc(100vh - 280px)", 
+                  maxWidth: "100%", 
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                  display: 'block',
+                  userSelect: activeTool === 'measure' ? 'none' : 'auto'
+                }} 
               />
-              {/* 模拟标注框 */}
-              {JSON.parse(selectedFile.VisionResult || '{"results":[]}').results.map((item: any, i: number) => {
-                // 模拟位置，实际应从 item.vvContour 计算
-                const left = 20 + i * 20;
-                const top = 30 + i * 10;
-                return (
-                  <div key={i} style={{ position: "absolute", top: `${top}%`, left: `${left}%`, width: "100px", height: "100px", border: "2px solid #ff4d4f", pointerEvents: "none" }}>
-                    <span style={{ position: "absolute", top: -22, left: -2, background: '#ff4d4f', color: '#fff', fontSize: '11px', padding: '1px 6px', borderRadius: '2px' }}>
-                      {item.strName} {(item.score * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                );
-              })}
+
+              {/* 几何测量组件 */}
+              <GeometricMeasureTool
+                visible={activeTool === 'measure'} 
+                imageUrl={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`}
+                width={imgSize.w}
+                height={imgSize.h}
+                pixelRatio={0.26} // 假设 1px = 0.26mm
+              />
+
+              {/* 原有的模拟标注框逻辑 */}
+              {/* ... */}
             </div>
           ) : (
             <Empty description="请从左侧选择图片开始审核" />
@@ -570,5 +667,3 @@ const isSevere = (type: string) => {
 };
 
 export default ReportEditorPage;
-
-
