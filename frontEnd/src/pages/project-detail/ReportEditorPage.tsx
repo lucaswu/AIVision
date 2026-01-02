@@ -193,6 +193,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
+  //负片
+  const [isNegative, setIsNegative] = useState(false);
+
   // 保存并确认当前文件
   const handleSave = async () => {
     if (!selectedFile) return;
@@ -379,7 +382,36 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </Tooltip>
 
             {/* 其他工具按钮... */}
-            <Tooltip title="负片 "><Button type="text" ghost icon={<img src="/negative.svg" alt="negative" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="负片">
+              <Button
+                // 根据状态切换按钮类型，激活时显示为蓝色(primary)
+                type={isNegative ? 'primary' : 'text'} 
+                // 激活时去掉 ghost 属性，让背景色显现
+                ghost={!isNegative} 
+                // 点击切换状态
+                onClick={() => setIsNegative(!isNegative)} 
+                icon={
+                  <img 
+                    src="/negative.svg" 
+                    alt="negative"
+                    style={{ 
+                      width: 32, 
+                      height: 32, 
+                      // 可选优化：当按钮变蓝时，反转图标颜色使其变白（取决于你的图标原始颜色）
+                      // filter: isNegative ? 'brightness(0) invert(1)' : 'none' 
+                    }} 
+                  />
+                }  
+                style={{ 
+                  color: '#fff', 
+                  width: 36, 
+                  height: 36, 
+                  padding: 0,
+                  // 激活时背景色变为蓝色，否则透明
+                  background: isNegative ? '#1890ff' : 'transparent' 
+                }} 
+              />
+            </Tooltip>
             <Tooltip title="窗宽窗位 "><Button type="text" ghost icon={<img src="/windowing.svg" alt="windowing" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
 
             <Tooltip title="左旋转90度"><Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
@@ -469,7 +501,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   maxWidth: "100%", 
                   boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                   display: 'block',
-                  userSelect: activeTool === 'measure' ? 'none' : 'auto'
+                  userSelect: activeTool === 'measure' ? 'none' : 'auto',
+                  filter: isNegative ? 'invert(100%)' : 'none'//负片
                 }} 
               />
 
