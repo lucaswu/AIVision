@@ -93,7 +93,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
   const report = reportResp?.Data;
 
-  // 2. 获取文件列表 (在这里定义了 files)
+  // 2. 获取文件列表
   const {
     data: filesResp,
     loading: filesLoading,
@@ -108,7 +108,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        // 只有当尺寸真的变化且不为0时才更新，避免无限重绘
         if (width > 0 && height > 0) {
             setImgSize({ w: width, h: height });
         }
@@ -120,8 +119,22 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [selectedFile]); // 依赖 selectedFile，确保切图后重新绑定
+  }, [selectedFile]);
 
+  // 滚动放大倍数
+  const [scale, setScale] = useState(1); 
+
+  // 鼠标滚轮事件处理函数
+  const handleWheel = (e: React.WheelEvent) => {
+    const step = 0.1;
+    const delta = e.deltaY > 0 ? -step : step;
+    let newScale = scale + delta;
+    newScale = Math.max(0.1, Math.min(5, newScale));
+    newScale = parseFloat(newScale.toFixed(1));
+    setScale(newScale);
+  };
+
+  const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null);
 
   const confirmedCount = files.filter(f => f.ReviewStatus === "CONFIRMED").length;
   const unconfirmedCount = files.length - confirmedCount;
@@ -192,12 +205,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       message.success("保存并确认成功");
       refreshFiles();
       
-      // 自动跳转到下一个未确认的文件
       const currentIndex = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
       if (currentIndex < files.length - 1) {
         const nextFile = files[currentIndex + 1];
         setSelectedFile(nextFile);
-        // 如果跨页了，自动切换页码
         const nextPageIndex = Math.floor((currentIndex + 1) / pageSize) + 1;
         if (nextPageIndex !== currentPage) {
           setCurrentPage(nextPageIndex);
@@ -345,7 +356,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <Tooltip title="箭头 (A)"><Button type="text" ghost icon={<ArrowRightOutlined style={{ transform: 'rotate(-45deg)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             <Tooltip title="多边形 (P)"><Button type="text" ghost icon={<HighlightOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             
-            {/* 几何测量按钮 */}
             <Tooltip title="几何测量 (M)">
               <Button 
                 type={activeTool === 'measure' ? 'primary' : 'text'} 
@@ -358,7 +368,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     style={{ 
                       width: 20, 
                       height: 20, 
-                      //filter: 'brightness(0) invert(1)' 
                     }} 
                   />
                 } 
@@ -370,35 +379,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </Tooltip>
 
             {/* 其他工具按钮... */}
-            <Tooltip title="负片 "><Button type="text" ghost icon={
-                  <img 
-                    src="/negative.svg" 
-                    alt="negative"
-                    style={{ 
-                      width: 32, 
-                      height: 32, 
-                      // filter: 'brightness(0) invert(1)' 
-                    }} 
-                  />
-                }  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-               <Tooltip title="窗宽窗位 "><Button type="text" ghost icon={
-                  <img 
-                    src="/windowing.svg" 
-                    alt="windowing"
-                    style={{ 
-                      width: 32, 
-                      height: 32, 
-                    }} 
-                  />
-                }  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="负片 "><Button type="text" ghost icon={<img src="/negative.svg" alt="negative" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="窗宽窗位 "><Button type="text" ghost icon={<img src="/windowing.svg" alt="windowing" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
 
-                {/* ...其他图标省略了 style 修改，只关注报错点 */}
-                <Tooltip title="左旋转90度"><Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-                <Tooltip title="右旋转90度"><Button type="text" ghost icon={<img src="/rotate_right.svg" alt="rotate_right" style={{ width: 32, height: 32 }} />}  style={{ color: '#0c0b0bff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-                <Tooltip title="旋转180度"><Button type="text" ghost icon={<img src="/rotate_180_degrees.svg" alt="rotate_180_degrees" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-                <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/vertical_flip.svg" alt="vertical_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-                <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/horizontal_flip.svg" alt="horizontal_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-                <Tooltip title="还原"><Button type="text" ghost icon={<img src="/reset.svg" alt="reset" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="左旋转90度"><Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="右旋转90度"><Button type="text" ghost icon={<img src="/rotate_right.svg" alt="rotate_right" style={{ width: 32, height: 32 }} />}  style={{ color: '#0c0b0bff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="旋转180度"><Button type="text" ghost icon={<img src="/rotate_180_degrees.svg" alt="rotate_180_degrees" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/vertical_flip.svg" alt="vertical_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/horizontal_flip.svg" alt="horizontal_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="还原"><Button type="text" ghost icon={<img src="/reset.svg" alt="reset" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
 
             <Tooltip title="平移 (Space)"><Button type="text" ghost icon={<DragOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             <Tooltip title="新增 (N)"><Button type="text" ghost icon={<PlusOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
@@ -420,14 +409,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               ghost 
               icon={<ColumnWidthOutlined />} 
               style={{ 
-                color: '#fff', 
-                fontSize: '12px', 
-                height: 28, 
-                padding: '0 12px', 
-                background: '#303030', 
-                borderRadius: '4px',
-                display: 'flex',
-                alignItems: 'center'
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px', background: '#303030', borderRadius: '4px', display: 'flex', alignItems: 'center'
               }}
             >
               尺寸定标
@@ -458,13 +440,23 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
         </div>
 
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#e9ecef' }}>
+        {/* 关键修改点 2: 将 setCanvasContainer 绑定到这个容器的 ref 上 */}
+        <div 
+          ref={setCanvasContainer}
+          style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#e9ecef' }}
+        >
           {selectedFile ? (
             <div 
               ref={imageWrapperRef} 
-              style={{ position: "relative", display: 'inline-block' }} 
+              onWheel={handleWheel}
+              style={{ 
+                position: "relative", 
+                display: 'inline-block',
+                transform: `scale(${scale})`,
+                transformOrigin: 'center center',
+                transition: 'transform 0.1s ease-out'
+              }}
             >
-              {/* 图片本身 */}
               <img 
                 src={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
                 alt="preview" 
@@ -481,24 +473,23 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 }} 
               />
 
-              {/* 几何测量组件 */}
+              {/* 关键修改点 3: 将获取到的容器 DOM (canvasContainer) 传给子组件 */}
               <GeometricMeasureTool
                 visible={activeTool === 'measure'} 
                 imageUrl={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`}
                 width={imgSize.w}
                 height={imgSize.h}
-                pixelRatio={0.26} // 假设 1px = 0.26mm
+                pixelRatio={0.26}
+                scale={scale}
+                container={canvasContainer} // 注意：这里传的是 DOM 节点
               />
-
-              {/* 原有的模拟标注框逻辑 */}
-              {/* ... */}
             </div>
           ) : (
             <Empty description="请从左侧选择图片开始审核" />
           )}
           
           <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 12px', borderRadius: '4px', fontSize: '12px' }}>
-            缩放: 100%
+            缩放: {Math.round(scale * 100)}%
           </div>
 
           {/* 底部专业控制栏 */}
@@ -566,7 +557,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         
         {/* 底部状态条 */}
         <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
-          底片评分系统 | 当前工具: 平移 | 坐标: (120, 340) | 缩放: 100%
+          底片评分系统 | 当前工具: 平移 | 坐标: (120, 340) | 缩放: {Math.round(scale * 100)}%
         </div>
       </Content>
 
