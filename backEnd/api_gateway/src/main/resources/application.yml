@@ -43,8 +43,8 @@ ai-services:
     script-path: ${AI_SERVICES_SCRIPT_PATH:/app/model/run_inference_pipeline.py}
     # 模型路径（可通过环境变量覆盖）
     roi-weights: ${AI_SERVICES_ROI_WEIGHTS:/app/model/weights/rfdetr/weldROI3.pt}
-    seg-weights: ${AI_SERVICES_SEG_WEIGHTS:/app/model/weights/rfdetr/1120_slice3_res840.pth}
-    inference-mode: ${AI_SERVICES_INFERENCE_MODE:seg}
+    primary-weights: ${AI_SERVICES_PRIMARY_WEIGHTS:/app/model/weights/rfdetr/1120_slice3_res840.pth}
+    inference-mode: ${AI_SERVICES_INFERENCE_MODE:det}
     device: ${AI_SERVICES_DEVICE:cpu}
     engine: ${AI_SERVICES_ENGINE:rfdet}
 

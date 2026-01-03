@@ -40,10 +40,10 @@ public class AiServiceClient {
     @Value("${ai-services.vision-ai.roi-weights}")
     private String roiWeights;
 
-    @Value("${ai-services.vision-ai.seg-weights}")
-    private String segWeights;
+    @Value("${ai-services.vision-ai.primary-weights}")
+    private String primaryWeights;
 
-    @Value("${ai-services.vision-ai.inference-mode:seg}")
+    @Value("${ai-services.vision-ai.inference-mode:det}")
     private String inferenceMode;
     
     @Value("${ai-services.vision-ai.engine:rfdet}")
@@ -111,8 +111,8 @@ public class AiServiceClient {
         command.add(outputDir.toString());
         command.add("--roi-weights");
         command.add(roiWeights);
-        command.add("--seg-weights");
-        command.add(segWeights);
+        command.add("--primary-weights");
+        command.add(primaryWeights);
         command.add("--mode");
         command.add(inferenceMode);
         
@@ -280,7 +280,9 @@ public class AiServiceClient {
             JsonNode rois = pythonResult.path("rois");
             if (rois.isArray()) {
                 for (JsonNode roi : rois) {
-                    JsonNode defects = roi.path("defects");
+                    // 兼容两种模式：defects (seg模式) 或 detections (det模式)
+                    JsonNode defects = roi.has("defects") ? roi.path("defects") : roi.path("detections");
+                    
                     if (defects.isArray()) {
                         for (JsonNode defect : defects) {
                             totalDefects++;
