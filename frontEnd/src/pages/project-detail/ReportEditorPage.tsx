@@ -19,7 +19,7 @@ import {
   Progress,
   Tooltip,
   Pagination,
-  Slider, // 引入 Slider
+  Slider,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -85,30 +85,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const pageSize = 10;
   const [form] = Form.useForm();
 
-  // 记录当前激活的工具 ('measure', 'pan' 等)
+  // 记录当前激活的工具
   const [activeTool, setActiveTool] = useState<string>('pan'); 
   
   // 图片变换状态
   const [scale, setScale] = useState(1); 
-  const [rotation, setRotation] = useState(0); // 旋转
-  const [flipH, setFlipH] = useState(1);       // 水平翻转 (1 or -1)
-  const [flipV, setFlipV] = useState(1);       // 垂直翻转 (1 or -1)
+  const [rotation, setRotation] = useState(0); 
+  const [flipH, setFlipH] = useState(1);       
+  const [flipV, setFlipV] = useState(1);       
+  // 图片平移位置
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  // 平移交互状态
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
 
   // 标尺相关状态
   const imageWrapperRef = useRef<HTMLDivElement>(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 }); //  图片偏移量
-  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 }); //  容器尺寸
-  const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null); // 视口容器
-
-  const [originalSize, setOriginalSize] = useState({ w: 0, h: 0 }); // 图片原始尺寸
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });       // 鼠标在原图上的坐标
-
-  // 计算图片原始分辨率与显示分辨率的比例
-  // 用于传给 Ruler 组件，确保标尺刻度对应真实像素
-  const widthRatio = (originalSize.w > 0 && imgSize.w > 0) ? (originalSize.w / imgSize.w) : 1;
-  const heightRatio = (originalSize.h > 0 && imgSize.h > 0) ? (originalSize.h / imgSize.h) : 1;
-
+  const [originalSize, setOriginalSize] = useState({ w: 0, h: 0 }); // 原始尺寸
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });       // 鼠标坐标
+  const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 }); 
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 }); 
+  const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null);
 
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
@@ -123,7 +123,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const files = filesResp?.Data || [];
 
   // 计算图片位置偏移 (用于标尺)
-  const updateImageOffset = () => {
+  const updateImageOffset = (_e?: any) => {
     if (imageWrapperRef.current && canvasContainer) {
       const imgRect = imageWrapperRef.current.getBoundingClientRect();
       const containerRect = canvasContainer.getBoundingClientRect();
@@ -139,38 +139,36 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
+  // 监听键盘空格键
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        // 防止空格键滚动页面
+        e.preventDefault(); 
+        setIsSpacePressed(true);
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpacePressed(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
   // 监听变换以更新标尺
   useEffect(() => {
     updateImageOffset();
     window.addEventListener('resize', updateImageOffset);
     return () => window.removeEventListener('resize', updateImageOffset);
-  }, [scale, rotation, flipH, flipV, imgSize, selectedFile]);
-
-  //  鼠标移动追踪函数
-  const handleMouseMoveTracker = (e: React.MouseEvent<HTMLDivElement>) => {
-    // 确保有引用且图片已加载
-    if (!imageWrapperRef.current || imgSize.w === 0 || originalSize.w === 0) return;
-    
-    // 获取图片容器的矩形（受 scale 影响）
-    const rect = imageWrapperRef.current.getBoundingClientRect();
-    
-    // 计算相对于容器左上角的坐标 (除以 scale 还原为未缩放时的 CSS 像素)
-    const rawX = (e.clientX - rect.left) / scale;
-    const rawY = (e.clientY - rect.top) / scale;
-    
-    // 计算缩放比例 (原始分辨率 / 显示尺寸)
-    const ratioX = originalSize.w / imgSize.w;
-    const ratioY = originalSize.h / imgSize.h;
-    
-    // 映射到原始分辨率坐标
-    const trueX = Math.floor(rawX * ratioX);
-    const trueY = Math.floor(rawY * ratioY);
-    
-    // 限制坐标在图片范围内 (防止边缘溢出)
-    const clampedX = Math.max(0, Math.min(originalSize.w, trueX));
-    const clampedY = Math.max(0, Math.min(originalSize.h, trueY));
-    setMousePos({ x: clampedX, y: clampedY });
-  };
+  }, [scale, rotation, flipH, flipV, imgSize, selectedFile, position]);
 
   // 鼠标滚轮事件处理函数
   const handleWheel = (e: React.WheelEvent) => {
@@ -199,7 +197,73 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   } = useWindowLevelTool({ activeTool, scale });
 
   // 鼠标样式逻辑
-  const cursorStyle = activeTool === 'windowing' ? 'crosshair' : (activeTool === 'pan' ? 'grab' : 'default');
+  let cursorStyle = 'default';
+  if (isPanning) {
+    cursorStyle = 'grabbing';
+  } else if (isSpacePressed || activeTool === 'pan') {
+    cursorStyle = 'grab';
+  } else if (activeTool === 'windowing') {
+    cursorStyle = 'crosshair';
+  } else if (activeTool === 'measure') {
+    cursorStyle = 'crosshair';
+  }
+
+  // 坐标追踪
+  const handleMouseMoveTracker = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!imageWrapperRef.current || imgSize.w === 0 || originalSize.w === 0) return;
+    const rect = imageWrapperRef.current.getBoundingClientRect();
+    const rawX = (e.clientX - rect.left) / scale;
+    const rawY = (e.clientY - rect.top) / scale;
+    const ratioX = originalSize.w / imgSize.w;
+    const ratioY = originalSize.h / imgSize.h;
+    const trueX = Math.floor(rawX * ratioX);
+    const trueY = Math.floor(rawY * ratioY);
+    const clampedX = Math.max(0, Math.min(originalSize.w, trueX));
+    const clampedY = Math.max(0, Math.min(originalSize.h, trueY));
+    setMousePos({ x: clampedX, y: clampedY });
+  };
+
+  // 鼠标事件包装器
+  const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    const isPanMode = isSpacePressed || activeTool === 'pan';
+    
+    if (isPanMode) {
+        setIsPanning(true);
+        setPanStart({ 
+            x: e.clientX - position.x, 
+            y: e.clientY - position.y 
+        });
+        e.preventDefault(); 
+    } else {
+        handlers.onMouseDown && (handlers.onMouseDown as any)(e);
+    }
+  };
+
+  const handleMouseMoveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    handleMouseMoveTracker(e);
+
+    if (isPanning) {
+        const newX = e.clientX - panStart.x;
+        const newY = e.clientY - panStart.y;
+        setPosition({ x: newX, y: newY });
+    } else {
+        handlers.onMouseMove && (handlers.onMouseMove as any)(e);
+    }
+  };
+
+  const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isPanning) {
+        setIsPanning(false);
+    } else {
+        handlers.onMouseUp && (handlers.onMouseUp as any)(e);
+    }
+  };
+
+  const handleMouseLeaveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (isPanning) setIsPanning(false);
+      handlers.onMouseLeave && (handlers.onMouseLeave as any)(e);
+  };
+
 
   // 分页后的文件列表
   const paginatedFiles = useMemo(() => {
@@ -224,6 +288,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setRotation(0);
       setFlipH(1);
       setFlipV(1);
+      setPosition({ x: 0, y: 0 }); // 重置位置
     }
   }, [selectedFile, form, resetWindow]);
 
@@ -245,7 +310,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   // 批量确认
-  const handleBatchConfirm = async () => {
+  const handleBatchConfirm = async () => { 
     if (selectedIds.size === 0) {
       message.warning("请先选择要确认的文件");
       return;
@@ -260,7 +325,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
-  //负片
+  // 负片
   const [isNegative, setIsNegative] = useState(false);
 
   // 保存并确认当前文件
@@ -289,6 +354,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
+  // 计算比率传给 Ruler
+  const widthRatio = (originalSize.w > 0 && imgSize.w > 0) ? (originalSize.w / imgSize.w) : 1;
+  const heightRatio = (originalSize.h > 0 && imgSize.h > 0) ? (originalSize.h / imgSize.h) : 1;
+
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
       <WindowLevelSVGFilter id="wlFilter" slope={windowParams.slope} intercept={windowParams.intercept} />
@@ -316,20 +385,20 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <span>{progressPercent}%</span>
             </div>
              <Progress percent={progressPercent} size="small" showInfo={false} strokeColor="#52c41a" trailColor="#f0f0f0" />
-            <div style={{ display: 'flex', marginTop: 16, background: '#f8f9fa', borderRadius: '4px', padding: '12px 0' }}>
-              <div style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ color: '#52c41a', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{confirmedCount}</div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>已确认</div>
-              </div>
-              <div style={{ borderLeft: '1px solid #e8e8e8', height: '24px', alignSelf: 'center' }} />
-              <div style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ color: '#faad14', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{unconfirmedCount}</div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>未确认</div>
-              </div>
-            </div>
+             <div style={{ display: 'flex', marginTop: 16, background: '#f8f9fa', borderRadius: '4px', padding: '12px 0' }}>
+                <div style={{ textAlign: 'center', flex: 1 }}>
+                  <div style={{ color: '#52c41a', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{confirmedCount}</div>
+                  <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>已确认</div>
+                </div>
+                <div style={{ borderLeft: '1px solid #e8e8e8', height: '24px', alignSelf: 'center' }} />
+                <div style={{ textAlign: 'center', flex: 1 }}>
+                  <div style={{ color: '#faad14', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{unconfirmedCount}</div>
+                  <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>未确认</div>
+                </div>
+             </div>
           </div>
         </div>
-
+        
         <div style={{ padding: "8px 16px", display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f0f0f0' }}>
           <Checkbox 
             checked={selectedIds.size === files.length && files.length > 0} 
@@ -344,7 +413,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </Button>
           )}
         </div>
-        
+
         <div style={{ flex: 1, overflowY: 'auto' }}>
           <List
             loading={filesLoading}
@@ -360,24 +429,24 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   transition: 'all 0.3s'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                  <Checkbox 
-                    checked={selectedIds.has(file.TaskFileId)} 
-                    onChange={(e) => handleSelectOne(file.TaskFileId, e.target.checked)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginRight: 12 }}
-                  />
-                  <Space style={{ flex: 1 }}>
-                    {file.ReviewStatus === "CONFIRMED" ? (
-                      <CheckCircleOutlined style={{ color: "#52c41a" }} />
-                    ) : (
-                      <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #faad14' }} />
-                    )}
-                    <Text ellipsis style={{ width: 160, color: selectedFile?.TaskFileId === file.TaskFileId ? "#1890ff" : "inherit" }}>
-                      {file.FileName}
-                    </Text>
-                  </Space>
-                </div>
+                  <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                    <Checkbox 
+                      checked={selectedIds.has(file.TaskFileId)} 
+                      onChange={(e) => handleSelectOne(file.TaskFileId, e.target.checked)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginRight: 12 }}
+                    />
+                    <Space style={{ flex: 1 }}>
+                      {file.ReviewStatus === "CONFIRMED" ? (
+                        <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                      ) : (
+                        <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #faad14' }} />
+                      )}
+                      <Text ellipsis style={{ width: 160, color: selectedFile?.TaskFileId === file.TaskFileId ? "#1890ff" : "inherit" }}>
+                        {file.FileName}
+                      </Text>
+                    </Space>
+                  </div>
               </List.Item>
             )}
           />
@@ -393,7 +462,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             size="small"
           />
         </div>
-
+        
         <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
           <Button 
             type="primary" 
@@ -401,7 +470,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             size="large"
             icon={<FileTextOutlined />} 
             style={{ height: '48px', borderRadius: '4px' }}
-            onClick={onPreview}
+            //包装 onClick
+            onClick={() => onPreview && onPreview()}
           >
             预览报告
           </Button>
@@ -485,7 +555,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   type="text" ghost 
                   icon={<img src="/reset.svg" alt="reset" style={{ width: 32, height: 32 }} />} 
                   style={{ color: '#fff', width: 36, height: 36, padding: 0 }} 
-                  onClick={() => { setScale(1); setRotation(0); setFlipH(1); setFlipV(1); }} 
+                  onClick={() => { 
+                      setScale(1); setRotation(0); setFlipH(1); setFlipV(1); 
+                      setPosition({ x: 0, y: 0 }); 
+                  }} 
                 />
             </Tooltip>
 
@@ -540,33 +613,33 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
         </div>
 
-        {/* [修改] 图片容器：改为 Grid 布局以放置标尺 */}
+        {/* 图片容器：Grid 布局 */}
         <div style={{ 
             flex: 1, 
             position: 'relative', 
             overflow: 'hidden', 
-            background: '#262626', // 深色背景匹配标尺
+            background: '#262626', 
             display: 'grid', 
             gridTemplateColumns: '20px 1fr', 
             gridTemplateRows: '20px 1fr',
           }}
         >
-          {/* 1. 左上角单位块 */}
+          {/* 左上角单位 */}
           <div style={{ background: '#1f1f1f', color: '#8c8c8c', fontSize: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid #303030', borderRight: '1px solid #303030', zIndex: 20 }}>
              PX
           </div>
 
-          {/* 2. 顶部横向标尺 */}
+          {/* 顶部标尺 */}
           <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
              <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={widthRatio} />
           </div>
 
-          {/* 3. 左侧纵向标尺 */}
+          {/* 左侧标尺 */}
           <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
-             <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={heightRatio}/>
+             <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={heightRatio} />
           </div>
 
-          {/* 4. 图片视口 (Bottom-Right Cell) */}
+          {/* 图片视口 */}
           <div 
              ref={setCanvasContainer}
              style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -575,21 +648,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <div 
                 ref={imageWrapperRef} 
                 onWheel={handleWheel}
-                {...handlers}
-                onMouseMove={(e) => {
-                    handlers.onMouseMove && handlers.onMouseMove(e); // 保持原有工具逻辑
-                    handleMouseMoveTracker(e); // 新增坐标追踪
-                }}
-                  
+                
+                onMouseDown={handleMouseDownWrapper}
+                onMouseMove={handleMouseMoveWrapper}
+                onMouseUp={handleMouseUpWrapper}
+                onMouseLeave={handleMouseLeaveWrapper}
+
                 style={{ 
                   position: "relative", 
                   display: 'inline-block',
-                  transform: `scale(${scale * flipH}, ${scale * flipV}) rotate(${rotation}deg)`,
+                  transform: `translate(${position.x}px, ${position.y}px) scale(${scale * flipH}, ${scale * flipV}) rotate(${rotation}deg)`,
                   transformOrigin: 'center center',
-                  transition: 'none', // 移除过渡以保证标尺实时对齐
+                  transition: 'none', 
                   cursor: cursorStyle
                 }}
-                onTransitionEnd={updateImageOffset}
+                onTransitionEnd={() => updateImageOffset()} 
               >
                 <img 
                   ref={imgRef}
@@ -600,7 +673,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   onLoad={(e) => {
                     setImgSize({ w: e.currentTarget.clientWidth, h: e.currentTarget.clientHeight });
                     setOriginalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight });
-                    setTimeout(updateImageOffset, 50);
+                    setTimeout(updateImageOffset, 50); 
                   }}
                   style={{ 
                     maxHeight: "calc(100vh - 280px)", 
@@ -632,7 +705,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   width={imgSize.w}
                   height={imgSize.h}
                   pixelRatio={0.26}
-                  scale={scale} // 注意：这里可能需要传递 flip 状态给测量工具，取决于测量工具内部实现
+                  scale={scale} 
                   container={canvasContainer} 
                 />
               </div>
@@ -648,31 +721,31 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 display: 'flex', alignItems: 'center', gap: '32px',
                 borderTop: '1px solid #434343', height: '40px', zIndex: 100 
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
-                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗宽: {windowWidth}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                    <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗宽: {windowWidth}</span>
                   <Slider 
                     min={1} max={512} value={windowWidth}
                     onChange={(val) => setManualWindowLevel(val, windowLevel)}
                     style={{ flex: 1, margin: 0 }}
                     trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
                   />
-                </div>
-                <div style={{ width: 1, height: 16, background: '#595959' }}></div>
-                <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
-                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗位: {windowLevel}</span>
+                  </div>
+                  <div style={{ width: 1, height: 16, background: '#595959' }}></div>
+                  <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                    <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗位: {windowLevel}</span>
                   <Slider 
                     min={0} max={255} value={windowLevel}
                     onChange={(val) => setManualWindowLevel(windowWidth, val)}
                     style={{ flex: 1, margin: 0 }}
                     trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
                   />
-                </div>
-                <div style={{ color: '#8c8c8c', fontSize: '12px', marginLeft: '12px' }}>缩放: {Math.round(scale * 100)}%</div>
-              </div>
+                  </div>
+                  <div style={{ color: '#8c8c8c', fontSize: '12px', marginLeft: '12px' }}>缩放: {Math.round(scale * 100)}%</div>
+               </div>
             )}
 
             {/* 底部悬浮操作栏 */}
-            {selectedFile && (
+             {selectedFile && (
               <div style={{ 
                 position: 'absolute', bottom: 50, left: '50%', transform: 'translateX(-50%)', 
                 background: '#fff', padding: '8px 24px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
@@ -700,7 +773,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </div>
         </div>
         
-       {/* 底部状态条 */}
+        {/* 底部状态条 */}
         <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
           {/* 显示图像尺寸和实时鼠标坐标 */}
           图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y}
@@ -709,7 +782,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       {/* 右侧审核信息 */}
       <Sider width={300} theme="dark" style={{ borderLeft: "1px solid #303030", display: 'flex', flexDirection: 'column', background: '#1f1f1f' }}>
-          {/* ... 右侧内容保持不变 ... */}
           <div style={{ flex: 1, padding: '40px 16px 20px 16px', overflowY: 'auto' }}>
           <Space direction="vertical" style={{ width: '100%' }} size={32}>
             <div>
