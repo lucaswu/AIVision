@@ -19,6 +19,7 @@ import {
   Progress,
   Tooltip,
   Pagination,
+  Slider, // [新增] 引入 Slider
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -56,7 +57,8 @@ import {
 import { useRequest } from "ahooks";
 import { reportAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report } from "../../utils/data";
-import GeometricMeasureTool from './GeometricMeasureTool';
+import GeometricMeasureTool from './tool/GeometricMeasureTool';
+import { useWindowLevelTool, WindowLevelSVGFilter } from './tool/WindowLevelTool'; 
 
 const { Content, Sider } = Layout;
 const { Title, Text, Link } = Typography;
@@ -140,6 +142,24 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const unconfirmedCount = files.length - confirmedCount;
   const progressPercent = files.length > 0 ? Math.round((confirmedCount / files.length) * 100) : 0;
 
+  // ---------------------------------------------------------------------------
+  // Window Level Tool Hook
+  // ---------------------------------------------------------------------------
+  const { 
+    windowParams, 
+    selectionRect, 
+    imgRef, 
+    handlers, 
+    resetWindow,
+    // [新增] 解构出数值和设置方法
+    windowWidth,
+    windowLevel,
+    setManualWindowLevel
+  } = useWindowLevelTool({ activeTool, scale });
+
+  // 鼠标样式逻辑
+  const cursorStyle = activeTool === 'windowing' ? 'crosshair' : (activeTool === 'pan' ? 'grab' : 'default');
+
   // 分页后的文件列表
   const paginatedFiles = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
@@ -157,8 +177,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       form.setFieldsValue({
         PlateQuality: selectedFile.PlateQuality || "一级",
       });
+      // 切换图片时重置
+      resetWindow();
     }
-  }, [selectedFile, form]);
+  }, [selectedFile, form, resetWindow]);
 
   // 全选/反选
   const handleSelectAll = (checked: boolean) => {
@@ -224,6 +246,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
+      <WindowLevelSVGFilter id="wlFilter" slope={windowParams.slope} intercept={windowParams.intercept} />
+
       {/* 左侧文件列表 */}
       <Sider width={300} theme="light" style={{ borderRight: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
@@ -384,11 +408,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             {/* 其他工具按钮... */}
             <Tooltip title="负片">
               <Button
-                // 根据状态切换按钮类型，激活时显示为蓝色(primary)
                 type={isNegative ? 'primary' : 'text'} 
-                // 激活时去掉 ghost 属性，让背景色显现
                 ghost={!isNegative} 
-                // 点击切换状态
                 onClick={() => setIsNegative(!isNegative)} 
                 icon={
                   <img 
@@ -397,8 +418,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     style={{ 
                       width: 32, 
                       height: 32, 
-                      // 可选优化：当按钮变蓝时，反转图标颜色使其变白（取决于你的图标原始颜色）
-                      // filter: isNegative ? 'brightness(0) invert(1)' : 'none' 
                     }} 
                   />
                 }  
@@ -407,12 +426,31 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   width: 36, 
                   height: 36, 
                   padding: 0,
-                  // 激活时背景色变为蓝色，否则透明
                   background: isNegative ? '#1890ff' : 'transparent' 
                 }} 
               />
             </Tooltip>
-            <Tooltip title="窗宽窗位 "><Button type="text" ghost icon={<img src="/windowing.svg" alt="windowing" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="窗宽窗位 (ROI自适应)">
+              <Button 
+                type={activeTool === 'windowing' ? 'primary' : 'text'} 
+                ghost={activeTool !== 'windowing'}
+                icon={<img src="/windowing.svg" style={{width:20, height:20}} />} 
+                onClick={() => setActiveTool(activeTool === 'windowing' ? 'pan' : 'windowing')}
+                style={{ 
+                   color: '#fff', width: 36, height: 36, padding: 0,
+                   background: activeTool === 'windowing' ? '#1890ff' : 'transparent'
+                }} 
+              />
+            </Tooltip>
+
+             {/* 复位按钮 */}
+             <Tooltip title="重置窗宽窗位">
+                <Button 
+                    type="text" ghost 
+                    icon={<RollbackOutlined />} 
+                    onClick={resetWindow} 
+                />
+            </Tooltip>
 
             <Tooltip title="左旋转90度"><Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
             <Tooltip title="右旋转90度"><Button type="text" ghost icon={<img src="/rotate_right.svg" alt="rotate_right" style={{ width: 32, height: 32 }} />}  style={{ color: '#0c0b0bff', width: 36, height: 36, padding: 0 }} /></Tooltip>
@@ -472,7 +510,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
         </div>
 
-        {/* 关键修改点 2: 将 setCanvasContainer 绑定到这个容器的 ref 上 */}
         <div 
           ref={setCanvasContainer}
           style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#e9ecef' }}
@@ -481,18 +518,22 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <div 
               ref={imageWrapperRef} 
               onWheel={handleWheel}
+              {...handlers}
               style={{ 
                 position: "relative", 
                 display: 'inline-block',
                 transform: `scale(${scale})`,
                 transformOrigin: 'center center',
-                transition: 'transform 0.1s ease-out'
+                transition: 'transform 0.1s ease-out',
+                cursor: cursorStyle
               }}
             >
               <img 
+                ref={imgRef}
                 src={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
                 alt="preview" 
                 draggable={false} 
+                crossOrigin="anonymous" // 关键：允许跨域读取
                 onLoad={(e) => {
                   setImgSize({ w: e.currentTarget.clientWidth, h: e.currentTarget.clientHeight });
                 }}
@@ -502,11 +543,24 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                   display: 'block',
                   userSelect: activeTool === 'measure' ? 'none' : 'auto',
-                  filter: isNegative ? 'invert(100%)' : 'none'//负片
+                  filter: `${isNegative ? 'invert(100%)' : ''} url(#wlFilter)`
                 }} 
               />
 
-              {/* 关键修改点 3: 将获取到的容器 DOM (canvasContainer) 传给子组件 */}
+              {selectionRect && (
+                 <div style={{
+                   position: 'absolute',
+                   border: '2px dashed #ff4d4f', // 显眼的红色
+                   backgroundColor: 'rgba(255, 77, 79, 0.2)',
+                   left: selectionRect.left,
+                   top: selectionRect.top,
+                   width: selectionRect.width,
+                   height: selectionRect.height,
+                   pointerEvents: 'none', // 确保不阻挡鼠标抬起事件
+                   zIndex: 10
+                 }} />
+               )}
+
               <GeometricMeasureTool
                 visible={activeTool === 'measure'} 
                 imageUrl={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`}
@@ -514,22 +568,72 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 height={imgSize.h}
                 pixelRatio={0.26}
                 scale={scale}
-                container={canvasContainer} // 注意：这里传的是 DOM 节点
+                container={canvasContainer} 
               />
             </div>
           ) : (
             <Empty description="请从左侧选择图片开始审核" />
           )}
           
-          <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 12px', borderRadius: '4px', fontSize: '12px' }}>
-            缩放: {Math.round(scale * 100)}%
-          </div>
-
-          {/* 底部专业控制栏 */}
+          {/*  底部窗宽窗位控制条 */}
           {selectedFile && (
             <div style={{ 
               position: 'absolute', 
-              bottom: 24, 
+              bottom: 0, 
+              left: 0, 
+              right: 0,
+              background: 'rgba(38, 38, 38, 0.85)', // 深色半透明背景
+              padding: '4px 24px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '32px',
+              borderTop: '1px solid #434343',
+              height: '32px',
+              zIndex: 100 
+            }}>
+              
+              {/* 窗宽 Slider 组 */}
+              <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>
+                  窗宽: {windowWidth}
+                </span>
+                <Slider 
+                  min={1} 
+                  max={512} 
+                  value={windowWidth}
+                  onChange={(val) => setManualWindowLevel(val, windowLevel)}
+                  style={{ flex: 1, margin: 0 }}
+                  trackStyle={{ backgroundColor: '#1890ff' }}
+                  handleStyle={{ borderColor: '#1890ff' }}
+                />
+              </div>
+
+              {/* 分割线 */}
+              <div style={{ width: 1, height: 16, background: '#595959' }}></div>
+
+              {/* 窗位 Slider 组 */}
+              <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>
+                  窗位: {windowLevel}
+                </span>
+                <Slider 
+                  min={0} 
+                  max={255} 
+                  value={windowLevel}
+                  onChange={(val) => setManualWindowLevel(windowWidth, val)}
+                  style={{ flex: 1, margin: 0 }}
+                  trackStyle={{ backgroundColor: '#1890ff' }}
+                  handleStyle={{ borderColor: '#1890ff' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 底部专业控制栏 (Previous/Next/Save) */}
+          {selectedFile && (
+            <div style={{ 
+              position: 'absolute', 
+              bottom: 30, // [修改] 向上移动，避免被 slider 条遮挡
               left: '50%', 
               transform: 'translateX(-50%)', 
               background: '#fff', 
@@ -671,8 +775,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
         <div style={{ background: '#141414', padding: '24px 16px', fontSize: '12px', color: '#8c8c8c', borderTop: '1px solid #303030' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span>窗宽: 400</span>
-            <span>窗位: 128</span>
+            <span>窗宽: {windowWidth}</span>
+            <span>窗位: {windowLevel}</span>
           </div>
           <div style={{ marginBottom: 16 }}>当前坐标: (120, 340)</div>
           <div style={{ borderTop: '1px solid #303030', paddingTop: 16, color: '#8c8c8c', display: 'flex', alignItems: 'center', gap: '8px' }}>
