@@ -126,6 +126,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // 滚动放大倍数
   const [scale, setScale] = useState(1); 
 
+  // 旋转角度状态
+  const [rotation, setRotation] = useState(0);
+
+  // 翻转状态: 1 代表正常, -1 代表翻转
+  const [flipH, setFlipH] = useState(1); 
+  const [flipV, setFlipV] = useState(1);
+
   // 鼠标滚轮事件处理函数
   const handleWheel = (e: React.WheelEvent) => {
     const step = 0.1;
@@ -452,12 +459,77 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 />
             </Tooltip>
 
-            <Tooltip title="左旋转90度"><Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-            <Tooltip title="右旋转90度"><Button type="text" ghost icon={<img src="/rotate_right.svg" alt="rotate_right" style={{ width: 32, height: 32 }} />}  style={{ color: '#0c0b0bff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-            <Tooltip title="旋转180度"><Button type="text" ghost icon={<img src="/rotate_180_degrees.svg" alt="rotate_180_degrees" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/vertical_flip.svg" alt="vertical_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-            <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/horizontal_flip.svg" alt="horizontal_flip" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
-            <Tooltip title="还原"><Button type="text" ghost icon={<img src="/reset.svg" alt="reset" style={{ width: 32, height: 32 }} />}  style={{ color: '#fff', width: 36, height: 36, padding: 0 }} /></Tooltip>
+            <Tooltip title="左旋转90度">
+              <Button 
+                type="text" 
+                ghost 
+                // 添加点击事件：减 90 度
+                onClick={() => setRotation(rotation - 90)}
+                icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />}  
+                style={{ color: '#fff', width: 36, height: 36, padding: 0 }} 
+              />
+            </Tooltip>
+            
+            <Tooltip title="右旋转90度">
+              <Button 
+                type="text" 
+                ghost 
+                // 添加点击事件：加 90 度
+                onClick={() => setRotation(rotation + 90)}
+                icon={<img src="/rotate_right.svg" alt="rotate_right" style={{ width: 32, height: 32 }} />}  
+                style={{ color: '#0c0b0bff', width: 36, height: 36, padding: 0 }} 
+              />
+            </Tooltip>
+            
+            <Tooltip title="旋转180度">
+              <Button 
+                type="text" 
+                ghost 
+                // 添加点击事件：加 180 度
+                onClick={() => setRotation(rotation + 180)}
+                icon={<img src="/rotate_180_degrees.svg" alt="rotate_180_degrees" style={{ width: 32, height: 32 }} />}  
+                style={{ color: '#fff', width: 36, height: 36, padding: 0 }} 
+              />
+            </Tooltip>
+
+            <Tooltip title="垂直翻转">
+              <Button 
+                type="text" 
+                ghost 
+                // 点击取反 flipV
+                onClick={() => setFlipV(prev => prev * -1)}
+                icon={<img src="/vertical_flip.svg" alt="vertical_flip" style={{ width: 32, height: 32 }} />}  
+                style={{ color: '#fff', width: 36, height: 36, padding: 0 }} 
+              />
+            </Tooltip>
+            
+            <Tooltip title="水平翻转">
+              <Button 
+                type="text" 
+                ghost 
+                // 点击取反 flipH
+                onClick={() => setFlipH(prev => prev * -1)}
+                icon={<img src="/horizontal_flip.svg" alt="horizontal_flip" style={{ width: 32, height: 32 }} />}  
+                style={{ color: '#fff', width: 36, height: 36, padding: 0 }} 
+              />
+            </Tooltip>
+            
+            <Tooltip title="还原">
+              <Button 
+                type="text" 
+                ghost 
+                //添加点击事件：重置缩放和旋转
+                onClick={() => {
+                  setScale(1);
+                  setRotation(0);
+                  resetWindow;
+                  setFlipH(1); // 重置水平
+                  setFlipV(1); // 重置垂直
+                }}
+                icon={<img src="/reset.svg" alt="reset" style={{ width: 32, height: 32 }} />}  
+                style={{ color: '#fff', width: 36, height: 36, padding: 0 }} 
+              />
+            </Tooltip>
 
             <Tooltip title="平移 (Space)"><Button type="text" ghost icon={<DragOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
             <Tooltip title="新增 (N)"><Button type="text" ghost icon={<PlusOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
@@ -522,7 +594,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               style={{ 
                 position: "relative", 
                 display: 'inline-block',
-                transform: `scale(${scale})`,
+                transform: `scale(${scale * flipH}, ${scale * flipV}) rotate(${rotation}deg)`,
                 transformOrigin: 'center center',
                 transition: 'transform 0.1s ease-out',
                 cursor: cursorStyle
