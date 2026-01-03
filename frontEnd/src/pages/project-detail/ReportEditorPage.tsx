@@ -631,12 +631,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
           {/* 顶部标尺 */}
           <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
-             <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={widthRatio} />
+             <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={widthRatio} maxImageSize={originalSize.w}/>
           </div>
 
           {/* 左侧标尺 */}
           <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
-             <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={heightRatio} />
+             <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={heightRatio} maxImageSize={originalSize.h}/>
           </div>
 
           {/* 图片视口 */}

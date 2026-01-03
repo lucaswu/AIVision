@@ -7,6 +7,7 @@ interface RulerProps {
   length: number;           // 标尺总长度 (容器宽度或高度)
   ratio?: number;           // 关键参数：原始分辨率 / 显示分辨率 (默认为 1)
   canvasSize?: number;      // 标尺本身的厚度 (px)
+  maxImageSize?: number;    //  图片的原始最大尺寸 (px)
 }
 
 const Ruler: React.FC<RulerProps> = ({
@@ -14,8 +15,9 @@ const Ruler: React.FC<RulerProps> = ({
   scale,
   offset,
   length,
-  ratio = 1, // 默认为 1
-  canvasSize = 20
+  ratio = 1, 
+  canvasSize = 20,
+  maxImageSize = 0 //  默认为 0，但实际上父组件应该传入有效值
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -38,13 +40,9 @@ const Ruler: React.FC<RulerProps> = ({
     ctx.beginPath();
 
     // 2. 动态计算刻度步长 (Step)
-    // 目标：在屏幕上，刻度之间的间距保持在 80px 左右，这样文字才放得下
-    // 公式: ScreenGap = ImageStep / ratio * scale
-    // 推导: ImageStep = ScreenGap * ratio / scale
     const targetScreenGap = 80; 
     const rawStep = targetScreenGap * ratio / scale;
 
-    // 找一个“整齐”的步长 (如 10, 50, 100, 500...)
     const niceSteps = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
     let step = niceSteps[niceSteps.length - 1];
     for (const s of niceSteps) {
@@ -55,19 +53,20 @@ const Ruler: React.FC<RulerProps> = ({
     }
 
     // 3. 计算可见区域对应的图片坐标范围
-    // 屏幕坐标映射公式: Screen = offset + (ImageVal / ratio) * scale
-    // 反推图片坐标: ImageVal = (Screen - offset) / scale * ratio
-    
-    // 计算视口左边界和右边界对应的图片像素值
     const minImageVal = ((0 - offset) / scale) * ratio;
     const maxImageVal = ((length - offset) / scale) * ratio;
     
-    // 对齐循环的起始点 (例如从 100, 200 开始，而不是 103, 203)
     const startLoop = Math.floor(minImageVal / step) * step;
     const endLoop = Math.ceil(maxImageVal / step) * step;
 
     // 4. 循环绘制
     for (let val = startLoop; val <= endLoop; val += step) {
+      //如果在图片范围之外 (小于0 或 大于最大尺寸)，则跳过不绘制
+      // 注意：这里使用 loose check，允许一定的浮点误差，或者严格拦截
+      if (val < 0 || (maxImageSize > 0 && val > maxImageSize)) {
+        continue;
+      }
+
       // 将图片像素坐标映射回屏幕坐标进行绘制
       const screenPos = offset + (val / ratio) * scale;
       
@@ -75,12 +74,10 @@ const Ruler: React.FC<RulerProps> = ({
       if (type === 'horizontal') {
         ctx.moveTo(screenPos, 0);
         ctx.lineTo(screenPos, canvasSize);
-        // 绘制文字 (显示真实的像素值)
         ctx.fillText(Math.round(val).toString(), screenPos + 2, 10); 
       } else {
         ctx.moveTo(0, screenPos);
         ctx.lineTo(canvasSize, screenPos);
-        // 垂直文字旋转
         ctx.save();
         ctx.translate(10, screenPos + 10);
         ctx.rotate(-Math.PI / 2);
@@ -89,9 +86,28 @@ const Ruler: React.FC<RulerProps> = ({
       }
     }
 
+    // 绘制图片结束的边界线，让用户清楚知道哪里是终点
+    if (maxImageSize > 0) {
+       const endScreenPos = offset + (maxImageSize / ratio) * scale;
+       // 只有当结束线在可视范围内才绘制
+       if (endScreenPos >= 0 && endScreenPos <= length) {
+           ctx.strokeStyle = '#ff4d4f'; // 使用红色或其他颜色标记边界
+           ctx.beginPath();
+           if (type === 'horizontal') {
+               ctx.moveTo(endScreenPos, 0);
+               ctx.lineTo(endScreenPos, canvasSize);
+           } else {
+               ctx.moveTo(0, endScreenPos);
+               ctx.lineTo(canvasSize, endScreenPos);
+           }
+           ctx.stroke();
+           ctx.strokeStyle = '#fdf7f7ff'; // 还原颜色
+       }
+    }
+
     ctx.stroke();
 
-  }, [scale, offset, length, type, ratio, canvasSize]);
+  }, [scale, offset, length, type, ratio, canvasSize, maxImageSize]); // 依赖项加入 maxImageSize
 
   return (
     <canvas
