@@ -62,6 +62,7 @@ jobs:
           host: ${{ secrets.ALIYUN_HOST }}
           username: root
           password: ${{ secrets.ALIYUN_PASSWORD }}
+          command_timeout: 30m
           script: |
             set -e
             cd /root/aivision

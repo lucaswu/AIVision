@@ -1,5 +1,5 @@
 # 多阶段构建 - 构建阶段
-FROM ubuntu:20.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 # 设置环境变量避免交互式安装
 ENV DEBIAN_FRONTEND=noninteractive
@@ -36,7 +36,7 @@ COPY backEnd/api_gateway/src ./src
 RUN mvn clean package -DskipTests -B -Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true -Dmaven.wagon.http.ssl.ignore.validity.dates=true
 
 # 运行阶段 - 最小化运行时镜像
-FROM ubuntu:20.04 AS runtime
+FROM ubuntu:22.04 AS runtime
 
 # 设置环境变量避免交互式安装
 ENV DEBIAN_FRONTEND=noninteractive
@@ -73,6 +73,9 @@ RUN pip3 install --no-cache-dir ultralytics -i https://pypi.tuna.tsinghua.edu.cn
 
 # 3. PyTorch (CPU版)
 RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+
+# 4. 安装 RF-DETR (会自动安装依赖)
+RUN pip3 install --no-cache-dir rfdetr -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
 # 设置语言环境
 ENV LANG zh_CN.UTF-8

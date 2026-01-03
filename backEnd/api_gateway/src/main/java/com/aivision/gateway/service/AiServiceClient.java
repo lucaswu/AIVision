@@ -45,6 +45,9 @@ public class AiServiceClient {
 
     @Value("${ai-services.vision-ai.inference-mode:seg}")
     private String inferenceMode;
+    
+    @Value("${ai-services.vision-ai.engine:rfdet}")
+    private String engineType;
 
     @Value("${ai-services.vision-ai.device:cpu}")
     private String device;
@@ -113,9 +116,9 @@ public class AiServiceClient {
         command.add("--mode");
         command.add(inferenceMode);
         
-        // 显式指定引擎为 yolo，因为目前环境中只有 YOLO 可用
+        // 指定引擎 (支持 yolo, rfdet)
         command.add("--engine");
-        command.add("yolo");
+        command.add(engineType);
         
         command.add("--device");
         command.add(device);

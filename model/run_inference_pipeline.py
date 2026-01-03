@@ -15,6 +15,8 @@ import argparse
 import json
 import os
 import sys
+print(f"DEBUG: Python Version: {sys.version}")
+print(f"DEBUG: Python Executable: {sys.executable}")
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple

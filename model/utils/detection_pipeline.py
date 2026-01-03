@@ -11,8 +11,10 @@ from PIL import Image
 from convert.pj.yolo_roi_extractor import WeldROIDetector
 try:
     from rfdetr import RFDETRMedium, RFDETRLarge, RFDETRSegPreview
-except ImportError:
-    print("Warning: rfdetr module not found. RF-DETR functionality will be unavailable.")
+except ImportError as e:
+    import traceback
+    traceback.print_exc()
+    print(f"Warning: rfdetr module not found. Error: {e}")
     RFDETRMedium = None
     RFDETRLarge = None
     RFDETRSegPreview = None
@@ -189,7 +191,14 @@ class RFDetrSegmentationModel:
         if not self.model_path.exists():
             raise FileNotFoundError(f"未找到RF-DETR分割权重: {self.model_path}")
         self.confidence = confidence
+        
         kwargs: Dict[str, Any] = {"pretrain_weights": str(self.model_path)}
+        checkpoint_kwargs = _load_rfdet_model_kwargs(self.model_path)
+        if checkpoint_kwargs:
+            checkpoint_kwargs.pop("pretrain_weights", None)
+            checkpoint_kwargs.pop("device", None)
+            kwargs.update(checkpoint_kwargs)
+            
         if device:
             kwargs["device"] = device
         self.model = RFDETRSegPreview(**kwargs)
