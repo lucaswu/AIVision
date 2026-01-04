@@ -58,7 +58,8 @@ import { useRequest } from "ahooks";
 import { reportAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report } from "../../utils/data";
 import GeometricMeasureTool from './tool/GeometricMeasureTool';
-import { useWindowLevelTool, WindowLevelSVGFilter } from './tool/WindowLevelTool'; 
+// [修复 1] 移除不存在的 WindowLevelSVGFilter
+import { useWindowLevelTool } from './tool/WindowLevelTool'; 
 import Ruler from './tool/Ruler';
 
 const { Content, Sider } = Layout;
@@ -122,6 +123,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   } = useRequest(() => reportAPI.getReportFiles(taskId));
   const files = filesResp?.Data || [];
 
+  // 计算图片URL
+  const previewUrl = selectedFile 
+    ? `/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`
+    : '';
+
   // 计算图片位置偏移 (用于标尺)
   const updateImageOffset = (_e?: any) => {
     if (imageWrapperRef.current && canvasContainer) {
@@ -138,6 +144,19 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       });
     }
   };
+
+  // 监听 wrapper 尺寸变化 (替代 img.onLoad 的 clientWidth)
+  useEffect(() => {
+    if (!imageWrapperRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        setImgSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+      }
+      updateImageOffset();
+    });
+    observer.observe(imageWrapperRef.current);
+    return () => observer.disconnect();
+  }, [imageWrapperRef.current]);
 
   // 监听键盘空格键
   useEffect(() => {
@@ -184,17 +203,56 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const unconfirmedCount = files.length - confirmedCount;
   const progressPercent = files.length > 0 ? Math.round((confirmedCount / files.length) * 100) : 0;
 
-  // Window Level Tool Hook
+  // [修复 2] Window Level Tool Hook - 使用新的API
+  // 注意：新实现需要File对象而非URL
+  const [imageFile, setImageFile] = useState<File | undefined>(undefined);
+  
   const { 
-    windowParams, 
     selectionRect, 
-    imgRef, 
+    canvasRef, // Canvas 引用（不再有 imgRef）
     handlers, 
     resetWindow,
     windowWidth,
     windowLevel,
-    setManualWindowLevel
-  } = useWindowLevelTool({ activeTool, scale });
+    setManualWindowLevel,
+    imageStats  // 新增：图像统计信息
+  } = useWindowLevelTool({ 
+    activeTool, 
+    scale,
+    imageFile: imageFile // 传入File对象
+  });
+  
+  // 当选择文件变化时，加载图像文件
+  useEffect(() => {
+    if (!selectedFile || !previewUrl) {
+      setImageFile(undefined);
+      return;
+    }
+    
+    // 从URL加载图像并转换为File对象
+    fetch(previewUrl)
+      .then(res => res.blob())
+      .then(blob => {
+        const file = new File([blob], selectedFile.FileName || 'image.png', { 
+          type: blob.type || 'image/png' 
+        });
+        setImageFile(file);
+      })
+      .catch(err => {
+        console.error('Failed to load image:', err);
+        message.error('图像加载失败');
+      });
+  }, [selectedFile, previewUrl]);
+  
+  // 从canvas获取原始图像尺寸
+  useEffect(() => {
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      if (canvas.width > 0 && canvas.height > 0) {
+        setOriginalSize({ w: canvas.width, h: canvas.height });
+      }
+    }
+  }, [canvasRef.current?.width, canvasRef.current?.height, imageFile]);
 
   // 鼠标样式逻辑
   let cursorStyle = 'default';
@@ -360,7 +418,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
-      <WindowLevelSVGFilter id="wlFilter" slope={windowParams.slope} intercept={windowParams.intercept} />
+      {/* [修复 4] 移除 WindowLevelSVGFilter 组件调用 */}
 
       {/* 左侧文件列表 */}
       <Sider width={300} theme="light" style={{ borderRight: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column' }}>
@@ -532,7 +590,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <Button type="text" ghost icon={<RollbackOutlined />} onClick={resetWindow} />
             </Tooltip>
 
-            {/*  旋转和翻转按钮 */}
+            {/* 旋转和翻转按钮 */}
             <Tooltip title="左旋转90度">
               <Button type="text" ghost icon={<img src="/rotate_left.svg" alt="rotate_left" style={{ width: 32, height: 32 }} />} style={{ color: '#fff', width: 36, height: 36, padding: 0 }} onClick={() => setRotation(r => r - 90)} />
             </Tooltip>
@@ -558,6 +616,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   onClick={() => { 
                       setScale(1); setRotation(0); setFlipH(1); setFlipV(1); 
                       setPosition({ x: 0, y: 0 }); 
+                      resetWindow();
                   }} 
                 />
             </Tooltip>
@@ -664,25 +723,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 }}
                 onTransitionEnd={() => updateImageOffset()} 
               >
-                <img 
-                  ref={imgRef}
-                  src={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
-                  alt="preview" 
-                  draggable={false} 
-                  crossOrigin="anonymous" 
-                  onLoad={(e) => {
-                    setImgSize({ w: e.currentTarget.clientWidth, h: e.currentTarget.clientHeight });
-                    setOriginalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight });
-                    setTimeout(updateImageOffset, 50); 
-                  }}
-                  style={{ 
+                {/* [修复 5] Canvas 显示层 (不再需要隐藏的img标签) */}
+                <canvas
+                  ref={canvasRef}
+                  style={{
                     maxHeight: "calc(100vh - 280px)", 
                     maxWidth: "100%", 
                     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                     display: 'block',
                     userSelect: activeTool === 'measure' ? 'none' : 'auto',
-                    filter: `${isNegative ? 'invert(100%)' : ''} url(#wlFilter)`
-                  }} 
+                    filter: isNegative ? 'invert(100%)' : 'none'
+                  }}
                 />
 
                 {selectionRect && (
@@ -701,7 +752,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
                 <GeometricMeasureTool
                   visible={activeTool === 'measure'} 
-                  imageUrl={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`}
+                  imageUrl={previewUrl}
                   width={imgSize.w}
                   height={imgSize.h}
                   pixelRatio={0.26}
