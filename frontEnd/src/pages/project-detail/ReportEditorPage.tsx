@@ -309,25 +309,26 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           borderBottom: '1px solid #303030'
         }}>
           <Space size={0}>
-            <Tooltip title="选择 (V)"><Button type="text" ghost icon={<AimOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="缺陷标记 (D)"><Button type="text" ghost icon={<BorderOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="文本标注 (T)"><Button type="text" ghost icon={<FontSizeOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="箭头 (A)"><Button type="text" ghost icon={<ArrowRightOutlined style={{ transform: 'rotate(-45deg)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="多边形 (P)"><Button type="text" ghost icon={<HighlightOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="标尺 (M)"><Button type="text" ghost icon={<ColumnWidthOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="详情 (I)"><Button type="text" ghost icon={<InfoCircleOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="平移 (Space)"><Button type="text" ghost icon={<DragOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="新增 (N)"><Button type="text" ghost icon={<PlusOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            <Tooltip title="重置视图"><Button type="text" ghost icon={<img src="/fullscreen.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            <Tooltip title="窗宽调整"><Button type="text" ghost icon={<img src="/contrast.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 22, padding: 0 }} /></Tooltip>
+            <Tooltip title="正负片切换"><Button type="text" ghost style={{ color: '#fff', fontSize: '12px', height: 28, padding: '0 8px', background: '#303030', borderRadius: '2px', marginRight: 8 } }>正片</Button></Tooltip>
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+
+            <Tooltip title="缺陷标记"><Button type="text" ghost icon={<img src="/circle-alert.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 22, padding: 0 }} /></Tooltip>
+            <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width:36, height: 22, padding: 0 }} /></Tooltip>
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+
+            <Tooltip title="设置坐标原点"><Button type="text" ghost icon={<img src="/mouse-pointer-2.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width:36, height: 22, padding: 0 }} /></Tooltip>
+            <Tooltip title="测量距离"><Button type="text" ghost icon={<img src="/ruler.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width:36, height: 22, padding: 0 }} /></Tooltip>
+    
+            
             
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
-            
-            <Button type="text" ghost style={{ color: '#fff', fontSize: '12px', height: 28, padding: '0 8px', background: '#303030', borderRadius: '2px', marginRight: 8 }}>正片</Button>
-            
-            <Tooltip title="向左旋转"><Button type="text" ghost icon={<RotateLeftOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="向右旋转"><Button type="text" ghost icon={<RotateRightOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="重置视图"><Button type="text" ghost icon={<FullscreenOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="水平翻转"><Button type="text" ghost icon={<SwapOutlined />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<SwapOutlined style={{ transform: 'rotate(90deg)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+
+            <Tooltip title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            <Tooltip title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
           </Space>
           
           <Space size={8}>
@@ -360,7 +361,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <AimOutlined style={{ color: '#1890ff', marginRight: 4 }} />
               <div style={{ textAlign: 'left', lineHeight: 1.1 }}>
-                <div>点:</div>
+                <div>原点:</div>
                 <div style={{ color: '#fff' }}>(0, 0)</div>
               </div>
             </div>
