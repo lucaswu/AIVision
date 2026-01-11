@@ -591,7 +591,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
             type="text"
             icon={<DownloadOutlined />}
             onClick={() => {
-              const downloadUrl = `${filePreviewPath}?FileId=${record.Id}&ProjectId=${projectId}&UseId=${getUserId()}`;
+              const downloadUrl = `${filePreviewPath}?FileId=${record.Id}&ProjectId=${projectId}&UserId=${getUserId()}`;
 
               // 创建一个隐藏的a标签来触发下载
               const link = document.createElement("a");
@@ -876,7 +876,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
       >
         <div style={{ textAlign: "center" }}>
           <Image
-            src={`${filePreviewPath}?FileId=${previewImage}&ProjectId=${projectId}&UseId=${getUserId()}`}
+            src={`${filePreviewPath}?FileId=${previewImage}&ProjectId=${projectId}&UserId=${getUserId()}`}
             alt="预览图片"
             style={{ maxWidth: "100%", maxHeight: "60vh" }}
             preview={false}

@@ -46,6 +46,11 @@ public interface FileRepository extends JpaRepository<File, String> {
      * 根据文件ID、项目ID和用户ID查找文件
      */
     Optional<File> findByFileIdAndProjectIdAndUserId(String fileId, String projectId, String userId);
+
+    /**
+     * 根据文件ID和项目ID查找文件（用于管理员预览）
+     */
+    Optional<File> findByFileIdAndProjectId(String fileId, String projectId);
     
     /**
      * 统计目录下的文件数量

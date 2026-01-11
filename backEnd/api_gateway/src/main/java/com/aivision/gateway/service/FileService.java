@@ -262,9 +262,21 @@ public class FileService {
      * 获取文件图片数据 - 直接返回二进制数据
      */
     public FileImageData getFileImageData(String fileId, String projectId, String userId) {
-        // 1. 验证文件是否存在并且用户有权限访问
-        Optional<File> fileOpt = fileRepository.findByFileIdAndProjectIdAndUserId(fileId, projectId, userId);
+        // 1. 验证用户角色：管理员可以查看项目中任何文件
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        
+        Optional<File> fileOpt;
+        if (user.getRole() == User.Role.ADMIN) {
+            // 管理员权限：仅根据 fileId 和 projectId 查找
+            fileOpt = fileRepository.findByFileIdAndProjectId(fileId, projectId);
+        } else {
+            // 普通用户：必须匹配本人上传的文件
+            fileOpt = fileRepository.findByFileIdAndProjectIdAndUserId(fileId, projectId, userId);
+        }
+
         if (!fileOpt.isPresent()) {
+            logger.warn("文件查找失败: fileId={}, projectId={}, userId={}, role={}", fileId, projectId, userId, user.getRole());
             throw new IllegalArgumentException("文件不存在或无权限访问");
         }
         

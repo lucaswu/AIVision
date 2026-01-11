@@ -74,7 +74,7 @@ const createHTMLContent = (task: Task): string => {
   const getFileImageUrl = (file: TaskFile, projectId: string): string => {
     const baseUrl = window.location.origin;
     // return "https://so1.360tres.com/t01822d65d3533be80c.jpg";
-    return `${baseUrl}${filePreviewPath}?FileId=${file.FileId}&ProjectId=${projectId}&UseId=${getUserId()}`;
+    return `${baseUrl}${filePreviewPath}?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`;
   };
 
   // 构建HTML内容

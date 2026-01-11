@@ -33,8 +33,8 @@ services:
   # API Gateway 后端服务
   api-gateway:
     build:
-      context: ../backEnd/api_gateway
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: backEnd/api_gateway/Dockerfile
     image: aivision-backend:latest
     container_name: ai-detection-gateway
     restart: unless-stopped

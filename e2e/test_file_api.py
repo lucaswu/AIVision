@@ -103,7 +103,7 @@ def test_file_management():
     preview_params = {
         "FileId": file_id,
         "ProjectId": project_id,
-        "UseId": USER_ID
+        "UserId": USER_ID
     }
     resp = requests.get(f"{BASE_URL}/files/preview", params=preview_params)
     if resp.status_code == 200:

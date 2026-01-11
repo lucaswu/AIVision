@@ -12,7 +12,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -20,6 +19,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
+
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -44,14 +44,15 @@ public class TaskProcessService {
     @Value("${storage.local.result-dir:/app/data/results}")
     private String resultBaseDir;
     
-    private static final int BATCH_SIZE = 10;
+    // 修改为一次性处理所有文件，不再分批，以配合 Python 批量推理的高效性
+    // private static final int BATCH_SIZE = 10;
     
     /**
      * 异步处理任务 (仅视觉 AI，结果追加到大的 JSON 文件中)
      */
     @Async("aiTaskExecutor")
     public void processTaskAsync(String taskId) {
-        logger.info("开始处理任务 (仅视觉AI + JSON追加): taskId={}", taskId);
+        logger.info("开始处理任务 (全量 Python 批量处理): taskId={}", taskId);
         
         try {
             Task task = taskRepository.findById(taskId)
@@ -77,77 +78,101 @@ public class TaskProcessService {
                 return;
             }
 
-            int totalFiles = allTaskFiles.size();
-            boolean isFirstBatch = true;
+            // 更新所有文件状态为 PROCESSING
+            for (TaskFile tf : allTaskFiles) {
+                tf.setStatus(TaskFile.Status.PROCESSING);
+                tf.setProcessingStartTime(LocalDateTime.now());
+            }
+            taskFileRepository.saveAll(allTaskFiles);
 
-            // 3. 分批处理 (串行)
-            for (int i = 0; i < totalFiles; i += BATCH_SIZE) {
-                int endIndex = Math.min(i + BATCH_SIZE, totalFiles);
-                List<TaskFile> batch = allTaskFiles.subList(i, endIndex);
-                int batchIndex = (i / BATCH_SIZE) + 1;
-
-                logger.info("处理批次 {}: taskId={}, range=[{}, {}]", batchIndex, taskId, i, endIndex);
-
-                // 模拟处理耗时，增加 1 秒延迟
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    logger.warn("处理批次时的睡眠被中断: {}", e.getMessage());
-                }
-
-                // 更新状态
-                for (TaskFile tf : batch) {
-                    tf.setStatus(TaskFile.Status.PROCESSING);
-                    tf.setProcessingStartTime(LocalDateTime.now());
-                }
-                taskFileRepository.saveAll(batch);
-
-                // a. 批量 Vision AI
-                List<String> paths = batch.stream().map(TaskFile::getLogicalFilePath).collect(Collectors.toList());
-                Map<String, String> visionResults = aiServiceClient.callBatchVisionAi(paths, taskId);
-
-                // b. 写回 TaskFile 并准备追加到 JSON
-                StringBuilder jsonBatch = new StringBuilder();
-                for (int j = 0; j < batch.size(); j++) {
-                    TaskFile tf = batch.get(j);
-                    String res = visionResults.get(tf.getLogicalFilePath());
-                    tf.setVisionResult(res);
-                    tf.setStatus(res != null ? TaskFile.Status.COMPLETED : TaskFile.Status.FAILED);
-                    tf.setProcessingEndTime(LocalDateTime.now());
-                    
-                    if (res != null) {
-                        // 构造当前文件的结果对象
-                        Map<String, Object> resultEntry = new HashMap<>();
-                        resultEntry.put("fileId", tf.getFileId());
-                        resultEntry.put("logicalPath", tf.getLogicalFilePath());
-                        resultEntry.put("visionResult", objectMapper.readTree(res));
-                        resultEntry.put("timestamp", LocalDateTime.now().toString());
-
-                        if (!isFirstBatch || j > 0) {
-                            jsonBatch.append(",");
+            // 3. 一次性调用 Python 进行全量推理
+            // 收集所有文件的相对路径 (使用 minioFilePath，即物理存储路径，包含 Project/User 层级)
+            List<String> paths = allTaskFiles.stream().map(TaskFile::getMinioFilePath).collect(Collectors.toList());
+            
+            // 3.1 准备进度更新的回调
+            final int totalFiles = allTaskFiles.size();
+            
+            // 3.2 调用 Python (耗时操作)
+            Map<String, String> visionResults = aiServiceClient.callBatchVisionAi(paths, taskId, 
+                // 进度回调
+                (processedCount) -> {
+                    try {
+                        Task currentTask = taskRepository.findById(taskId).orElse(null);
+                        if (currentTask != null) {
+                            currentTask.setProcessedFiles(processedCount);
+                            // 估算成功数，准确数等结束后更新
+                            currentTask.setSuccessFiles(processedCount); 
+                            taskRepository.save(currentTask);
                         }
-                        jsonBatch.append(objectMapper.writeValueAsString(resultEntry));
+                    } catch (Exception e) {
+                        logger.warn("更新进度失败: taskId={}", taskId);
+                    }
+                },
+                // 错误日志回调
+                (errorLogs) -> {
+                    try {
+                        Task currentTask = taskRepository.findById(taskId).orElse(null);
+                        if (currentTask != null) {
+                            String errorMsg = String.join("\n", errorLogs);
+                            // 截断过长的日志
+                            if (errorMsg.length() > 60000) { // 数据库字段限制预留
+                                errorMsg = errorMsg.substring(errorMsg.length() - 60000);
+                            }
+                            currentTask.setErrorMessage(errorMsg);
+                            taskRepository.save(currentTask);
+                        }
+                    } catch (Exception e) {
+                        logger.error("保存错误日志失败: taskId={}", taskId);
                     }
                 }
-                taskFileRepository.saveAll(batch);
+            );
 
-                // c. 追加写入 JSON 文件
-                Files.write(resultFilePath, jsonBatch.toString().getBytes("UTF-8"), StandardOpenOption.APPEND);
-                isFirstBatch = false;
 
-                // d. 更新进度
-                Task currentTask = taskRepository.findById(taskId).get();
-                currentTask.setProcessedFiles(endIndex);
-                int batchSuccess = (int) batch.stream().filter(tf -> tf.getStatus() == TaskFile.Status.COMPLETED).count();
-                currentTask.setSuccessFiles(currentTask.getSuccessFiles() + batchSuccess);
-                currentTask.setFailedFiles(currentTask.getFailedFiles() + (batch.size() - batchSuccess));
-                taskRepository.save(currentTask);
+            // 4. 处理结果并写回
+            StringBuilder jsonBatch = new StringBuilder();
+            int successCount = 0;
+            int failedCount = 0;
+
+            for (int j = 0; j < allTaskFiles.size(); j++) {
+                TaskFile tf = allTaskFiles.get(j);
+                // 使用 minioFilePath 从结果 map 中获取
+                String res = visionResults.get(tf.getMinioFilePath());
+                
+                tf.setVisionResult(res);
+                
+                // 只要有结果返回就算成功完成处理，无论是否有缺陷
+                tf.setStatus(res != null ? TaskFile.Status.COMPLETED : TaskFile.Status.FAILED);
+                tf.setProcessingEndTime(LocalDateTime.now());
+                
+                if (res != null) {
+                    successCount++;
+                    // 构造当前文件的结果对象，用于追加到大 JSON
+                    Map<String, Object> resultEntry = new HashMap<>();
+                    resultEntry.put("fileId", tf.getFileId());
+                    resultEntry.put("logicalPath", tf.getLogicalFilePath());
+                    resultEntry.put("visionResult", objectMapper.readTree(res));
+                    resultEntry.put("timestamp", LocalDateTime.now().toString());
+
+                    if (j > 0) {
+                        jsonBatch.append(",");
+                    }
+                    jsonBatch.append(objectMapper.writeValueAsString(resultEntry));
+                } else {
+                    failedCount++;
+                }
             }
+            taskFileRepository.saveAll(allTaskFiles);
 
-            // 4. 结束 JSON 数组并完成任务
+            // 5. 写入 JSON 文件内容
+            Files.write(resultFilePath, jsonBatch.toString().getBytes("UTF-8"), StandardOpenOption.APPEND);
+            
+            // 6. 结束 JSON 数组并完成任务
             Files.write(resultFilePath, "]".getBytes("UTF-8"), StandardOpenOption.APPEND);
             
             Task finalTask = taskRepository.findById(taskId).get();
+            finalTask.setProcessedFiles(allTaskFiles.size());
+            finalTask.setSuccessFiles(successCount);
+            finalTask.setFailedFiles(failedCount);
             finalTask.setStatus(Task.Status.COMPLETED);
             finalTask.setEndTime(LocalDateTime.now());
             taskRepository.save(finalTask);
@@ -159,7 +184,7 @@ public class TaskProcessService {
                 logger.error("生成报告失败: taskId={}, error={}", taskId, e.getMessage());
             }
             
-            logger.info("任务处理完成 (结果已存入 JSON): taskId={}", taskId);
+            logger.info("任务处理完成: taskId={}, success={}, failed={}", taskId, successCount, failedCount);
             
         } catch (Exception e) {
             logger.error("任务处理异常: taskId={}, error={}", taskId, e.getMessage(), e);
