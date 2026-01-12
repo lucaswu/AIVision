@@ -461,7 +461,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
-  // 计算比率传给 Ruler
+    // 计算比率传给 Ruler
   const widthRatio = (originalSize.w > 0 && imgSize.w > 0) ? (originalSize.w / imgSize.w) : 1;
   const heightRatio = (originalSize.h > 0 && imgSize.h > 0) ? (originalSize.h / imgSize.h) : 1;
 
@@ -970,6 +970,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         onCancel={() => {
             setCalibrateModalVisible(false);
             setCalibrateLine(null);
+            setActiveTool('pan');
         }}
         okText="确认"
         cancelText="取消"
