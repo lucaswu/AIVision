@@ -20,6 +20,8 @@ import {
   Tooltip,
   Pagination,
   Slider,
+  Modal,         
+  InputNumber,  
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -58,7 +60,6 @@ import { useRequest } from "ahooks";
 import { reportAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report } from "../../utils/data";
 import GeometricMeasureTool from './tool/GeometricMeasureTool';
-// [修复 1] 移除不存在的 WindowLevelSVGFilter
 import { useWindowLevelTool } from './tool/WindowLevelTool'; 
 import Ruler from './tool/Ruler';
 
@@ -111,6 +112,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 }); 
   const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null);
 
+  //  标定相关状态
+  // 默认值设为 1px = 5mm (与原有UI保持一致，实际应由后端返回或默认为 null)
+  const [pixelRatio, setPixelRatio] = useState<number>(5); 
+  const [isCalibrating, setIsCalibrating] = useState(false); // 是否正在拖拽标定线
+  const [calibrateLine, setCalibrateLine] = useState<{x1: number, y1: number, x2: number, y2: number} | null>(null);
+  const [calibrateModalVisible, setCalibrateModalVisible] = useState(false);
+  const [measuredPixelDistance, setMeasuredPixelDistance] = useState(0);
+  const [actualLength, setActualLength] = useState<number | null>(null);
+
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
   const report = reportResp?.Data;
@@ -145,7 +155,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
-  // 监听 wrapper 尺寸变化 (替代 img.onLoad 的 clientWidth)
+  // 监听 wrapper 尺寸变化
   useEffect(() => {
     if (!imageWrapperRef.current) return;
     const observer = new ResizeObserver((entries) => {
@@ -162,18 +172,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat) {
-        // 防止空格键滚动页面
         e.preventDefault(); 
         setIsSpacePressed(true);
       }
     };
-    
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         setIsSpacePressed(false);
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => {
@@ -203,23 +210,20 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const unconfirmedCount = files.length - confirmedCount;
   const progressPercent = files.length > 0 ? Math.round((confirmedCount / files.length) * 100) : 0;
 
-  // [修复 2] Window Level Tool Hook - 使用新的API
-  // 注意：新实现需要File对象而非URL
   const [imageFile, setImageFile] = useState<File | undefined>(undefined);
   
   const { 
     selectionRect, 
-    canvasRef, // Canvas 引用（不再有 imgRef）
+    canvasRef, 
     handlers, 
     resetWindow,
     windowWidth,
     windowLevel,
     setManualWindowLevel,
-    imageStats  // 新增：图像统计信息
   } = useWindowLevelTool({ 
     activeTool, 
     scale,
-    imageFile: imageFile // 传入File对象
+    imageFile: imageFile 
   });
   
   // 当选择文件变化时，加载图像文件
@@ -229,7 +233,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       return;
     }
     
-    // 从URL加载图像并转换为File对象
     fetch(previewUrl)
       .then(res => res.blob())
       .then(blob => {
@@ -244,7 +247,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       });
   }, [selectedFile, previewUrl]);
   
-  // 从canvas获取原始图像尺寸
   useEffect(() => {
     if (canvasRef.current) {
       const canvas = canvasRef.current;
@@ -262,7 +264,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     cursorStyle = 'grab';
   } else if (activeTool === 'windowing') {
     cursorStyle = 'crosshair';
-  } else if (activeTool === 'measure') {
+  } else if (activeTool === 'measure' || activeTool === 'calibrate') { //  增加标定模式样式
     cursorStyle = 'crosshair';
   }
 
@@ -281,11 +283,28 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setMousePos({ x: clampedX, y: clampedY });
   };
 
-  // 鼠标事件包装器
+  //  获取相对于图片div的坐标（用于标定画线）
+  const getImageCoordinates = (e: React.MouseEvent) => {
+    if (!imageWrapperRef.current) return { x: 0, y: 0 };
+    const rect = imageWrapperRef.current.getBoundingClientRect();
+    // 计算相对于当前缩放后的坐标系
+    return { 
+      x: (e.clientX - rect.left) / scale,
+      y: (e.clientY - rect.top) / scale 
+    };
+  };
+
+  //  鼠标事件包装器 - 增加标定逻辑
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
     
-    if (isPanMode) {
+    if (activeTool === 'calibrate') {
+        e.stopPropagation();
+        e.preventDefault();
+        const { x, y } = getImageCoordinates(e);
+        setIsCalibrating(true);
+        setCalibrateLine({ x1: x, y1: y, x2: x, y2: y });
+    } else if (isPanMode) {
         setIsPanning(true);
         setPanStart({ 
             x: e.clientX - position.x, 
@@ -300,7 +319,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const handleMouseMoveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     handleMouseMoveTracker(e);
 
-    if (isPanning) {
+    if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
+        const { x, y } = getImageCoordinates(e);
+        setCalibrateLine({ ...calibrateLine, x2: x, y2: y });
+    } else if (isPanning) {
         const newX = e.clientX - panStart.x;
         const newY = e.clientY - panStart.y;
         setPosition({ x: newX, y: newY });
@@ -310,7 +332,22 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (isPanning) {
+    if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
+        setIsCalibrating(false);
+        // 计算像素距离
+        const dx = calibrateLine.x2 - calibrateLine.x1;
+        const dy = calibrateLine.y2 - calibrateLine.y1;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        
+        // 如果划线长度有效（防止误触）
+        if (dist > 5) {
+            setMeasuredPixelDistance(parseFloat(dist.toFixed(2)));
+            setCalibrateModalVisible(true);
+            setActualLength(null); // 清空上次输入
+        } else {
+            setCalibrateLine(null); // 清除无效线
+        }
+    } else if (isPanning) {
         setIsPanning(false);
     } else {
         handlers.onMouseUp && (handlers.onMouseUp as any)(e);
@@ -322,6 +359,19 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       handlers.onMouseLeave && (handlers.onMouseLeave as any)(e);
   };
 
+  //  确认标定逻辑
+  const handleCalibrateConfirm = () => {
+    if (actualLength && measuredPixelDistance > 0) {
+        const ratio = actualLength / measuredPixelDistance; // mm per pixel
+        setPixelRatio(parseFloat(ratio.toFixed(4)));
+        message.success(`标定成功：1px ≈ ${ratio.toFixed(4)}mm`);
+        setCalibrateModalVisible(false);
+        setCalibrateLine(null);
+        setActiveTool('pan'); // 标定完成后自动切回平移，也可保持
+    } else {
+        message.warning('请输入有效的实际长度');
+    }
+  };
 
   // 分页后的文件列表
   const paginatedFiles = useMemo(() => {
@@ -346,7 +396,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setRotation(0);
       setFlipH(1);
       setFlipV(1);
-      setPosition({ x: 0, y: 0 }); // 重置位置
+      setPosition({ x: 0, y: 0 }); 
+      setCalibrateLine(null); // 清除标定线
     }
   }, [selectedFile, form, resetWindow]);
 
@@ -382,11 +433,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       console.error(err);
     }
   };
-
-  // 负片
+  //负片
   const [isNegative, setIsNegative] = useState(false);
 
-  // 保存并确认当前文件
   const handleSave = async () => {
     if (!selectedFile) return;
     try {
@@ -418,8 +467,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
-      {/* [修复 4] 移除 WindowLevelSVGFilter 组件调用 */}
-
       {/* 左侧文件列表 */}
       <Sider width={300} theme="light" style={{ borderRight: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
@@ -528,7 +575,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             size="large"
             icon={<FileTextOutlined />} 
             style={{ height: '48px', borderRadius: '4px' }}
-            //包装 onClick
             onClick={() => onPreview && onPreview()}
           >
             预览报告
@@ -602,22 +648,32 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
           
           <Space size={8}>
+            {/*  尺寸定标按钮：添加交互逻辑和激活样式 */}
             <Button 
-              type="text" 
-              ghost 
+              type={activeTool === 'calibrate' ? 'primary' : 'text'}
+              ghost={activeTool !== 'calibrate'}
               icon={<ColumnWidthOutlined />} 
+              onClick={() => {
+                setActiveTool(activeTool === 'calibrate' ? 'pan' : 'calibrate');
+                setCalibrateLine(null);
+              }}
               style={{ 
-                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px', background: '#303030', borderRadius: '4px', display: 'flex', alignItems: 'center'
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px', 
+                background: activeTool === 'calibrate' ? '#1890ff' : '#303030', 
+                borderRadius: '4px', display: 'flex', alignItems: 'center'
               }}
             >
               尺寸定标
             </Button>
             
+            {/*  1px = X mm 显示区域：动态更新 */}
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <LinkOutlined style={{ transform: 'rotate(-45deg)', marginRight: 4 }} />
               <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
                 <div>1px</div>
-                <div style={{ borderTop: '1px solid #595959', marginTop: 1 }}>5mm</div>
+                <div style={{ borderTop: '1px solid #595959', marginTop: 1 }}>
+                    {pixelRatio ? `${pixelRatio}mm` : '未标定'}
+                </div>
               </div>
             </div>
 
@@ -689,7 +745,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 }}
                 onTransitionEnd={() => updateImageOffset()} 
               >
-                {/* [修复 5] Canvas 显示层 (不再需要隐藏的img标签) */}
                 <canvas
                   ref={canvasRef}
                   style={{
@@ -697,7 +752,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     maxWidth: "100%", 
                     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                     display: 'block',
-                    userSelect: activeTool === 'measure' ? 'none' : 'auto',
+                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate') ? 'none' : 'auto',
                     filter: isNegative ? 'invert(100%)' : 'none'
                   }}
                 />
@@ -716,12 +771,35 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                    }} />
                  )}
 
+                {/*标定线绘制层 */}
+                {activeTool === 'calibrate' && calibrateLine && (
+                    <svg 
+                        style={{
+                            position: 'absolute',
+                            top: 0, left: 0,
+                            width: '100%', height: '100%',
+                            pointerEvents: 'none',
+                            zIndex: 15
+                        }}
+                    >
+                        <line 
+                            x1={calibrateLine.x1} y1={calibrateLine.y1} 
+                            x2={calibrateLine.x2} y2={calibrateLine.y2} 
+                            stroke="#faad14" 
+                            strokeWidth={2 / scale} 
+                            strokeDasharray="4 2"
+                        />
+                         <circle cx={calibrateLine.x1} cy={calibrateLine.y1} r={3 / scale} fill="#faad14" />
+                         <circle cx={calibrateLine.x2} cy={calibrateLine.y2} r={3 / scale} fill="#faad14" />
+                    </svg>
+                )}
+
                 <GeometricMeasureTool
                   visible={activeTool === 'measure'} 
                   imageUrl={previewUrl}
                   width={imgSize.w}
                   height={imgSize.h}
-                  pixelRatio={0.26}
+                  pixelRatio={pixelRatio} //  使用动态比率
                   scale={scale} 
                   container={canvasContainer} 
                 />
@@ -879,10 +957,45 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </div>
           <div style={{ marginBottom: 16 }}>当前坐标: (120, 340)</div>
           <div style={{ borderTop: '1px solid #303030', paddingTop: 16, color: '#8c8c8c', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            底片评分系统 | 当前工具: 平移
+            底片评分系统 | 当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : '平移'}
             </div>
           </div>
       </Sider>
+
+      {/* 标定弹窗 */}
+      <Modal
+        title="像素标定"
+        open={calibrateModalVisible}
+        onOk={handleCalibrateConfirm}
+        onCancel={() => {
+            setCalibrateModalVisible(false);
+            setCalibrateLine(null);
+        }}
+        okText="确认"
+        cancelText="取消"
+        width={300}
+        centered
+        maskClosable={false}
+      >
+        <div style={{ marginBottom: 16 }}>
+             <Text type="secondary">选择的距离 (像素)：</Text>
+             <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: 4 }}>
+                {measuredPixelDistance} px
+             </div>
+        </div>
+        <div>
+            <Text type="secondary">实际长度 (毫米)：</Text>
+            <InputNumber 
+                style={{ width: '100%', marginTop: 4 }} 
+                placeholder="请输入实际长度"
+                value={actualLength}
+                onChange={(val) => setActualLength(val)}
+                addonAfter="mm"
+                autoFocus
+            />
+        </div>
+      </Modal>
+
     </Layout>
   );
 };
