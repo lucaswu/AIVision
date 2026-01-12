@@ -112,10 +112,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 }); 
   const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null);
 
-  //  标定相关状态
-  // 默认值设为 1px = 5mm (与原有UI保持一致，实际应由后端返回或默认为 null)
+  //  坐标原点状态管理
+  const [originPoint, setOriginPoint] = useState<{x: number, y: number} | null>(null); // 最终确定的原点
+  const [isSettingOrigin, setIsSettingOrigin] = useState(false); // 是否正在拖拽原点
+  const [tempOrigin, setTempOrigin] = useState<{x: number, y: number} | null>(null); // 拖拽过程中的临时原点(CSS坐标)
+
+  // 标定相关状态
   const [pixelRatio, setPixelRatio] = useState<number>(5); 
-  const [isCalibrating, setIsCalibrating] = useState(false); // 是否正在拖拽标定线
+  const [isCalibrating, setIsCalibrating] = useState(false); 
   const [calibrateLine, setCalibrateLine] = useState<{x1: number, y1: number, x2: number, y2: number} | null>(null);
   const [calibrateModalVisible, setCalibrateModalVisible] = useState(false);
   const [measuredPixelDistance, setMeasuredPixelDistance] = useState(0);
@@ -196,6 +200,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     return () => window.removeEventListener('resize', updateImageOffset);
   }, [scale, rotation, flipH, flipV, imgSize, selectedFile, position]);
 
+  // 工具切换时的状态清理
+  useEffect(() => {
+    if (activeTool !== 'setOrigin') {
+        setIsSettingOrigin(false);
+        setTempOrigin(null);
+    }
+    if (activeTool !== 'calibrate') {
+        setIsCalibrating(false);
+        setCalibrateLine(null);
+    }
+  }, [activeTool]);
+
   // 鼠标滚轮事件处理函数
   const handleWheel = (e: React.WheelEvent) => {
     const step = 0.1;
@@ -264,7 +280,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     cursorStyle = 'grab';
   } else if (activeTool === 'windowing') {
     cursorStyle = 'crosshair';
-  } else if (activeTool === 'measure' || activeTool === 'calibrate') { //  增加标定模式样式
+  } else if (activeTool === 'measure' || activeTool === 'calibrate') { 
+    cursorStyle = 'crosshair';
+  } else if (activeTool === 'setOrigin') { 
     cursorStyle = 'crosshair';
   }
 
@@ -283,22 +301,71 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setMousePos({ x: clampedX, y: clampedY });
   };
 
-  //  获取相对于图片div的坐标（用于标定画线）
+  // [修正] 获取相对于图片div的坐标（包含旋转/翻转的逆变换）
   const getImageCoordinates = (e: React.MouseEvent) => {
     if (!imageWrapperRef.current) return { x: 0, y: 0 };
+    
     const rect = imageWrapperRef.current.getBoundingClientRect();
-    // 计算相对于当前缩放后的坐标系
+    
+    // 1. 获取元素视觉中心点（相对于视口）
+    // 注意：旋转是围绕中心进行的，所以中心点是计算的基准
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    // 2. 计算鼠标相对于中心的偏移量
+    const dx = e.clientX - centerX;
+    const dy = e.clientY - centerY;
+
+    // 3. 执行逆旋转
+    // 旋转公式：x' = x cosθ - y sinθ, y' = x sinθ + y cosθ
+    // 因为是逆向还原，所以角度取反 (-rotation)
+    const rad = -rotation * (Math.PI / 180);
+    const rotatedX = dx * Math.cos(rad) - dy * Math.sin(rad);
+    const rotatedY = dx * Math.sin(rad) + dy * Math.cos(rad);
+
+    // 4. 执行逆翻转 (翻转两次等于没翻转，所以直接乘系数)
+    const flippedX = rotatedX * flipH;
+    const flippedY = rotatedY * flipV;
+
+    // 5. 执行逆缩放
+    // 此时 flippedX/Y 是以中心为原点，未缩放的像素距离
+    // 需要注意 scale 是应用在 transform 里的，getBoundingClientRect 已经包含了 scale
+    // 但我们需要的是 transform 之前的内部坐标
+    const unscaledX = flippedX / scale;
+    const unscaledY = flippedY / scale;
+
+    // 6. 将原点从中心移回左上角
+    // imgSize 是 resizeObserver 获取的 contentRect (无 transform 的尺寸)
     return { 
-      x: (e.clientX - rect.left) / scale,
-      y: (e.clientY - rect.top) / scale 
+      x: unscaledX + imgSize.w / 2,
+      y: unscaledY + imgSize.h / 2
     };
   };
 
-  //  鼠标事件包装器 - 增加标定逻辑
+  // 辅助计算：根据CSS坐标计算真实图片坐标
+  const calculateTrueCoordinates = (cssX: number, cssY: number) => {
+    const ratioX = (originalSize.w > 0 && imgSize.w > 0) ? originalSize.w / imgSize.w : 1;
+    const ratioY = (originalSize.h > 0 && imgSize.h > 0) ? originalSize.h / imgSize.h : 1;
+    return {
+        x: Math.round(cssX * ratioX),
+        y: Math.round(cssY * ratioY)
+    };
+  };
+
+  // 鼠标事件包装器
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
     
-    if (activeTool === 'calibrate') {
+    //  设置原点 - 按下鼠标开始拖拽
+    if (activeTool === 'setOrigin') {
+        e.stopPropagation();
+        e.preventDefault();
+        
+        const { x, y } = getImageCoordinates(e);
+        setIsSettingOrigin(true);
+        setTempOrigin({ x, y }); // 仅设置临时坐标，显示十字线
+        
+    } else if (activeTool === 'calibrate') {
         e.stopPropagation();
         e.preventDefault();
         const { x, y } = getImageCoordinates(e);
@@ -318,8 +385,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const handleMouseMoveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     handleMouseMoveTracker(e);
-
-    if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
+    
+    //  设置原点 - 拖拽中更新十字线位置
+    if (activeTool === 'setOrigin' && isSettingOrigin) {
+        const { x, y } = getImageCoordinates(e);
+        setTempOrigin({ x, y });
+    } 
+    else if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
         const { x, y } = getImageCoordinates(e);
         setCalibrateLine({ ...calibrateLine, x2: x, y2: y });
     } else if (isPanning) {
@@ -332,20 +404,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
+    //  设置原点 - 松开鼠标确认
+    if (activeTool === 'setOrigin' && isSettingOrigin && tempOrigin) {
+        setIsSettingOrigin(false);
+        // 计算并保存最终坐标
+        const trueCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+        setOriginPoint(trueCoords);
+        message.success(`坐标原点已设置: (${trueCoords.x}, ${trueCoords.y})`);
+        
+        // 关键：清空 tempOrigin，从而在渲染时“擦除”十字线
+        setTempOrigin(null);
+        setActiveTool('pan'); // 退出工具
+    }
+    else if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
         setIsCalibrating(false);
-        // 计算像素距离
         const dx = calibrateLine.x2 - calibrateLine.x1;
         const dy = calibrateLine.y2 - calibrateLine.y1;
         const dist = Math.sqrt(dx*dx + dy*dy);
         
-        // 如果划线长度有效（防止误触）
         if (dist > 5) {
             setMeasuredPixelDistance(parseFloat(dist.toFixed(2)));
             setCalibrateModalVisible(true);
-            setActualLength(null); // 清空上次输入
+            setActualLength(null); 
         } else {
-            setCalibrateLine(null); // 清除无效线
+            setCalibrateLine(null); 
         }
     } else if (isPanning) {
         setIsPanning(false);
@@ -356,24 +438,23 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const handleMouseLeaveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
       if (isPanning) setIsPanning(false);
+      if (activeTool === 'setOrigin') setIsSettingOrigin(false); // 意外移出取消
       handlers.onMouseLeave && (handlers.onMouseLeave as any)(e);
   };
 
-  //  确认标定逻辑
   const handleCalibrateConfirm = () => {
     if (actualLength && measuredPixelDistance > 0) {
-        const ratio = actualLength / measuredPixelDistance; // mm per pixel
+        const ratio = actualLength / measuredPixelDistance; 
         setPixelRatio(parseFloat(ratio.toFixed(4)));
         message.success(`标定成功：1px ≈ ${ratio.toFixed(4)}mm`);
         setCalibrateModalVisible(false);
         setCalibrateLine(null);
-        setActiveTool('pan'); // 标定完成后自动切回平移，也可保持
+        setActiveTool('pan'); 
     } else {
         message.warning('请输入有效的实际长度');
     }
   };
 
-  // 分页后的文件列表
   const paginatedFiles = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return files.slice(start, start + pageSize);
@@ -390,18 +471,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       form.setFieldsValue({
         PlateQuality: selectedFile.PlateQuality || "一级",
       });
-      // 切换图片时重置所有状态
       resetWindow();
       setScale(1);
       setRotation(0);
       setFlipH(1);
       setFlipV(1);
       setPosition({ x: 0, y: 0 }); 
-      setCalibrateLine(null); // 清除标定线
+      setCalibrateLine(null);
+      setOriginPoint(null); // 切换文件重置原点
+      setTempOrigin(null);  // 重置临时原点
     }
   }, [selectedFile, form, resetWindow]);
 
-  // 全选/反选
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedIds(new Set(files.map(f => f.TaskFileId)));
@@ -410,7 +491,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
-  // 单选
   const handleSelectOne = (id: string, checked: boolean) => {
     const newSelected = new Set(selectedIds);
     if (checked) newSelected.add(id);
@@ -418,7 +498,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setSelectedIds(newSelected);
   };
 
-  // 批量确认
   const handleBatchConfirm = async () => { 
     if (selectedIds.size === 0) {
       message.warning("请先选择要确认的文件");
@@ -433,7 +512,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       console.error(err);
     }
   };
-  //负片
+
   const [isNegative, setIsNegative] = useState(false);
 
   const handleSave = async () => {
@@ -461,9 +540,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
-    // 计算比率传给 Ruler
   const widthRatio = (originalSize.w > 0 && imgSize.w > 0) ? (originalSize.w / imgSize.w) : 1;
   const heightRatio = (originalSize.h > 0 && imgSize.h > 0) ? (originalSize.h / imgSize.h) : 1;
+
+  //  用于顶部显示的实时坐标：如果是拖拽中，显示临时坐标；否则显示已确定的原点
+  const displayOrigin = useMemo(() => {
+    if (activeTool === 'setOrigin' && tempOrigin) {
+        return calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+    }
+    return originPoint || { x: 0, y: 0 };
+  }, [activeTool, tempOrigin, originPoint, originalSize, imgSize]);
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
@@ -629,7 +715,24 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip>
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="设置坐标原点"><Button type="text" ghost icon={<img src="/mouse-pointer-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip>
+            {/* 坐标原点设置按钮 */}
+            <Tooltip title="设置坐标原点">
+              <Button 
+                type={activeTool === 'setOrigin' ? 'primary' : 'text'}
+                ghost={activeTool !== 'setOrigin'}
+                onClick={() => {
+                   // 切换模式时重置状态
+                   if (activeTool !== 'setOrigin') {
+                     setTempOrigin(null);
+                     setIsSettingOrigin(false);
+                   }
+                   setActiveTool(activeTool === 'setOrigin' ? 'pan' : 'setOrigin')
+                }}
+                icon={<img src="/mouse-pointer-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} 
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'setOrigin' ? '#1890ff' : 'transparent' }} 
+              />
+            </Tooltip>
+            
             <Tooltip title="测量距离">
               <Button
                 type={activeTool === 'measure' ? 'primary' : 'text'}
@@ -648,7 +751,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
           
           <Space size={8}>
-            {/*  尺寸定标按钮：添加交互逻辑和激活样式 */}
             <Button 
               type={activeTool === 'calibrate' ? 'primary' : 'text'}
               ghost={activeTool !== 'calibrate'}
@@ -666,7 +768,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               尺寸定标
             </Button>
             
-            {/*  1px = X mm 显示区域：动态更新 */}
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <LinkOutlined style={{ transform: 'rotate(-45deg)', marginRight: 4 }} />
               <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
@@ -677,20 +778,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               </div>
             </div>
 
+            {/* 动态显示坐标原点: 拖拽时显示动态值，否则显示已确定的值 */}
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <AimOutlined style={{ color: '#1890ff', marginRight: 4 }} />
               <div style={{ textAlign: 'left', lineHeight: 1.1 }}>
                 <div>原点:</div>
-                <div style={{ color: '#fff' }}>(0, 0)</div>
+                <div style={{ color: '#fff' }}>
+                    ({displayOrigin.x}, {displayOrigin.y})
+                </div>
               </div>
             </div>
 
-            <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
-              <div style={{ textAlign: 'left', lineHeight: 1.1 }}>
-                <div>400 |</div>
-                <div>窗位: 128</div>
-              </div>
-            </div>
           </Space>
         </div>
 
@@ -752,7 +850,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     maxWidth: "100%", 
                     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                     display: 'block',
-                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate') ? 'none' : 'auto',
+                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin') ? 'none' : 'auto',
                     filter: isNegative ? 'invert(100%)' : 'none'
                   }}
                 />
@@ -769,6 +867,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                      pointerEvents: 'none',
                      zIndex: 10
                    }} />
+                 )}
+
+                 {/* 坐标原点十字线：仅在设置原点模式且正在拖动(有tempOrigin)时显示 */}
+                 {activeTool === 'setOrigin' && tempOrigin && (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
+                        {/* 竖线 */}
+                        <line 
+                            x1={tempOrigin.x} y1={0} 
+                            x2={tempOrigin.x} y2="100%" 
+                            stroke="#f5222d" strokeWidth={1/scale}
+                        />
+                        {/* 横线 */}
+                        <line 
+                            x1={0} y1={tempOrigin.y} 
+                            x2="100%" y2={tempOrigin.y} 
+                            stroke="#f5222d" strokeWidth={1/scale}
+                        />
+                         {/* 坐标轴标记 x */}
+                         <text 
+                            x={tempOrigin.x + 10} 
+                            y={tempOrigin.y - 6} 
+                            fill="#f5222d" fontSize={12/scale} 
+                            style={{ userSelect: 'none' }}
+                        >x</text>
+                        {/* 坐标轴标记 y */}
+                        <text 
+                            x={tempOrigin.x + 6} 
+                            y={tempOrigin.y + 14} 
+                            fill="#f5222d" fontSize={12/scale} 
+                            style={{ userSelect: 'none' }}
+                        >y</text>
+                    </svg>
                  )}
 
                 {/*标定线绘制层 */}
@@ -799,8 +929,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   imageUrl={previewUrl}
                   width={imgSize.w}
                   height={imgSize.h}
-                  pixelRatio={pixelRatio} //  使用动态比率
-                  scale={scale} 
+                  pixelRatio={pixelRatio} 
+                  scale={scale}
+                  //  将旋转和翻转参数传递给测量工具，以便其内部计算逆变换
+                  rotation={rotation}
+                  flipH={flipH}
+                  flipV={flipV}
                   container={canvasContainer} 
                 />
               </div>
@@ -957,7 +1091,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </div>
           <div style={{ marginBottom: 16 }}>当前坐标: (120, 340)</div>
           <div style={{ borderTop: '1px solid #303030', paddingTop: 16, color: '#8c8c8c', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            底片评分系统 | 当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : '平移'}
+            底片评分系统 | 当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : '平移'}
             </div>
           </div>
       </Sider>

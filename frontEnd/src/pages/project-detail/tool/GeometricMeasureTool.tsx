@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react'; // [修改] 引入 useEffect
 import ReactDOM from 'react-dom';
 
 interface GeometricMeasureToolProps {
@@ -8,6 +8,9 @@ interface GeometricMeasureToolProps {
   height: number;
   pixelRatio?: number;
   scale?: number;
+  rotation?: number; 
+  flipH?: number;    
+  flipV?: number;    
   container?: HTMLDivElement | null;
 }
 
@@ -18,6 +21,9 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
   height,
   pixelRatio = 1,
   scale = 1,
+  rotation = 0, 
+  flipH = 1,    
+  flipV = 1,    
   container, 
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -27,13 +33,42 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
   const MAGNIFIER_SIZE = 150; 
   const ZOOM_SCALE = 3;       
 
+  //  监听 visible 变化，当工具关闭时，重置所有状态
+  useEffect(() => {
+    if (!visible) {
+      setStartPoint(null);
+      setCurrPoint(null);
+      setIsDragging(false);
+    }
+  }, [visible]);
+
+  // 计算真实的图像坐标
   const getCoordinate = (e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    
+    // 1. 获取元素中心点
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    // 2. 计算鼠标相对于中心的偏移量
+    const dx = e.clientX - centerX;
+    const dy = e.clientY - centerY;
+
+    // 3. 逆变换顺序：先逆缩放/翻转 -> 再逆旋转
+    const unscaledX = dx * flipH / scale;
+    const unscaledY = dy * flipV / scale;
+
+    const rad = -rotation * (Math.PI / 180);
+    const rotatedX = unscaledX * Math.cos(rad) - unscaledY * Math.sin(rad);
+    const rotatedY = unscaledX * Math.sin(rad) + unscaledY * Math.cos(rad);
+
+    // 4. 将原点从中心移回左上角
+    const finalX = rotatedX + width / 2;
+    const finalY = rotatedY + height / 2;
+
     return {
-      x: Math.max(0, Math.min(width, x)),
-      y: Math.max(0, Math.min(height, y))
+      x: Math.max(0, Math.min(width, finalX)),
+      y: Math.max(0, Math.min(height, finalY))
     };
   };
 
@@ -72,16 +107,38 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
     };
   }, [startPoint, currPoint, pixelRatio]);
 
+  // 文字位置计算
+  const textLayout = useMemo(() => {
+    if (!currPoint) return null;
+
+    const screenOffsetX = 15;
+    const screenOffsetY = 5;
+
+    // 1. 先逆缩放 & 逆翻转
+    const unscaledOffsetX = screenOffsetX * flipH / scale;
+    const unscaledOffsetY = screenOffsetY * flipV / scale;
+
+    // 2. 再逆旋转
+    const rad = -rotation * (Math.PI / 180);
+    const localOffsetX = unscaledOffsetX * Math.cos(rad) - unscaledOffsetY * Math.sin(rad);
+    const localOffsetY = unscaledOffsetX * Math.sin(rad) + unscaledOffsetY * Math.cos(rad);
+
+    const tx = currPoint.x + localOffsetX;
+    const ty = currPoint.y + localOffsetY;
+
+    const transformStr = `rotate(${-rotation}, ${tx}, ${ty}) translate(${tx}, ${ty}) scale(${flipH}, ${flipV}) translate(${-tx}, ${-ty})`;
+
+    return { x: tx, y: ty, transform: transformStr };
+  }, [currPoint, rotation, flipH, flipV, scale]);
+
   if (!visible) return null;
 
   const portalTarget = container || document.body;
 
-  // 2. 动态计算样式
-  const magnifierStyle: React.CSSProperties = container ? {
-    // 方案 A：成功获取到容器
-    position: 'absolute', // 相对于父容器(灰色背景)定位
-    left: 10,  
-    top: 10,   
+  const magnifierStyle: React.CSSProperties = {
+    position: container ? 'absolute' : 'fixed', 
+    left: container ? 10 : 310,  
+    top: container ? 10 : 58,   
     width: MAGNIFIER_SIZE,
     height: MAGNIFIER_SIZE,
     border: '2px solid #fff',
@@ -91,19 +148,6 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
     boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
     zIndex: 9999,
     pointerEvents: 'none', 
-  } : {
-    // 方案 B：未获取到容器（降级方案，防止报错）
-    position: 'fixed', 
-    left: 310, 
-    top: 58,   
-    width: MAGNIFIER_SIZE,
-    height: MAGNIFIER_SIZE,
-    border: '2px solid #fff',
-    borderRadius: '4px',
-    overflow: 'hidden',
-    backgroundColor: '#000',
-    zIndex: 9999, 
-    pointerEvents: 'none',
   };
 
   return (
@@ -129,22 +173,23 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
               stroke="red" 
               strokeWidth={1.5 / scale} 
             />
-            {/* 十字准星装饰线 */}
+            {/* 十字准星 */}
             <line x1={startPoint.x - 4 / scale} y1={startPoint.y} x2={startPoint.x + 4 / scale} y2={startPoint.y} stroke="red" strokeWidth={1 / scale} />
             <line x1={startPoint.x} y1={startPoint.y - 4 / scale} x2={startPoint.x} y2={startPoint.y + 4 / scale} stroke="red" strokeWidth={1 / scale} />
             <line x1={currPoint.x - 4 / scale} y1={currPoint.y} x2={currPoint.x + 4 / scale} y2={currPoint.y} stroke="red" strokeWidth={1 / scale} />
             <line x1={currPoint.x} y1={currPoint.y - 4 / scale} x2={currPoint.x} y2={currPoint.y + 4 / scale} stroke="red" strokeWidth={1 / scale} />
             
-            {measureData && (
+            {measureData && textLayout && (
               <text 
-                x={currPoint.x + 15 / scale} 
-                y={currPoint.y + 5 / scale} 
+                x={textLayout.x} 
+                y={textLayout.y} 
                 fill="red" 
                 fontSize={12 / scale} 
                 style={{ textShadow: '1px 1px 2px #000' }}
+                transform={textLayout.transform}
               >
-                <tspan x={currPoint.x + 15 / scale} dy={-1.2 * (12 / scale) + "px"}>长度: {measureData.length}mm</tspan>
-                <tspan x={currPoint.x + 15 / scale} dy={2.4 * (12 / scale) + "px"}>角度: {measureData.angle}°</tspan>
+                <tspan x={textLayout.x} dy={-1.2 * (12 / scale) + "px"}>长度: {measureData.length}mm</tspan>
+                <tspan x={textLayout.x} dy={2.4 * (12 / scale) + "px"}>角度: {measureData.angle}°</tspan>
               </text>
             )}
           </>
@@ -159,16 +204,13 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
               width: '100%', height: '100%',
               backgroundImage: `url(${imageUrl})`,
               backgroundRepeat: 'no-repeat',
-              // 背景图大小需要根据缩放比例计算
               backgroundSize: `${width * ZOOM_SCALE}px ${height * ZOOM_SCALE}px`,
-              // 背景图位置：让当前鼠标点对应的图像位置居中显示
               backgroundPosition: `
                 ${-currPoint.x * ZOOM_SCALE + MAGNIFIER_SIZE / 2}px 
                 ${-currPoint.y * ZOOM_SCALE + MAGNIFIER_SIZE / 2}px
               `,
             }}
           />
-          {/* 放大镜中心的红色十字线 */}
           <div style={{ position: 'absolute', top: '50%', left: 0, width: '100%', height: 1, background: 'rgba(255,0,0,0.5)' }} />
           <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(255,0,0,0.5)' }} />
         </div>,
