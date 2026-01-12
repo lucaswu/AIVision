@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Row,
   Col,
@@ -19,6 +19,7 @@ import {
   Progress,
   Tooltip,
   Pagination,
+  Slider,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -56,6 +57,10 @@ import {
 import { useRequest } from "ahooks";
 import { reportAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report } from "../../utils/data";
+import GeometricMeasureTool from './tool/GeometricMeasureTool';
+// [修复 1] 移除不存在的 WindowLevelSVGFilter
+import { useWindowLevelTool } from './tool/WindowLevelTool'; 
+import Ruler from './tool/Ruler';
 
 const { Content, Sider } = Layout;
 const { Title, Text, Link } = Typography;
@@ -81,6 +86,31 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const pageSize = 10;
   const [form] = Form.useForm();
 
+  // 记录当前激活的工具
+  const [activeTool, setActiveTool] = useState<string>('pan'); 
+  
+  // 图片变换状态
+  const [scale, setScale] = useState(1); 
+  const [rotation, setRotation] = useState(0); 
+  const [flipH, setFlipH] = useState(1);       
+  const [flipV, setFlipV] = useState(1);       
+  // 图片平移位置
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  // 平移交互状态
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+
+  // 标尺相关状态
+  const imageWrapperRef = useRef<HTMLDivElement>(null);
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const [originalSize, setOriginalSize] = useState({ w: 0, h: 0 }); // 原始尺寸
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });       // 鼠标坐标
+  const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 }); 
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 }); 
+  const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null);
+
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
   const report = reportResp?.Data;
@@ -93,9 +123,205 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   } = useRequest(() => reportAPI.getReportFiles(taskId));
   const files = filesResp?.Data || [];
 
+  // 计算图片URL
+  const previewUrl = selectedFile 
+    ? `/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`
+    : '';
+
+  // 计算图片位置偏移 (用于标尺)
+  const updateImageOffset = (_e?: any) => {
+    if (imageWrapperRef.current && canvasContainer) {
+      const imgRect = imageWrapperRef.current.getBoundingClientRect();
+      const containerRect = canvasContainer.getBoundingClientRect();
+      
+      setImageOffset({
+        x: imgRect.left - containerRect.left,
+        y: imgRect.top - containerRect.top
+      });
+      setContainerSize({
+        w: containerRect.width,
+        h: containerRect.height
+      });
+    }
+  };
+
+  // 监听 wrapper 尺寸变化 (替代 img.onLoad 的 clientWidth)
+  useEffect(() => {
+    if (!imageWrapperRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        setImgSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+      }
+      updateImageOffset();
+    });
+    observer.observe(imageWrapperRef.current);
+    return () => observer.disconnect();
+  }, [imageWrapperRef.current]);
+
+  // 监听键盘空格键
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        // 防止空格键滚动页面
+        e.preventDefault(); 
+        setIsSpacePressed(true);
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpacePressed(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  // 监听变换以更新标尺
+  useEffect(() => {
+    updateImageOffset();
+    window.addEventListener('resize', updateImageOffset);
+    return () => window.removeEventListener('resize', updateImageOffset);
+  }, [scale, rotation, flipH, flipV, imgSize, selectedFile, position]);
+
+  // 鼠标滚轮事件处理函数
+  const handleWheel = (e: React.WheelEvent) => {
+    const step = 0.1;
+    const delta = e.deltaY > 0 ? -step : step;
+    let newScale = scale + delta;
+    newScale = Math.max(0.1, Math.min(5, newScale));
+    newScale = parseFloat(newScale.toFixed(1));
+    setScale(newScale);
+  };
+
   const confirmedCount = files.filter(f => f.ReviewStatus === "CONFIRMED").length;
   const unconfirmedCount = files.length - confirmedCount;
   const progressPercent = files.length > 0 ? Math.round((confirmedCount / files.length) * 100) : 0;
+
+  // [修复 2] Window Level Tool Hook - 使用新的API
+  // 注意：新实现需要File对象而非URL
+  const [imageFile, setImageFile] = useState<File | undefined>(undefined);
+  
+  const { 
+    selectionRect, 
+    canvasRef, // Canvas 引用（不再有 imgRef）
+    handlers, 
+    resetWindow,
+    windowWidth,
+    windowLevel,
+    setManualWindowLevel,
+    imageStats  // 新增：图像统计信息
+  } = useWindowLevelTool({ 
+    activeTool, 
+    scale,
+    imageFile: imageFile // 传入File对象
+  });
+  
+  // 当选择文件变化时，加载图像文件
+  useEffect(() => {
+    if (!selectedFile || !previewUrl) {
+      setImageFile(undefined);
+      return;
+    }
+    
+    // 从URL加载图像并转换为File对象
+    fetch(previewUrl)
+      .then(res => res.blob())
+      .then(blob => {
+        const file = new File([blob], selectedFile.FileName || 'image.png', { 
+          type: blob.type || 'image/png' 
+        });
+        setImageFile(file);
+      })
+      .catch(err => {
+        console.error('Failed to load image:', err);
+        message.error('图像加载失败');
+      });
+  }, [selectedFile, previewUrl]);
+  
+  // 从canvas获取原始图像尺寸
+  useEffect(() => {
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      if (canvas.width > 0 && canvas.height > 0) {
+        setOriginalSize({ w: canvas.width, h: canvas.height });
+      }
+    }
+  }, [canvasRef.current?.width, canvasRef.current?.height, imageFile]);
+
+  // 鼠标样式逻辑
+  let cursorStyle = 'default';
+  if (isPanning) {
+    cursorStyle = 'grabbing';
+  } else if (isSpacePressed || activeTool === 'pan') {
+    cursorStyle = 'grab';
+  } else if (activeTool === 'windowing') {
+    cursorStyle = 'crosshair';
+  } else if (activeTool === 'measure') {
+    cursorStyle = 'crosshair';
+  }
+
+  // 坐标追踪
+  const handleMouseMoveTracker = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!imageWrapperRef.current || imgSize.w === 0 || originalSize.w === 0) return;
+    const rect = imageWrapperRef.current.getBoundingClientRect();
+    const rawX = (e.clientX - rect.left) / scale;
+    const rawY = (e.clientY - rect.top) / scale;
+    const ratioX = originalSize.w / imgSize.w;
+    const ratioY = originalSize.h / imgSize.h;
+    const trueX = Math.floor(rawX * ratioX);
+    const trueY = Math.floor(rawY * ratioY);
+    const clampedX = Math.max(0, Math.min(originalSize.w, trueX));
+    const clampedY = Math.max(0, Math.min(originalSize.h, trueY));
+    setMousePos({ x: clampedX, y: clampedY });
+  };
+
+  // 鼠标事件包装器
+  const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    const isPanMode = isSpacePressed || activeTool === 'pan';
+    
+    if (isPanMode) {
+        setIsPanning(true);
+        setPanStart({ 
+            x: e.clientX - position.x, 
+            y: e.clientY - position.y 
+        });
+        e.preventDefault(); 
+    } else {
+        handlers.onMouseDown && (handlers.onMouseDown as any)(e);
+    }
+  };
+
+  const handleMouseMoveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    handleMouseMoveTracker(e);
+
+    if (isPanning) {
+        const newX = e.clientX - panStart.x;
+        const newY = e.clientY - panStart.y;
+        setPosition({ x: newX, y: newY });
+    } else {
+        handlers.onMouseMove && (handlers.onMouseMove as any)(e);
+    }
+  };
+
+  const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isPanning) {
+        setIsPanning(false);
+    } else {
+        handlers.onMouseUp && (handlers.onMouseUp as any)(e);
+    }
+  };
+
+  const handleMouseLeaveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (isPanning) setIsPanning(false);
+      handlers.onMouseLeave && (handlers.onMouseLeave as any)(e);
+  };
+
 
   // 分页后的文件列表
   const paginatedFiles = useMemo(() => {
@@ -114,8 +340,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       form.setFieldsValue({
         PlateQuality: selectedFile.PlateQuality || "一级",
       });
+      // 切换图片时重置所有状态
+      resetWindow();
+      setScale(1);
+      setRotation(0);
+      setFlipH(1);
+      setFlipV(1);
+      setPosition({ x: 0, y: 0 }); // 重置位置
     }
-  }, [selectedFile, form]);
+  }, [selectedFile, form, resetWindow]);
 
   // 全选/反选
   const handleSelectAll = (checked: boolean) => {
@@ -135,7 +368,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   // 批量确认
-  const handleBatchConfirm = async () => {
+  const handleBatchConfirm = async () => { 
     if (selectedIds.size === 0) {
       message.warning("请先选择要确认的文件");
       return;
@@ -150,6 +383,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
+  // 负片
+  const [isNegative, setIsNegative] = useState(false);
+
   // 保存并确认当前文件
   const handleSave = async () => {
     if (!selectedFile) return;
@@ -162,12 +398,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       message.success("保存并确认成功");
       refreshFiles();
       
-      // 自动跳转到下一个未确认的文件
       const currentIndex = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
       if (currentIndex < files.length - 1) {
         const nextFile = files[currentIndex + 1];
         setSelectedFile(nextFile);
-        // 如果跨页了，自动切换页码
         const nextPageIndex = Math.floor((currentIndex + 1) / pageSize) + 1;
         if (nextPageIndex !== currentPage) {
           setCurrentPage(nextPageIndex);
@@ -178,8 +412,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
+  // 计算比率传给 Ruler
+  const widthRatio = (originalSize.w > 0 && imgSize.w > 0) ? (originalSize.w / imgSize.w) : 1;
+  const heightRatio = (originalSize.h > 0 && imgSize.h > 0) ? (originalSize.h / imgSize.h) : 1;
+
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
+      {/* [修复 4] 移除 WindowLevelSVGFilter 组件调用 */}
+
       {/* 左侧文件列表 */}
       <Sider width={300} theme="light" style={{ borderRight: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
@@ -202,21 +442,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <span>文件总数: {files.length}个</span>
               <span>{progressPercent}%</span>
             </div>
-            <Progress percent={progressPercent} size="small" showInfo={false} strokeColor="#52c41a" trailColor="#f0f0f0" />
-            <div style={{ display: 'flex', marginTop: 16, background: '#f8f9fa', borderRadius: '4px', padding: '12px 0' }}>
-              <div style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ color: '#52c41a', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{confirmedCount}</div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>已确认</div>
-              </div>
-              <div style={{ borderLeft: '1px solid #e8e8e8', height: '24px', alignSelf: 'center' }} />
-              <div style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ color: '#faad14', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{unconfirmedCount}</div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>未确认</div>
-              </div>
-            </div>
+             <Progress percent={progressPercent} size="small" showInfo={false} strokeColor="#52c41a" trailColor="#f0f0f0" />
+             <div style={{ display: 'flex', marginTop: 16, background: '#f8f9fa', borderRadius: '4px', padding: '12px 0' }}>
+                <div style={{ textAlign: 'center', flex: 1 }}>
+                  <div style={{ color: '#52c41a', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{confirmedCount}</div>
+                  <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>已确认</div>
+                </div>
+                <div style={{ borderLeft: '1px solid #e8e8e8', height: '24px', alignSelf: 'center' }} />
+                <div style={{ textAlign: 'center', flex: 1 }}>
+                  <div style={{ color: '#faad14', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{unconfirmedCount}</div>
+                  <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>未确认</div>
+                </div>
+             </div>
           </div>
         </div>
-
+        
         <div style={{ padding: "8px 16px", display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f0f0f0' }}>
           <Checkbox 
             checked={selectedIds.size === files.length && files.length > 0} 
@@ -231,7 +471,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </Button>
           )}
         </div>
-        
+
         <div style={{ flex: 1, overflowY: 'auto' }}>
           <List
             loading={filesLoading}
@@ -247,29 +487,29 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   transition: 'all 0.3s'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                  <Checkbox 
-                    checked={selectedIds.has(file.TaskFileId)} 
-                    onChange={(e) => handleSelectOne(file.TaskFileId, e.target.checked)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginRight: 12 }}
-                  />
-                  <Space style={{ flex: 1 }}>
-                    {file.ReviewStatus === "CONFIRMED" ? (
-                      <CheckCircleOutlined style={{ color: "#52c41a" }} />
-                    ) : (
-                      <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #faad14' }} />
-                    )}
-                    <Text ellipsis style={{ width: 160, color: selectedFile?.TaskFileId === file.TaskFileId ? "#1890ff" : "inherit" }}>
-                      {file.FileName}
-                    </Text>
-                  </Space>
-                </div>
+                  <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                    <Checkbox 
+                      checked={selectedIds.has(file.TaskFileId)} 
+                      onChange={(e) => handleSelectOne(file.TaskFileId, e.target.checked)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginRight: 12 }}
+                    />
+                    <Space style={{ flex: 1 }}>
+                      {file.ReviewStatus === "CONFIRMED" ? (
+                        <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                      ) : (
+                        <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #faad14' }} />
+                      )}
+                      <Text ellipsis style={{ width: 160, color: selectedFile?.TaskFileId === file.TaskFileId ? "#1890ff" : "inherit" }}>
+                        {file.FileName}
+                      </Text>
+                    </Space>
+                  </div>
               </List.Item>
             )}
           />
         </div>
-
+        
         <div style={{ padding: '8px', textAlign: 'center', borderTop: '1px solid #f0f0f0' }}>
           <Pagination
             simple
@@ -280,7 +520,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             size="small"
           />
         </div>
-
+        
         <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
           <Button 
             type="primary" 
@@ -288,7 +528,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             size="large"
             icon={<FileTextOutlined />} 
             style={{ height: '48px', borderRadius: '4px' }}
-            onClick={onPreview}
+            //包装 onClick
+            onClick={() => onPreview && onPreview()}
           >
             预览报告
           </Button>
@@ -309,26 +550,55 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           borderBottom: '1px solid #303030'
         }}>
           <Space size={0}>
-            <Tooltip title="重置视图"><Button type="text" ghost icon={<img src="/fullscreen.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="窗宽调整"><Button type="text" ghost icon={<img src="/contrast.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 22, padding: 0 }} /></Tooltip>
-            <Tooltip title="正负片切换"><Button type="text" ghost style={{ color: '#fff', fontSize: '12px', height: 28, padding: '0 8px', background: '#303030', borderRadius: '2px', marginRight: 8 } }>正片</Button></Tooltip>
+
+            <Tooltip title="重置视图">
+              <Button
+                type="text" ghost
+                icon={<img src="/fullscreen.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }}  />}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                onClick={() => {
+                      setScale(1); setRotation(0); setFlipH(1); setFlipV(1);
+                      setPosition({ x: 0, y: 0 });
+                      resetWindow();
+                  }} /></Tooltip>
+
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+            <Tooltip title="窗宽调整">
+              <Button type="text" ghost
+               icon={<img src="/contrast.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                onClick={() => setActiveTool(activeTool === 'windowing' ? 'pan' : 'windowing')}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'windowing' ? '#1890ff' : 'transparent' }}
+              />
+              </Tooltip>
+            <Tooltip title="负片">
+              <Button
+                type={isNegative ? 'primary' : 'text'}
+                ghost={!isNegative}
+                onClick={() => setIsNegative(!isNegative)}
+                icon={<img src="/negative.svg" alt="negative" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isNegative ? '#1890ff' : 'transparent' }} /></Tooltip>
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="缺陷标记"><Button type="text" ghost icon={<img src="/circle-alert.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 22, padding: 0 }} /></Tooltip>
-            <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width:36, height: 22, padding: 0 }} /></Tooltip>
+            <Tooltip title="缺陷标记"><Button type="text" ghost icon={<img src="/circle-alert.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip>
+            <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip>
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="设置坐标原点"><Button type="text" ghost icon={<img src="/mouse-pointer-2.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width:36, height: 22, padding: 0 }} /></Tooltip>
-            <Tooltip title="测量距离"><Button type="text" ghost icon={<img src="/ruler.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }} />} style={{ color: '#fff', width:36, height: 22, padding: 0 }} /></Tooltip>
-    
-            
-            
+            <Tooltip title="设置坐标原点"><Button type="text" ghost icon={<img src="/mouse-pointer-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip>
+            <Tooltip title="测量距离">
+              <Button
+                type={activeTool === 'measure' ? 'primary' : 'text'}
+                ghost={activeTool !== 'measure'}  icon={<img src="/ruler.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                onClick={() => setActiveTool(activeTool === 'measure' ? 'pan' : 'measure')}
+               style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'measure' ? '#1890ff' : 'transparent' }}  /></Tooltip>
+
+
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
-            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 20, height: 20, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0 }} /></Tooltip>
+            <Tooltip title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r - 90)} /></Tooltip>
+            <Tooltip title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 90)} /></Tooltip>
+             <Tooltip title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 180)} /></Tooltip>
+            <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipV(v => v * -1)}/></Tooltip>
+            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }}  />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipH(h => h * -1)}/></Tooltip>
           </Space>
           
           <Space size={8}>
@@ -337,14 +607,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               ghost 
               icon={<ColumnWidthOutlined />} 
               style={{ 
-                color: '#fff', 
-                fontSize: '12px', 
-                height: 28, 
-                padding: '0 12px', 
-                background: '#303030', 
-                borderRadius: '4px',
-                display: 'flex',
-                alignItems: 'center'
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px', background: '#303030', borderRadius: '4px', display: 'flex', alignItems: 'center'
               }}
             >
               尺寸定标
@@ -375,113 +638,173 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
         </div>
 
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#e9ecef' }}>
-          {selectedFile ? (
-            <div style={{ position: "relative" }}>
-              <img 
-                src={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
-                alt="preview" 
-                style={{ maxHeight: "calc(100vh - 280px)", maxWidth: "100%", boxShadow: "0 8px 24px rgba(0,0,0,0.2)" }} 
-              />
-              {/* 模拟标注框 */}
-              {JSON.parse(selectedFile.VisionResult || '{"results":[]}').results.map((item: any, i: number) => {
-                // 模拟位置，实际应从 item.vvContour 计算
-                const left = 20 + i * 20;
-                const top = 30 + i * 10;
-                return (
-                  <div key={i} style={{ position: "absolute", top: `${top}%`, left: `${left}%`, width: "100px", height: "100px", border: "2px solid #ff4d4f", pointerEvents: "none" }}>
-                    <span style={{ position: "absolute", top: -22, left: -2, background: '#ff4d4f', color: '#fff', fontSize: '11px', padding: '1px 6px', borderRadius: '2px' }}>
-                      {item.strName} {(item.score * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <Empty description="请从左侧选择图片开始审核" />
-          )}
-          
-          <div style={{ position: 'absolute', bottom: 12, right: 12, background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 12px', borderRadius: '4px', fontSize: '12px' }}>
-            缩放: 100%
+        {/* 图片容器：Grid 布局 */}
+        <div style={{ 
+            flex: 1, 
+            position: 'relative', 
+            overflow: 'hidden', 
+            background: '#262626', 
+            display: 'grid', 
+            gridTemplateColumns: '20px 1fr', 
+            gridTemplateRows: '20px 1fr',
+          }}
+        >
+          {/* 左上角单位 */}
+          <div style={{ background: '#1f1f1f', color: '#8c8c8c', fontSize: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid #303030', borderRight: '1px solid #303030', zIndex: 20 }}>
+             PX
           </div>
 
-          {/* 底部专业控制栏 */}
-          {selectedFile && (
-            <div style={{ 
-              position: 'absolute', 
-              bottom: 24, 
-              left: '50%', 
-              transform: 'translateX(-50%)', 
-              background: '#fff', 
-              padding: '8px 24px', 
-              borderRadius: '8px', 
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '24px',
-              border: '1px solid #e8e8e8'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Button 
-                  type="text" 
-                  icon={<LeftOutlined />} 
-                  onClick={() => {
-                    const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
-                    if (idx > 0) setSelectedFile(files[idx - 1]);
-                  }} 
-                  disabled={files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) === 0}
-                  style={{ color: '#8c8c8c' }}
-                >
-                  上一个
-                </Button>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', padding: '0 12px', whiteSpace: 'nowrap', minWidth: '60px', justifyContent: 'center' }}>
-                  <Text strong style={{ fontSize: '16px' }}>{files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) + 1}</Text>
-                  <Text type="secondary" style={{ fontSize: '12px', margin: '0 2px' }}>/</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>{files.length}</Text>
+          {/* 顶部标尺 */}
+          <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
+             <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={widthRatio} maxImageSize={originalSize.w}/>
+          </div>
+
+          {/* 左侧标尺 */}
+          <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
+             <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={heightRatio} maxImageSize={originalSize.h}/>
+          </div>
+
+          {/* 图片视口 */}
+          <div 
+             ref={setCanvasContainer}
+             style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            {selectedFile ? (
+              <div 
+                ref={imageWrapperRef} 
+                onWheel={handleWheel}
+                
+                onMouseDown={handleMouseDownWrapper}
+                onMouseMove={handleMouseMoveWrapper}
+                onMouseUp={handleMouseUpWrapper}
+                onMouseLeave={handleMouseLeaveWrapper}
+
+                style={{ 
+                  position: "relative", 
+                  display: 'inline-block',
+                  transform: `translate(${position.x}px, ${position.y}px) scale(${scale * flipH}, ${scale * flipV}) rotate(${rotation}deg)`,
+                  transformOrigin: 'center center',
+                  transition: 'none', 
+                  cursor: cursorStyle
+                }}
+                onTransitionEnd={() => updateImageOffset()} 
+              >
+                {/* [修复 5] Canvas 显示层 (不再需要隐藏的img标签) */}
+                <canvas
+                  ref={canvasRef}
+                  style={{
+                    maxHeight: "calc(100vh - 280px)", 
+                    maxWidth: "100%", 
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                    display: 'block',
+                    userSelect: activeTool === 'measure' ? 'none' : 'auto',
+                    filter: isNegative ? 'invert(100%)' : 'none'
+                  }}
+                />
+
+                {selectionRect && (
+                   <div style={{
+                     position: 'absolute',
+                     border: '2px dashed #ff4d4f',
+                     backgroundColor: 'rgba(255, 77, 79, 0.2)',
+                     left: selectionRect.left,
+                     top: selectionRect.top,
+                     width: selectionRect.width,
+                     height: selectionRect.height,
+                     pointerEvents: 'none',
+                     zIndex: 10
+                   }} />
+                 )}
+
+                <GeometricMeasureTool
+                  visible={activeTool === 'measure'} 
+                  imageUrl={previewUrl}
+                  width={imgSize.w}
+                  height={imgSize.h}
+                  pixelRatio={0.26}
+                  scale={scale} 
+                  container={canvasContainer} 
+                />
+              </div>
+            ) : (
+              <Empty description="请从左侧选择图片开始审核" />
+            )}
+            
+            {/* 窗宽窗位 Slider 控制条 */}
+            {selectedFile && (
+              <div style={{ 
+                position: 'absolute', bottom: 0, left: 0, right: 0,
+                background: 'rgba(38, 38, 38, 0.85)', padding: '4px 24px', 
+                display: 'flex', alignItems: 'center', gap: '32px',
+                borderTop: '1px solid #434343', height: '40px', zIndex: 100 
+              }}>
+                  <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                    <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗宽: {windowWidth}</span>
+                  <Slider 
+                    min={1} max={512} value={windowWidth}
+                    onChange={(val) => setManualWindowLevel(val, windowLevel)}
+                    style={{ flex: 1, margin: 0 }}
+                    trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
+                  />
+                  </div>
+                  <div style={{ width: 1, height: 16, background: '#595959' }}></div>
+                  <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                    <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗位: {windowLevel}</span>
+                  <Slider 
+                    min={0} max={255} value={windowLevel}
+                    onChange={(val) => setManualWindowLevel(windowWidth, val)}
+                    style={{ flex: 1, margin: 0 }}
+                    trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
+                  />
+                  </div>
+                  <div style={{ color: '#8c8c8c', fontSize: '12px', marginLeft: '12px' }}>缩放: {Math.round(scale * 100)}%</div>
+               </div>
+            )}
+
+            {/* 底部悬浮操作栏 */}
+             {selectedFile && (
+              <div style={{ 
+                position: 'absolute', bottom: 50, left: '50%', transform: 'translateX(-50%)', 
+                background: '#fff', padding: '8px 24px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                display: 'flex', alignItems: 'center', gap: '24px', border: '1px solid #e8e8e8', zIndex: 90
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Button type="text" icon={<LeftOutlined />} onClick={() => {
+                      const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
+                      if (idx > 0) setSelectedFile(files[idx - 1]);
+                    }} disabled={files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) === 0} style={{ color: '#8c8c8c' }}>上一个</Button>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', padding: '0 12px', whiteSpace: 'nowrap', minWidth: '60px', justifyContent: 'center' }}>
+                    <Text strong style={{ fontSize: '16px' }}>{files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) + 1}</Text>
+                    <Text type="secondary" style={{ fontSize: '12px', margin: '0 2px' }}>/</Text>
+                    <Text type="secondary" style={{ fontSize: '12px' }}>{files.length}</Text>
+                  </div>
+                  <Button type="text" onClick={() => {
+                      const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
+                      if (idx < files.length - 1) setSelectedFile(files[idx + 1]);
+                    }} disabled={files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) === files.length - 1} style={{ color: '#1890ff' }}>下一个 <RightOutlined /></Button>
                 </div>
-                <Button 
-                  type="text" 
-                  onClick={() => {
-                    const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
-                    if (idx < files.length - 1) setSelectedFile(files[idx + 1]);
-                  }} 
-                  disabled={files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) === files.length - 1}
-                  style={{ color: '#1890ff' }}
-                >
-                  下一个 <RightOutlined />
-                </Button>
+                <Divider type="vertical" style={{ height: '24px' }} />
+                <Button type="primary" onClick={handleSave} style={{ borderRadius: '4px', height: '36px', padding: '0 20px', background: '#1890ff' }} icon={<SaveOutlined />}>保存并确认</Button>
               </div>
-              
-              <Divider type="vertical" style={{ height: '24px' }} />
-              
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <Button 
-                  type="primary" 
-                  onClick={handleSave}
-                  style={{ borderRadius: '4px', height: '36px', padding: '0 20px', background: '#1890ff' }}
-                  icon={<SaveOutlined />}
-                >
-                  保存并确认
-                </Button>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
         
         {/* 底部状态条 */}
         <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
-          底片评分系统 | 当前工具: 平移 | 坐标: (120, 340) | 缩放: 100%
+          {/* 显示图像尺寸和实时鼠标坐标 */}
+          图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y}
         </div>
       </Content>
 
       {/* 右侧审核信息 */}
       <Sider width={300} theme="dark" style={{ borderLeft: "1px solid #303030", display: 'flex', flexDirection: 'column', background: '#1f1f1f' }}>
-        <div style={{ flex: 1, padding: '40px 16px 20px 16px', overflowY: 'auto' }}>
+          <div style={{ flex: 1, padding: '40px 16px 20px 16px', overflowY: 'auto' }}>
           <Space direction="vertical" style={{ width: '100%' }} size={32}>
             <div>
-              <Title level={5} style={{ marginBottom: 16, fontSize: '14px', color: '#fff', fontWeight: 'normal' }}>缺陷信息</Title>
+            <Title level={5} style={{ marginBottom: 16, fontSize: '14px', color: '#fff', fontWeight: 'normal' }}>缺陷信息</Title>
               <div style={{ minHeight: 120 }}>
-                <List
+            <List
                   size="small"
                   dataSource={JSON.parse(selectedFile?.VisionResult || '{"results":[]}').results}
                   renderItem={(item: any, idx: number) => (
@@ -551,14 +874,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
         <div style={{ background: '#141414', padding: '24px 16px', fontSize: '12px', color: '#8c8c8c', borderTop: '1px solid #303030' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span>窗宽: 400</span>
-            <span>窗位: 128</span>
+            <span>窗宽: {windowWidth}</span>
+            <span>窗位: {windowLevel}</span>
           </div>
           <div style={{ marginBottom: 16 }}>当前坐标: (120, 340)</div>
           <div style={{ borderTop: '1px solid #303030', paddingTop: 16, color: '#8c8c8c', display: 'flex', alignItems: 'center', gap: '8px' }}>
             底片评分系统 | 当前工具: 平移
+            </div>
           </div>
-        </div>
       </Sider>
     </Layout>
   );
@@ -571,5 +894,3 @@ const isSevere = (type: string) => {
 };
 
 export default ReportEditorPage;
-
-
