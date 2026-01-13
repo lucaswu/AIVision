@@ -546,13 +546,23 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
     };
     const node = info.node.data as FileTreeNode;
     
-    // 如果是勾选
+    // Antd Tree check 事件的特殊处理：当选中目录时，Antd 可能只返回目录被选中，也可能返回子节点被选中
+    // 这里我们简单处理：如果是目录被操作，更新目录；如果是文件被操作，更新文件
+    // 关键修复：防止重复添加，和目录/文件混淆
+    
     if (info.checked) {
-      if (node.Type === 'directory') newSelected.directories.set(node.Id, node.Name);
-      else newSelected.files.set(node.Id, node.Name);
+      if (node.Type === 'directory') {
+        newSelected.directories.set(node.Id, node.Name);
+        // 选中目录时，可以选择不同时选中其下的文件，避免重复计数
+      } else {
+        newSelected.files.set(node.Id, node.Name);
+      }
     } else {
-      if (node.Type === 'directory') newSelected.directories.delete(node.Id);
-      else newSelected.files.delete(node.Id);
+      if (node.Type === 'directory') {
+        newSelected.directories.delete(node.Id);
+      } else {
+        newSelected.files.delete(node.Id);
+      }
     }
     
     setSelectedItems(newSelected);
@@ -627,6 +637,7 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
               ) : treeData.length > 0 ? (
                 <Tree
                   checkable
+                  checkStrictly={true}
                   treeData={treeData}
                   onCheck={handleCheck}
                   checkedKeys={[...Array.from(selectedItems.files.keys()), ...Array.from(selectedItems.directories.keys())]}

@@ -51,6 +51,7 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
         projectId={projectId}
         projectName={projectName || "项目"}
         onBack={handleBack}
+        onReview={() => setView("editor")}
       />
     );
   }

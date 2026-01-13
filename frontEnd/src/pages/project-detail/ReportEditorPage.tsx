@@ -376,25 +376,76 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#e9ecef' }}>
           {selectedFile ? (
-            <div style={{ position: "relative" }}>
+            <div style={{ position: "relative", display: "inline-block" }}>
               <img 
                 src={`/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
                 alt="preview" 
-                style={{ maxHeight: "calc(100vh - 280px)", maxWidth: "100%", boxShadow: "0 8px 24px rgba(0,0,0,0.2)" }} 
+                style={{ maxHeight: "calc(100vh - 280px)", maxWidth: "100%", boxShadow: "0 8px 24px rgba(0,0,0,0.2)", display: "block" }} 
               />
-              {/* 模拟标注框 */}
-              {JSON.parse(selectedFile.VisionResult || '{"results":[]}').results.map((item: any, i: number) => {
-                // 模拟位置，实际应从 item.vvContour 计算
-                const left = 20 + i * 20;
-                const top = 30 + i * 10;
-                return (
-                  <div key={i} style={{ position: "absolute", top: `${top}%`, left: `${left}%`, width: "100px", height: "100px", border: "2px solid #ff4d4f", pointerEvents: "none" }}>
-                    <span style={{ position: "absolute", top: -22, left: -2, background: '#ff4d4f', color: '#fff', fontSize: '11px', padding: '1px 6px', borderRadius: '2px' }}>
-                      {item.strName} {(item.score * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                );
-              })}
+              {/* 真实标注框渲染 */}
+              {(() => {
+                try {
+                  const result = JSON.parse(selectedFile.VisionResult || '{"results":[]}');
+                  const metaWidth = result.metadata?.width || 1920;
+                  const metaHeight = result.metadata?.height || 1080;
+                  
+                  const elements: JSX.Element[] = [];
+
+                  // 1. 模型预测结果 (红色虚线)
+                  if (result.results) {
+                    result.results.forEach((item: any, i: number) => {
+                      let minX = 0, minY = 0, maxX = 0, maxY = 0;
+                      
+                      if (item.vvContour && item.vvContour.length > 0) {
+                        const xs = item.vvContour.map((p: any) => p[0]);
+                        const ys = item.vvContour.map((p: any) => p[1]);
+                        minX = Math.min(...xs);
+                        minY = Math.min(...ys);
+                        maxX = Math.max(...xs);
+                        maxY = Math.max(...ys);
+                      } else {
+                        return;
+                      }
+
+                      const leftPct = (minX / metaWidth) * 100;
+                      const topPct = (minY / metaHeight) * 100;
+                      const widthPct = ((maxX - minX) / metaWidth) * 100;
+                      const heightPct = ((maxY - minY) / metaHeight) * 100;
+
+                      elements.push(
+                        <div key={`model-${i}`} style={{ 
+                          position: "absolute", 
+                          top: `${topPct}%`, 
+                          left: `${leftPct}%`, 
+                          width: `${widthPct}%`, 
+                          height: `${heightPct}%`, 
+                          border: "1px dashed #ff4d4f", 
+                          pointerEvents: "none" 
+                        }}>
+                          <span style={{ 
+                            position: "absolute", 
+                            top: -22, 
+                            left: -2, 
+                            background: '#ff4d4f', 
+                            color: '#fff', 
+                            fontSize: '11px', 
+                            padding: '1px 6px', 
+                            borderRadius: '2px',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {item.strName} {(item.score * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      );
+                    });
+                  }
+
+                  return elements;
+                } catch (e) {
+                  console.error("Parse vision result failed", e);
+                  return null;
+                }
+              })()}
             </div>
           ) : (
             <Empty description="请从左侧选择图片开始审核" />
@@ -469,7 +520,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         
         {/* 底部状态条 */}
         <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
-          底片评分系统 | 当前工具: 平移 | 坐标: (120, 340) | 缩放: 100%
+          底片评分系统 | 当前工具: 平移 | 坐标: (-, -) | 缩放: 100%
         </div>
       </Content>
 
@@ -483,18 +534,34 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <List
                   size="small"
                   dataSource={JSON.parse(selectedFile?.VisionResult || '{"results":[]}').results}
-                  renderItem={(item: any, idx: number) => (
-                    <div key={idx} style={{ marginBottom: 16, borderBottom: '1px solid #303030', paddingBottom: 12 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <Tag color={isSevere(item.strName) ? "red" : "orange"} style={{ borderRadius: '2px', border: 'none', padding: '0 8px' }}>{item.strName}</Tag>
-                        <Text style={{ fontSize: '12px', color: '#8c8c8c' }}>{(item.score * 100).toFixed(1)}%</Text>
+                  renderItem={(item: any, idx: number) => {
+                    let positionStr = "(-, -)";
+                    let sizeStr = "- x -";
+                    
+                    if (item.vvContour && item.vvContour.length > 0) {
+                      const xs = item.vvContour.map((p: any) => p[0]);
+                      const ys = item.vvContour.map((p: any) => p[1]);
+                      const minX = Math.min(...xs);
+                      const minY = Math.min(...ys);
+                      const maxX = Math.max(...xs);
+                      const maxY = Math.max(...ys);
+                      positionStr = `(${Math.round(minX)}, ${Math.round(minY)})`;
+                      sizeStr = `${Math.round(maxX - minX)} x ${Math.round(maxY - minY)} px`;
+                    }
+                    
+                    return (
+                      <div key={idx} style={{ marginBottom: 16, borderBottom: '1px solid #303030', paddingBottom: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <Tag color={isSevere(item.strName) ? "red" : "orange"} style={{ borderRadius: '2px', border: 'none', padding: '0 8px' }}>{item.strName}</Tag>
+                          <Text style={{ fontSize: '12px', color: '#8c8c8c' }}>{(item.score * 100).toFixed(1)}%</Text>
+                        </div>
+                        <div style={{ display: 'flex', gap: 12, color: '#595959', fontSize: '11px' }}>
+                          <span>位置: {positionStr}</span>
+                          <span>尺寸: {sizeStr}</span>
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', gap: 12, color: '#595959', fontSize: '11px' }}>
-                        <span>位置: (120, 340)</span>
-                        <span>尺寸: 15x12 px</span>
-                      </div>
-                    </div>
-                  )}
+                    );
+                  }}
                   locale={{ emptyText: (
                     <div style={{ color: '#595959', fontSize: '12px', textAlign: 'left', padding: '0' }}>
                       <div style={{ marginBottom: 8 }}>尚未标记缺陷</div>
@@ -553,7 +620,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <span>窗宽: 400</span>
             <span>窗位: 128</span>
           </div>
-          <div style={{ marginBottom: 16 }}>当前坐标: (120, 340)</div>
+          <div style={{ marginBottom: 16 }}>当前坐标: (-, -)</div>
           <div style={{ borderTop: '1px solid #303030', paddingTop: 16, color: '#8c8c8c', display: 'flex', alignItems: 'center', gap: '8px' }}>
             底片评分系统 | 当前工具: 平移
           </div>
