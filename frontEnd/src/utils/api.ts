@@ -16,7 +16,7 @@ import {
   TaskFile,
 } from "./data";
 
-import { addPathToFileTreeNodes } from "./fileTreeUtils"; 
+import { addPathToFileTreeNodes } from "./fileTreeUtils";
 
 // 分页参数接口
 export interface PaginationParams {
@@ -197,7 +197,14 @@ export const reportAPI = {
     request<Report>(`/api/v1/reports/${taskId}/detail`),
   getReportFiles: (taskId: string, status: "all" | "has_defects" | "no_defects" = "all") =>
     request<TaskFile[]>(`/api/v1/reports/${taskId}/files?status=${status}`),
-  reviewFile: (taskFileId: string, data: { ManualResult: string; PlateQuality: string }) =>
+  reviewFile: (taskFileId: string, data: {
+    ManualResult: string;
+    PlateQuality: string;
+    WeldId?: string;
+    FilmNumber?: string;
+    FilmDensity?: string;
+    Sensitivity?: string;
+  }) =>
     request<void>(`/api/v1/reports/files/${taskFileId}/review`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -255,5 +262,44 @@ export const userAPI = {
     request<any>("/api/v1/users/login", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+};
+
+// 缺陷类型相关API
+export const defectTypeAPI = {
+  getDefectTypes: () => request<any[]>("/api/v1/defect-types"),
+};
+
+// 缺陷记录相关API
+export const defectRecordAPI = {
+  getByTaskFileId: (taskFileId: string) =>
+    request<any[]>(`/api/v1/defect-records/by-task-file/${taskFileId}`),
+  create: (data: any) =>
+    request<any>("/api/v1/defect-records", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  createBatch: (data: any[]) =>
+    request<any[]>("/api/v1/defect-records/batch", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (defectRecordId: string, data: any) =>
+    request<any>(`/api/v1/defect-records/${defectRecordId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  replace: (taskFileId: string, data: any[]) =>
+    request<any[]>(`/api/v1/defect-records/replace/${taskFileId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  delete: (defectRecordId: string) =>
+    request<void>(`/api/v1/defect-records/${defectRecordId}`, {
+      method: "DELETE",
+    }),
+  deleteByTaskFileId: (taskFileId: string) =>
+    request<void>(`/api/v1/defect-records/by-task-file/${taskFileId}`, {
+      method: "DELETE",
     }),
 };

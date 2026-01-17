@@ -87,6 +87,29 @@ export interface Report {
   UpdatedAt: string;
 }
 
+// 缺陷类型接口定义 (基于后端DefectType实体)
+export interface DefectType {
+  Code: string;
+  Name: string;
+  Color: string;
+  SortOrder: number;
+  Enabled: boolean;
+}
+
+// 缺陷记录接口定义 (基于后端DefectRecord实体)
+export interface DefectRecord {
+  DefectRecordId: string;
+  TaskFileId: string;
+  DefectName: string;
+  Position: string;    // 算法计算的位置（如：左上角、中心等）
+  Size: string;
+  Grade: string;
+  Remark: string;
+  Geometry?: string;   // 标注区域的几何坐标 JSON
+  CreatedAt?: string;
+  UpdatedAt?: string;
+}
+
 // 任务文件关联接口定义 (基于后端TaskFile实体)
 export interface TaskFile {
   ErrorMessage?: string;
@@ -98,6 +121,13 @@ export interface TaskFile {
   VisionResult?: string; // JSON格式的检测结果
   ManualResult?: string; // 人工修改后的检测结果
   PlateQuality?: string; // 底片质量
+  // 新增：底片信息字段
+  WeldId?: string;       // 焊口编号
+  FilmNumber?: string;   // 片号
+  FilmDensity?: string;  // 底片黑度
+  Sensitivity?: string;  // 像质计灵敏度
+  // 新增：缺陷记录列表
+  DefectRecords?: DefectRecord[];
   ProcessingStartTime?: string;
   ProcessingEndTime?: string;
   LogicalPath?: string;

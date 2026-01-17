@@ -100,7 +100,14 @@ public class ReportController {
         try {
             String manualResult = (String) body.get("ManualResult");
             String plateQuality = (String) body.get("PlateQuality");
-            reportService.updateFileReview(taskFileId, manualResult, plateQuality);
+            // 新增：底片信息字段
+            String weldId = (String) body.get("WeldId");
+            String filmNumber = (String) body.get("FilmNumber");
+            String filmDensity = (String) body.get("FilmDensity");
+            String sensitivity = (String) body.get("Sensitivity");
+            
+            reportService.updateFileReview(taskFileId, manualResult, plateQuality,
+                weldId, filmNumber, filmDensity, sensitivity);
             return ResponseEntity.ok(ApiResponse.success("保存成功", null));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));

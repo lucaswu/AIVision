@@ -112,27 +112,42 @@ public class ReportService {
     }
 
     /**
-     * 更新单文件审核结果
-     */
-    public void updateFileReview(String taskFileId, String manualResult, String plateQuality) {
-        TaskFile tf = taskFileRepository.findById(taskFileId)
-            .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
-        
-        Report report = reportRepository.findByTaskId(tf.getTaskId())
-            .orElseThrow(() -> new RuntimeException("关联报告不存在"));
-        
-        if (report.getStatus() == Report.Status.ARCHIVED) {
-            throw new RuntimeException("报告已归档，无法修改");
-        }
+ * 更新单文件审核结果
+ */
+public void updateFileReview(String taskFileId, String manualResult, String plateQuality) {
+    updateFileReview(taskFileId, manualResult, plateQuality, null, null, null, null);
+}
 
-        tf.setManualResult(manualResult);
-        tf.setPlateQuality(plateQuality);
-        tf.setReviewStatus(TaskFile.ReviewStatus.CONFIRMED);
-        taskFileRepository.save(tf);
-
-        // 重新统计报告汇总信息
-        updateReportStats(report.getTaskId());
+/**
+ * 更新单文件审核结果（包含底片信息）
+ */
+public void updateFileReview(String taskFileId, String manualResult, String plateQuality,
+                              String weldId, String filmNumber, String filmDensity, String sensitivity) {
+    TaskFile tf = taskFileRepository.findById(taskFileId)
+        .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
+    
+    Report report = reportRepository.findByTaskId(tf.getTaskId())
+        .orElseThrow(() -> new RuntimeException("关联报告不存在"));
+    
+    if (report.getStatus() == Report.Status.ARCHIVED) {
+        throw new RuntimeException("报告已归档，无法修改");
     }
+
+    tf.setManualResult(manualResult);
+    tf.setPlateQuality(plateQuality);
+    
+    // 更新底片信息字段
+    if (weldId != null) tf.setWeldId(weldId);
+    if (filmNumber != null) tf.setFilmNumber(filmNumber);
+    if (filmDensity != null) tf.setFilmDensity(filmDensity);
+    if (sensitivity != null) tf.setSensitivity(sensitivity);
+    
+    tf.setReviewStatus(TaskFile.ReviewStatus.CONFIRMED);
+    taskFileRepository.save(tf);
+
+    // 重新统计报告汇总信息
+    updateReportStats(report.getTaskId());
+}
 
     /**
      * 批量确认文件

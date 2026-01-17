@@ -3,6 +3,8 @@ package com.aivision.gateway.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import javax.persistence.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "task_file")
@@ -66,6 +68,29 @@ public class TaskFile {
     @Column(name = "plate_quality", length = 50)
     @JsonProperty("PlateQuality")
     private String plateQuality;
+
+    // --- 新增：底片信息字段 ---
+    @Column(name = "weld_id", length = 100)
+    @JsonProperty("WeldId")
+    private String weldId;
+
+    @Column(name = "film_number", length = 100)
+    @JsonProperty("FilmNumber")
+    private String filmNumber;
+
+    @Column(name = "film_density", length = 50)
+    @JsonProperty("FilmDensity")
+    private String filmDensity;
+
+    @Column(name = "sensitivity", length = 50)
+    @JsonProperty("Sensitivity")
+    private String sensitivity;
+
+    // --- 新增：缺陷记录列表（一对多关系）---
+    @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JoinColumn(name = "task_file_id", referencedColumnName = "task_file_id", insertable = false, updatable = false)
+    @JsonProperty("DefectRecords")
+    private List<DefectRecord> defectRecords = new ArrayList<>();
     
     @Column(name = "processing_start_time")
     @JsonProperty("ProcessingStartTime")
@@ -208,6 +233,52 @@ public class TaskFile {
 
     public void setPlateQuality(String plateQuality) {
         this.plateQuality = plateQuality;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    // --- 新增字段的 Getters and Setters ---
+    public String getWeldId() {
+        return weldId;
+    }
+
+    public void setWeldId(String weldId) {
+        this.weldId = weldId;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getFilmNumber() {
+        return filmNumber;
+    }
+
+    public void setFilmNumber(String filmNumber) {
+        this.filmNumber = filmNumber;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getFilmDensity() {
+        return filmDensity;
+    }
+
+    public void setFilmDensity(String filmDensity) {
+        this.filmDensity = filmDensity;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getSensitivity() {
+        return sensitivity;
+    }
+
+    public void setSensitivity(String sensitivity) {
+        this.sensitivity = sensitivity;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public List<DefectRecord> getDefectRecords() {
+        return defectRecords;
+    }
+
+    public void setDefectRecords(List<DefectRecord> defectRecords) {
+        this.defectRecords = defectRecords;
         this.updatedAt = LocalDateTime.now();
     }
     

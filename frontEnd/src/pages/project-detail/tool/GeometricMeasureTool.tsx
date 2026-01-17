@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'; // [修改] 引入 useEffect
+import React, { useState, useMemo, useEffect } from 'react'; 
 import ReactDOM from 'react-dom';
 
 interface GeometricMeasureToolProps {
