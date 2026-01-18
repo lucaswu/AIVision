@@ -911,7 +911,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         const values = await filmInfoForm.validateFields();
         await reportAPI.reviewFile(selectedFile.TaskFileId, {
           ManualResult: selectedFile.VisionResult || "{}",
-          PlateQuality: '',  // 不再使用文件级别评级
+          PlateQuality: '', 
           WeldId: values.weldId,
           FilmNumber: values.filmNumber,
           FilmDensity: values.filmDensity,
@@ -1348,7 +1348,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               />
             </Tooltip>
 
-            <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip>
+            {/* <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip> */}
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
             <Tooltip title="设置坐标原点">
@@ -1735,7 +1735,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       {/* 右侧审核信息 (重构区域) */}
       <Sider width={320} theme="light" style={{ borderLeft: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column', background: '#fff' }}>
-        {/* 修改点：设置 height: 100% 和 overflowY: auto，
+        {/* 设置 height: 100% 和 overflowY: auto，
             确保内容超出时，这个容器内部出现滚动条，而不是把页面撑开。
            */}
         <div style={{ flex: 1, padding: '20px 16px', overflowY: 'auto', height: '100%' }}>
@@ -1743,10 +1743,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
             {/* 1. 底片信息 (垂直布局，可编辑，带折叠) */}
             <div>
-              {/* 修改点：
-                        1. 图标放在文字前面 (flex-direction: row 是默认)
-                        2. 增加背景色和圆角
-                    */}
               <div
                 style={{
                   display: 'flex',
@@ -1768,9 +1764,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <Title level={5} style={{ margin: 0, fontSize: '15px' }}>底片信息</Title>
               </div>
 
-              {/* 修改点：内容根据状态显示或隐藏 */}
+              {/* 内容根据状态显示或隐藏 */}
               {showFilmInfo && (
-                // 修改点：布局改为 horizontal，并设置 labelCol 和 wrapperCol
+                // 布局改为 horizontal，并设置 labelCol 和 wrapperCol
                 <Form
                   form={filmInfoForm}
                   layout="horizontal"
@@ -1801,10 +1797,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
             {/* 2. 缺陷信息 (卡片列表布局，带折叠功能) */}
             <div>
-              {/* 修改点：
-                        1. 图标放在文字前面
-                        2. 增加背景色和圆角
-                    */}
               <div
                 style={{
                   display: 'flex',
