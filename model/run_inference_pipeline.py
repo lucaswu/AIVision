@@ -94,7 +94,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="焊缝缺陷推理脚本（支持分割/检测/切片分类模式）"
     )
-    parser.add_argument("--image-dir", required=True, help="待推理图像目录")
+    parser.add_argument("--image-dir", help="待推理图像目录（如果提供了 --file-list 则忽略）")
+    parser.add_argument("--file-list", help="包含待推理图像绝对路径的文本文件（每行一个路径）")
     parser.add_argument("--output-dir", default="inference_outputs", help="输出目录")
     parser.add_argument("--results-json", default="inference_results.json",
                         help="结果JSON文件名（相对output_dir）")
@@ -174,15 +175,40 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_images(image_dir: Path, max_images: Optional[int]) -> List[Path]:
-    image_paths = sorted([
-        p for p in image_dir.rglob('*')
-        if p.suffix.lower() in SUPPORTED_IMAGE_EXTS and p.is_file()
-    ])
+def collect_images(image_dir: Optional[Path], file_list_path: Optional[Path], max_images: Optional[int]) -> List[Path]:
+    image_paths = []
+    
+    # Priority 1: File list
+    if file_list_path:
+        if not file_list_path.exists():
+            raise FileNotFoundError(f"未找到文件列表: {file_list_path}")
+        with open(file_list_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                path_str = line.strip()
+                if not path_str:
+                    continue
+                path = Path(path_str)
+                if path.suffix.lower() in SUPPORTED_IMAGE_EXTS and path.is_file():
+                    image_paths.append(path)
+        if not image_paths:
+            raise FileNotFoundError(f"文件列表 {file_list_path} 中未包含有效的图像文件")
+            
+    # Priority 2: Image directory
+    elif image_dir:
+        if not image_dir.exists():
+            raise FileNotFoundError(f"输入目录不存在: {image_dir}")
+        image_paths = sorted([
+            p for p in image_dir.rglob('*')
+            if p.suffix.lower() in SUPPORTED_IMAGE_EXTS and p.is_file()
+        ])
+        if not image_paths:
+            raise FileNotFoundError(f"未在 {image_dir} 中找到支持的图像文件")
+    else:
+        raise ValueError("必须提供 --image-dir 或 --file-list 其中之一")
+
     if max_images is not None:
         image_paths = image_paths[:max_images]
-    if not image_paths:
-        raise FileNotFoundError(f"未在 {image_dir} 中找到支持的图像文件")
+        
     return image_paths
 
 
@@ -489,12 +515,15 @@ class InferencePipelineRunner:
 
 def main():
     args = parse_args()
-    image_dir = Path(args.image_dir)
+    
+    image_dir = Path(args.image_dir) if args.image_dir else None
+    file_list = Path(args.file_list) if args.file_list else None
+    
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     visualization_dir = None
 
-    image_paths = collect_images(image_dir, args.max_images)
+    image_paths = collect_images(image_dir, file_list, args.max_images)
     roi_detector = build_roi_detector(args)
 
     if args.mode in {"seg", "det"} and roi_detector is None:

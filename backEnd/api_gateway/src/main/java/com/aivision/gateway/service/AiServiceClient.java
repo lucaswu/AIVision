@@ -62,6 +62,9 @@ public class AiServiceClient {
     @Value("${storage.local.result-dir:/app/data/results}")
     private String localResultDir;
 
+    @Value("${ai-services.vision-ai.timeout-minutes:1440}")
+    private int pythonTimeoutMinutes;
+
     /**
      * 批量调用视觉AI检测服务，支持进度回调
      * @param relativeStoredPaths 一批文件的逻辑/相对路径列表
@@ -79,20 +82,7 @@ public class AiServiceClient {
 
         logger.info("批量调用 Vision AI 服务 (Python): count={}, taskId={}", relativeStoredPaths.size(), taskId);
         
-        // 1. 确定输入目录
-        String firstFileRelativePath = relativeStoredPaths.get(0);
-        // 如果以 / 开头，去除它以确保 Paths.get 正确拼接到 localBaseDir
-        if (firstFileRelativePath.startsWith("/") || firstFileRelativePath.startsWith("\\")) {
-            firstFileRelativePath = firstFileRelativePath.substring(1);
-        }
-        Path inputDir = Paths.get(localBaseDir, firstFileRelativePath).getParent();
-        
-        if (inputDir == null || !Files.exists(inputDir)) {
-            logger.error("输入目录不存在: {}", inputDir);
-            throw new RuntimeException("输入目录不存在: " + inputDir);
-        }
-
-        // 2. 准备输出目录
+        // 1. 准备输出目录
         Path outputDir = Paths.get(localResultDir, taskId);
         try {
             Files.createDirectories(outputDir);
@@ -100,13 +90,42 @@ public class AiServiceClient {
             logger.error("无法创建输出目录: {}", outputDir, e);
             throw new RuntimeException("无法创建输出目录", e);
         }
+
+        // 2. 生成文件列表文件 (方案A优化: 明确传递文件列表，支持跨目录)
+        Path fileListPath = outputDir.resolve("input_files.txt");
+        try {
+            List<String> absolutePaths = new ArrayList<>();
+            for (String relativePath : relativeStoredPaths) {
+                // 如果以 / 开头，去除它以确保 Paths.get 正确拼接到 localBaseDir
+                String cleanPath = relativePath.startsWith("/") || relativePath.startsWith("\\") ? 
+                    relativePath.substring(1) : relativePath;
+                Path absPath = Paths.get(localBaseDir, cleanPath).toAbsolutePath();
+                if (Files.exists(absPath)) {
+                    absolutePaths.add(absPath.toString());
+                } else {
+                    logger.warn("文件不存在，跳过: {}", absPath);
+                }
+            }
+            
+            if (absolutePaths.isEmpty()) {
+                throw new RuntimeException("所有输入文件都不存在");
+            }
+            
+            Files.write(fileListPath, absolutePaths);
+        } catch (Exception e) {
+            logger.error("生成文件列表失败: {}", fileListPath, e);
+            throw new RuntimeException("生成文件列表失败", e);
+        }
         
         // 3. 构建 Python 命令
         List<String> command = new ArrayList<>();
         command.add(pythonPath);
         command.add(scriptPath);
-        command.add("--image-dir");
-        command.add(inputDir.toString());
+        
+        // 使用 --file-list 替代 --image-dir
+        command.add("--file-list");
+        command.add(fileListPath.toString());
+        
         command.add("--output-dir");
         command.add(outputDir.toString());
         command.add("--roi-weights");
@@ -175,11 +194,11 @@ public class AiServiceClient {
                 }
             }
 
-            // 等待进程结束
-            boolean finished = process.waitFor(30, TimeUnit.MINUTES);
+            // 等待进程结束 (使用配置的超时时间)
+            boolean finished = process.waitFor(pythonTimeoutMinutes, TimeUnit.MINUTES);
             if (!finished) {
                 process.destroyForcibly();
-                throw new RuntimeException("Python 推理进程超时 (30分钟)");
+                throw new RuntimeException("Python 推理进程超时 (" + pythonTimeoutMinutes + "分钟)");
             }
 
             // 等待监控线程结束

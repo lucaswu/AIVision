@@ -17,6 +17,8 @@ import {
   Collapse,
   Breadcrumb,
   Tooltip,
+  Image,
+  Modal,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -28,6 +30,8 @@ import {
   CaretRightOutlined,
   RollbackOutlined,
   ExportOutlined,
+  ZoomInOutlined,
+  ZoomOutOutlined,
 } from "@ant-design/icons";
 import { useRequest } from "ahooks";
 import { reportAPI, userAPI, getUserId } from "../../utils/api";
@@ -42,16 +46,98 @@ interface ReportPreviewPageProps {
   projectId: string;
   projectName: string;
   onBack: () => void;
+  onReview?: () => void;
 }
+
+const DefectImage = ({ file, projectId, userId, style, imgStyle, showLabel = true }: { file: TaskFile, projectId: string, userId: string, style?: React.CSSProperties, imgStyle?: React.CSSProperties, showLabel?: boolean }) => {
+  return (
+    <div style={{ position: 'relative', display: 'inline-block', ...style }}>
+      <img
+        src={`/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${userId}`}
+        alt="preview"
+        style={{ display: 'block', background: '#f5f5f5', ...imgStyle }}
+      />
+      {(() => {
+        try {
+          const result = JSON.parse(file.VisionResult || '{"results":[]}');
+          const metaWidth = result.metadata?.width || 1920;
+          const metaHeight = result.metadata?.height || 1080;
+          
+          const elements: JSX.Element[] = [];
+
+          if (result.results) {
+            result.results.forEach((item: any, i: number) => {
+              let minX = 0, minY = 0, maxX = 0, maxY = 0;
+              
+              if (item.vvContour && item.vvContour.length > 0) {
+                const xs = item.vvContour.map((p: any) => p[0]);
+                const ys = item.vvContour.map((p: any) => p[1]);
+                minX = Math.min(...xs);
+                minY = Math.min(...ys);
+                maxX = Math.max(...xs);
+                maxY = Math.max(...ys);
+              } else {
+                return;
+              }
+
+              const leftPct = (minX / metaWidth) * 100;
+              const topPct = (minY / metaHeight) * 100;
+              const widthPct = ((maxX - minX) / metaWidth) * 100;
+              const heightPct = ((maxY - minY) / metaHeight) * 100;
+
+              elements.push(
+                <div key={`model-${i}`} style={{ 
+                  position: "absolute", 
+                  top: `${topPct}%`, 
+                  left: `${leftPct}%`, 
+                  width: `${widthPct}%`, 
+                  height: `${heightPct}%`, 
+                  border: "1px dashed #ff4d4f", 
+                  pointerEvents: "none",
+                  zIndex: 10
+                }}>
+                  {showLabel && (
+                    <span style={{ 
+                      position: "absolute", 
+                      top: -18, 
+                      left: -1, 
+                      background: '#ff4d4f', 
+                      color: '#fff', 
+                      fontSize: '10px', 
+                      padding: '0 4px', 
+                      borderRadius: '2px',
+                      whiteSpace: 'nowrap',
+                      transform: 'scale(0.8)',
+                      transformOrigin: 'left bottom'
+                    }}>
+                      {item.strName}
+                    </span>
+                  )}
+                </div>
+              );
+            });
+          }
+          
+          return elements;
+        } catch (e) {
+          return null;
+        }
+      })()}
+    </div>
+  );
+};
 
 const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
   taskId,
   projectId,
   projectName,
   onBack,
+  onReview,
 }) => {
   const [activeTab, setActiveTab] = useState<"all" | "has_defects" | "no_defects">("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [previewFile, setPreviewFile] = useState<TaskFile | null>(null);
+  const [scale, setScale] = useState(1);
   const pageSize = 10;
 
   // 1. 获取报告详情
@@ -125,6 +211,57 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
 
   return (
     <Layout style={{ height: "100%", background: "#f0f2f5", margin: 0, padding: 0 }}>
+      {/* 预览 Modal */}
+      <Modal
+        open={!!previewFile}
+        onCancel={() => {
+          setPreviewFile(null);
+          setScale(1);
+        }}
+        footer={null}
+        width="90%"
+        centered
+        bodyStyle={{ padding: 0, height: '85vh', display: 'flex', flexDirection: 'column' }}
+        style={{ top: 20 }}
+      >
+        {previewFile && (
+          <>
+            <div style={{ padding: '12px 24px', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text strong style={{ fontSize: '16px' }}>{previewFile.FileName}</Text>
+              <Space>
+                <Button icon={<ZoomOutOutlined />} onClick={() => setScale(s => Math.max(0.2, s - 0.2))} />
+                <span style={{ minWidth: 60, textAlign: 'center' }}>{(scale * 100).toFixed(0)}%</span>
+                <Button icon={<ZoomInOutlined />} onClick={() => setScale(s => s + 0.2)} />
+              </Space>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', background: '#f0f2f5', padding: 24, display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+              <div style={{ 
+                transform: `scale(${scale})`, 
+                transformOrigin: 'top center',
+                transition: 'transform 0.2s',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.1)',
+                background: '#fff',
+                display: 'inline-block' // Ensure wrapper hugs content
+              }}>
+                <DefectImage 
+                  file={previewFile} 
+                  projectId={projectId} 
+                  userId={getUserId()}
+                  // Remove fixed width, let image drive size. 
+                  // Use max-height/width to fit screen initially.
+                  imgStyle={{ 
+                    maxWidth: '100%', 
+                    maxHeight: 'calc(85vh - 100px)', // Leave space for header/padding
+                    width: 'auto', 
+                    height: 'auto' 
+                  }}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </Modal>
+
       {/* 左侧固定统计栏 */}
       <Sider width={300} theme="light" style={{ borderRight: "1px solid #f0f0f0", padding: '24px', overflowY: 'auto' }}>
         <Button icon={<ArrowLeftOutlined />} onClick={onBack} type="text" style={{ marginBottom: 24, padding: 0 }}>返回任务列表</Button>
@@ -196,8 +333,40 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
         </div>
 
         <div style={{ marginTop: 40 }}>
-          <Button block icon={<DownloadOutlined />} style={{ marginBottom: 12, height: 40 }}>下载报告</Button>
-          <Button block type="primary" icon={<RollbackOutlined />} style={{ height: 40 }} onClick={() => message.info("请通过报告列表进入审核")}>查看审核详情</Button>
+          <Button 
+            block 
+            icon={<DownloadOutlined />} 
+            style={{ marginBottom: 12, height: 40 }}
+            onClick={() => {
+              if (report?.ReportId) {
+                const url = reportAPI.downloadReport(report.ReportId);
+                const link = document.createElement('a');
+                link.href = url;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              } else {
+                message.error("无法获取报告ID");
+              }
+            }}
+          >
+            下载报告
+          </Button>
+          <Button 
+            block 
+            type="primary" 
+            icon={<ExportOutlined />} 
+            style={{ height: 40 }} 
+            onClick={() => {
+              if (onReview) {
+                onReview();
+              } else {
+                message.info("请通过报告列表进入审核");
+              }
+            }}
+          >
+            查看审核详情
+          </Button>
         </div>
       </Sider>
 
@@ -301,12 +470,46 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                             <div style={{ padding: '8px 40px 16px 40px' }}>
                               <Row gutter={32}>
                                 <Col span={7}>
-                                  <div style={{ borderRadius: '8px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', border: '1px solid #f0f0f0' }}>
-                                    <img 
-                                      src={`/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`} 
-                                      alt="preview" 
-                                      style={{ width: '100%', display: 'block', minHeight: '120px', background: '#f5f5f5' }} 
+                                  <div style={{ borderRadius: '8px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', border: '1px solid #f0f0f0', position: 'relative', cursor: 'pointer' }}
+                                       onClick={() => {
+                                         setPreviewFile(file);
+                                         setScale(1);
+                                       }}
+                                  >
+                                    <DefectImage
+                                      file={file}
+                                      projectId={projectId}
+                                      userId={getUserId()}
+                                      style={{ width: '100%', minHeight: '120px', background: '#f5f5f5', display: 'block' }}
+                                      imgStyle={{ width: '100%', height: 'auto' }}
+                                      showLabel={true}
                                     />
+                                    <div style={{  
+                                      position: 'absolute', 
+                                      top: 0, 
+                                      left: 0, 
+                                      right: 0, 
+                                      bottom: 0, 
+                                      background: 'rgba(0,0,0,0)', 
+                                      transition: 'background 0.3s',
+                                      display: 'flex',
+                                      justifyContent: 'center',
+                                      alignItems: 'center',
+                                      opacity: 0
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = 'rgba(0,0,0,0.3)';
+                                      e.currentTarget.style.opacity = '1';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = 'rgba(0,0,0,0)';
+                                      e.currentTarget.style.opacity = '0';
+                                    }}
+                                    >
+                                      <Space style={{ color: '#fff' }}>
+                                        <FileImageOutlined /> 查看大图
+                                      </Space>
+                                    </div>
                                   </div>
                                 </Col>
                                 <Col span={17}>

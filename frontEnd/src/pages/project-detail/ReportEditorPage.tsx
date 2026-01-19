@@ -911,7 +911,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         const values = await filmInfoForm.validateFields();
         await reportAPI.reviewFile(selectedFile.TaskFileId, {
           ManualResult: selectedFile.VisionResult || "{}",
-          PlateQuality: '', 
+          PlateQuality: '',
           WeldId: values.weldId,
           FilmNumber: values.filmNumber,
           FilmDensity: values.filmDensity,
