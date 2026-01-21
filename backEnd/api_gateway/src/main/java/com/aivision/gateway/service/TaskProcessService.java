@@ -1,9 +1,14 @@
 package com.aivision.gateway.service;
 
+import com.aivision.gateway.model.DefectRecord;
+import com.aivision.gateway.model.DefectType;
 import com.aivision.gateway.model.Task;
 import com.aivision.gateway.model.TaskFile;
+import com.aivision.gateway.repository.DefectRecordRepository;
+import com.aivision.gateway.repository.DefectTypeRepository;
 import com.aivision.gateway.repository.TaskFileRepository;
 import com.aivision.gateway.repository.TaskRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,10 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,6 +38,12 @@ public class TaskProcessService {
     private TaskFileRepository taskFileRepository;
     
     @Autowired
+    private DefectRecordRepository defectRecordRepository;
+    
+    @Autowired
+    private DefectTypeRepository defectTypeRepository;
+    
+    @Autowired
     private ReportService reportService;
     
     @Autowired
@@ -43,9 +51,6 @@ public class TaskProcessService {
     
     @Value("${storage.local.result-dir:/app/data/results}")
     private String resultBaseDir;
-    
-    // 修改为一次性处理所有文件，不再分批，以配合 Python 批量推理的高效性
-    // private static final int BATCH_SIZE = 10;
     
     /**
      * 异步处理任务 (仅视觉 AI，结果追加到大的 JSON 文件中)
@@ -88,6 +93,10 @@ public class TaskProcessService {
             // 3. 一次性调用 Python 进行全量推理
             // 收集所有文件的相对路径 (使用 minioFilePath，即物理存储路径，包含 Project/User 层级)
             List<String> paths = allTaskFiles.stream().map(TaskFile::getMinioFilePath).collect(Collectors.toList());
+            
+            // 构建 minioFilePath -> TaskFile 的映射，用于后续查找 taskFileId
+            Map<String, TaskFile> pathToTaskFile = allTaskFiles.stream()
+                .collect(Collectors.toMap(TaskFile::getMinioFilePath, tf -> tf));
             
             // 3.1 准备进度更新的回调
             final int totalFiles = allTaskFiles.size();
@@ -157,16 +166,23 @@ public class TaskProcessService {
                         jsonBatch.append(",");
                     }
                     jsonBatch.append(objectMapper.writeValueAsString(resultEntry));
+                    
+                    // 5. 解析推理结果并保存到 defect_record 表
+                    try {
+                        saveDefectRecordsFromVisionResult(tf.getTaskFileId(), res);
+                    } catch (Exception e) {
+                        logger.warn("保存缺陷记录失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
+                    }
                 } else {
                     failedCount++;
                 }
             }
             taskFileRepository.saveAll(allTaskFiles);
 
-            // 5. 写入 JSON 文件内容
+            // 6. 写入 JSON 文件内容
             Files.write(resultFilePath, jsonBatch.toString().getBytes("UTF-8"), StandardOpenOption.APPEND);
             
-            // 6. 结束 JSON 数组并完成任务
+            // 7. 结束 JSON 数组并完成任务
             Files.write(resultFilePath, "]".getBytes("UTF-8"), StandardOpenOption.APPEND);
             
             Task finalTask = taskRepository.findById(taskId).get();
@@ -190,6 +206,245 @@ public class TaskProcessService {
             logger.error("任务处理异常: taskId={}, error={}", taskId, e.getMessage(), e);
             handleTaskFailure(taskId, e.getMessage());
         }
+    }
+    
+    /**
+     * 从视觉推理结果中解析并保存缺陷记录到数据库
+     * 
+     * 推理结果格式 (inference_results.json per image):
+     * {
+     *   "mode": "det",
+     *   "image_path": "...",
+     *   "rois": [{
+     *     "roi_index": 0,
+     *     "detections": [{
+     *       "class_id": 7,
+     *       "class_name": "其他",
+     *       "confidence": 0.84,
+     *       "bbox": [x1, y1, x2, y2]  // 左上右下
+     *     }]
+     *   }]
+     * }
+     * 
+     * @param taskFileId 任务文件ID
+     * @param visionResultJson 推理结果JSON字符串
+     */
+    private void saveDefectRecordsFromVisionResult(String taskFileId, String visionResultJson) throws Exception {
+        JsonNode rootNode = objectMapper.readTree(visionResultJson);
+        
+        // 首先删除该 taskFileId 的所有旧记录（支持重新执行任务）
+        defectRecordRepository.deleteByTaskFileId(taskFileId);
+        
+        List<DefectRecord> defectRecords = new ArrayList<>();
+        
+        // 解析 rois 数组
+        JsonNode roisNode = rootNode.path("rois");
+        if (roisNode.isArray()) {
+            for (JsonNode roiNode : roisNode) {
+                // 每个 ROI 包含 detections 数组
+                JsonNode detectionsNode = roiNode.path("detections");
+                if (detectionsNode.isArray()) {
+                    for (JsonNode detection : detectionsNode) {
+                        // 提取 class_name 和 bbox
+                        String className = detection.path("class_name").asText(null);
+                        JsonNode bboxNode = detection.path("bbox");
+                        
+                        if (className != null && bboxNode.isArray() && bboxNode.size() >= 4) {
+                            // 模糊匹配缺陷类型名称
+                            String matchedDefectName = matchDefectTypeName(className);
+                            
+                            // 转换 bbox 为前端支持的 rect 格式
+                            String geometryJson = convertBboxToGeometry(bboxNode);
+                            
+                            if (geometryJson != null) {
+                                DefectRecord record = new DefectRecord();
+                                record.setDefectRecordId(UUID.randomUUID().toString());
+                                record.setTaskFileId(taskFileId);
+                                record.setDefectName(matchedDefectName);
+                                record.setGeometry(geometryJson);
+                                record.setCreatedAt(LocalDateTime.now());
+                                record.setUpdatedAt(LocalDateTime.now());
+                                // 其他字段暂时置空
+                                record.setPosition(null);
+                                record.setSize(null);
+                                record.setGrade(null);
+                                record.setRemark(null);
+                                
+                                defectRecords.add(record);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 如果上面的格式解析失败，尝试解析 AIVision 转换后的格式 (results -> strName, vvContour)
+        if (defectRecords.isEmpty()) {
+            defectRecords = parseInferenceResultFormat(taskFileId, visionResultJson);
+        }
+        
+        if (!defectRecords.isEmpty()) {
+            defectRecordRepository.saveAll(defectRecords);
+            logger.info("保存缺陷记录: taskFileId={}, count={}", taskFileId, defectRecords.size());
+        }
+    }
+    
+    /**
+     * 解析推理服务返回的原始格式 (mode, rois, detections)
+     */
+    private List<DefectRecord> parseInferenceResultFormat(String taskFileId, String visionResultJson) throws Exception {
+        List<DefectRecord> records = new ArrayList<>();
+        
+        // 尝试从原始推理结果格式解析
+        // 这个格式可能是嵌套在 AiServiceClient.transformToAIVisionFormat 转换后的结果中
+        JsonNode rootNode = objectMapper.readTree(visionResultJson);
+        
+        // 检查 metadata 和 results 结构 (AIVision 前端格式)
+        JsonNode resultsArray = rootNode.path("results");
+        if (resultsArray.isArray()) {
+            for (JsonNode defectItem : resultsArray) {
+                String strName = defectItem.path("strName").asText(null);
+                JsonNode vvContour = defectItem.path("vvContour");
+                
+                if (strName != null && vvContour.isArray() && vvContour.size() > 0) {
+                    DefectRecord record = new DefectRecord();
+                    record.setDefectRecordId(UUID.randomUUID().toString());
+                    record.setTaskFileId(taskFileId);
+                    
+                    // 模糊匹配缺陷类型名称
+                    String matchedDefectName = matchDefectTypeName(strName);
+                    record.setDefectName(matchedDefectName);
+                    
+                    // 将 vvContour 转换为 bbox 格式的 geometry
+                    // vvContour 是 [[x1,y1], [x2,y1], [x2,y2], [x1,y2]] 格式
+                    // 转换为 [x1, y1, x2, y2] 格式
+                    String geometryJson = convertContourToGeometry(vvContour);
+                    record.setGeometry(geometryJson);
+                    
+                    record.setCreatedAt(LocalDateTime.now());
+                    record.setUpdatedAt(LocalDateTime.now());
+                    
+                    records.add(record);
+                }
+            }
+        }
+        
+        return records;
+    }
+    
+    /**
+     * 从 resultItem 中提取缺陷名称
+     */
+    private String extractDefectName(JsonNode resultItem) {
+        String strName = resultItem.path("strName").asText(null);
+        if (strName != null) {
+            return matchDefectTypeName(strName);
+        }
+        return null;
+    }
+    
+    /**
+     * 从 resultItem 中提取几何坐标
+     */
+    private String extractGeometry(JsonNode resultItem) {
+        JsonNode vvContour = resultItem.path("vvContour");
+        if (vvContour.isArray() && vvContour.size() > 0) {
+            return convertContourToGeometry(vvContour);
+        }
+        return null;
+    }
+    
+    /**
+     * 将 vvContour 转换为前端支持的 rect 几何坐标 JSON
+     * 输入: [[x1,y1], [x2,y1], [x2,y2], [x1,y2]] 
+     * 输出: {"type": "rect", "x": x1, "y": y1, "w": width, "h": height}
+     */
+    private String convertContourToGeometry(JsonNode vvContour) {
+        try {
+            if (!vvContour.isArray() || vvContour.size() < 2) {
+                return null;
+            }
+            
+            double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE;
+            double maxX = Double.MIN_VALUE, maxY = Double.MIN_VALUE;
+            
+            for (JsonNode point : vvContour) {
+                if (point.isArray() && point.size() >= 2) {
+                    double x = point.get(0).asDouble();
+                    double y = point.get(1).asDouble();
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x);
+                    maxY = Math.max(maxY, y);
+                }
+            }
+            
+            // 使用前端支持的 rect 格式: {"type":"rect","x":x,"y":y,"w":width,"h":height}
+            Map<String, Object> geometry = new HashMap<>();
+            geometry.put("type", "rect");
+            geometry.put("x", minX);
+            geometry.put("y", minY);
+            geometry.put("w", maxX - minX);
+            geometry.put("h", maxY - minY);
+            
+            return objectMapper.writeValueAsString(geometry);
+        } catch (Exception e) {
+            logger.warn("转换几何坐标失败: {}", e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * 将推理结果 bbox [x1, y1, x2, y2] 转换为前端支持的 rect 格式
+     * 输入: [x1, y1, x2, y2] (左上右下)
+     * 输出: {"type": "rect", "x": x1, "y": y1, "w": width, "h": height}
+     */
+    private String convertBboxToGeometry(JsonNode bboxNode) {
+        try {
+            if (!bboxNode.isArray() || bboxNode.size() < 4) {
+                return null;
+            }
+            
+            double x1 = bboxNode.get(0).asDouble();
+            double y1 = bboxNode.get(1).asDouble();
+            double x2 = bboxNode.get(2).asDouble();
+            double y2 = bboxNode.get(3).asDouble();
+            
+            // 使用前端支持的 rect 格式
+            Map<String, Object> geometry = new HashMap<>();
+            geometry.put("type", "rect");
+            geometry.put("x", x1);
+            geometry.put("y", y1);
+            geometry.put("w", x2 - x1);
+            geometry.put("h", y2 - y1);
+            
+            return objectMapper.writeValueAsString(geometry);
+        } catch (Exception e) {
+            logger.warn("转换 bbox 几何坐标失败: {}", e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * 模糊匹配缺陷类型名称
+     */
+    private String matchDefectTypeName(String className) {
+        if (className == null || className.isEmpty()) {
+            return className;
+        }
+        
+        try {
+            // 尝试从数据库模糊匹配
+            Optional<DefectType> matchedType = defectTypeRepository.findByNameContaining(className);
+            if (matchedType.isPresent()) {
+                return matchedType.get().getName();
+            }
+        } catch (Exception e) {
+            logger.debug("模糊匹配缺陷类型失败: className={}", className);
+        }
+        
+        // 如果没找到匹配，返回原名称
+        return className;
     }
     
     private void handleTaskFailure(String taskId, String errorMessage) {

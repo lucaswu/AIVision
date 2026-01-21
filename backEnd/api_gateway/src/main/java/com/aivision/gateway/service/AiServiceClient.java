@@ -1,69 +1,90 @@
 package com.aivision.gateway.service;
 
+import com.aivision.gateway.repository.DefectTypeRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.*;
 import java.util.function.Consumer;
 
+/**
+ * AI 推理服务客户端
+ * 通过 HTTP 调用独立的 Python 推理服务
+ */
 @Service
 public class AiServiceClient {
     
     private static final Logger logger = LoggerFactory.getLogger(AiServiceClient.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private final RestTemplate restTemplate = new RestTemplate();
+    
+    @Autowired
+    private DefectTypeRepository defectTypeRepository;
 
-    @Value("${ai-services.vision-ai.python-path:python3}")
-    private String pythonPath;
+    // 推理服务 URL
+    @Value("${ai-services.inference-url:http://ai-inference:8000}")
+    private String inferenceServiceUrl;
 
-
-    @Value("${ai-services.vision-ai.script-path:/app/model/run_inference_pipeline.py}")
-    private String scriptPath;
-
-    @Value("${ai-services.vision-ai.roi-weights}")
-    private String roiWeights;
-
-    @Value("${ai-services.vision-ai.primary-weights}")
-    private String primaryWeights;
-
+    // 推理模式配置
     @Value("${ai-services.vision-ai.inference-mode:det}")
     private String inferenceMode;
     
     @Value("${ai-services.vision-ai.engine:rfdet}")
     private String engineType;
 
-    @Value("${ai-services.vision-ai.device:cpu}")
+    @Value("${ai-services.vision-ai.device:cuda:0}")
     private String device;
     
-    @Value("${storage.external-base-dir:/data/files}")
-    private String externalBaseDir;
+    // 检测置信度
+    @Value("${ai-services.vision-ai.det-confidence:0.25}")
+    private double detConfidence;
     
-    // 用于本地存储的基础路径，确保可以找到文件
-    @Value("${storage.local.base-dir:/app/data/files}")
-    private String localBaseDir;
+    // 是否启用横切纵拼
+    @Value("${ai-services.vision-ai.det-wide-slice:true}")
+    private boolean detWideSlice;
     
+    // 本地存储路径（用于读取结果）
     @Value("${storage.local.result-dir:/app/data/results}")
     private String localResultDir;
 
+    // 超时配置
     @Value("${ai-services.vision-ai.timeout-minutes:1440}")
-    private int pythonTimeoutMinutes;
+    private int timeoutMinutes;
+
+    // 轮询间隔（毫秒）
+    private static final long POLL_INTERVAL_MS = 2000;
+    
+    // 缓存的类别名称
+    private List<String> cachedClassNames = null;
+
+    /**
+     * 获取缺陷类型名称列表（从数据库读取，带缓存）
+     */
+    private List<String> getClassNames() {
+        if (cachedClassNames == null) {
+            try {
+                cachedClassNames = defectTypeRepository.findAllEnabledDefectTypeNames();
+                logger.info("从数据库加载缺陷类型名称: {}", cachedClassNames);
+            } catch (Exception e) {
+                logger.warn("无法从数据库加载缺陷类型名称，使用默认值: {}", e.getMessage());
+                // 默认值
+                cachedClassNames = Arrays.asList(
+                    "裂纹", "未熔合", "未焊透", "条形缺陷", 
+                    "圆形缺陷", "咬边", "内凹", "其他"
+                );
+            }
+        }
+        return cachedClassNames;
+    }
 
     /**
      * 批量调用视觉AI检测服务，支持进度回调
@@ -80,184 +101,175 @@ public class AiServiceClient {
             return new HashMap<>();
         }
 
-        logger.info("批量调用 Vision AI 服务 (Python): count={}, taskId={}", relativeStoredPaths.size(), taskId);
+        logger.info("批量调用 Vision AI 服务 (HTTP): count={}, taskId={}", relativeStoredPaths.size(), taskId);
         
-        // 1. 准备输出目录
-        Path outputDir = Paths.get(localResultDir, taskId);
         try {
-            Files.createDirectories(outputDir);
+            // 1. 提交推理任务
+            submitInferenceTask(taskId, relativeStoredPaths);
+            
+            // 2. 轮询等待完成
+            waitForCompletion(taskId, relativeStoredPaths.size(), progressCallback, errorLogCallback);
+            
+            // 3. 获取并解析结果
+            return fetchAndParseResults(taskId, relativeStoredPaths);
+            
         } catch (Exception e) {
-            logger.error("无法创建输出目录: {}", outputDir, e);
-            throw new RuntimeException("无法创建输出目录", e);
+            logger.error("调用推理服务失败: taskId={}", taskId, e);
+            if (errorLogCallback != null) {
+                errorLogCallback.accept(List.of("推理服务调用失败: " + e.getMessage()));
+            }
+            throw new RuntimeException("调用推理服务失败", e);
         }
+    }
 
-        // 2. 生成文件列表文件 (方案A优化: 明确传递文件列表，支持跨目录)
-        Path fileListPath = outputDir.resolve("input_files.txt");
+    /**
+     * 提交推理任务到 Python 服务
+     */
+    private void submitInferenceTask(String taskId, List<String> filePaths) {
+        String url = inferenceServiceUrl + "/inference/submit";
+        
+        Map<String, Object> request = new HashMap<>();
+        request.put("task_id", taskId);
+        request.put("file_paths", filePaths);
+        request.put("mode", inferenceMode);
+        request.put("engine", engineType);
+        request.put("device", device);
+        // 新增参数
+        request.put("class_names", getClassNames());
+        request.put("det_confidence", detConfidence);
+        request.put("det_wide_slice", detWideSlice);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
+        
+        logger.info("提交推理任务: url={}, taskId={}, fileCount={}, classNames={}", 
+                    url, taskId, filePaths.size(), getClassNames());
+        
         try {
-            List<String> absolutePaths = new ArrayList<>();
-            for (String relativePath : relativeStoredPaths) {
-                // 如果以 / 开头，去除它以确保 Paths.get 正确拼接到 localBaseDir
-                String cleanPath = relativePath.startsWith("/") || relativePath.startsWith("\\") ? 
-                    relativePath.substring(1) : relativePath;
-                Path absPath = Paths.get(localBaseDir, cleanPath).toAbsolutePath();
-                if (Files.exists(absPath)) {
-                    absolutePaths.add(absPath.toString());
-                } else {
-                    logger.warn("文件不存在，跳过: {}", absPath);
-                }
+            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("提交推理任务失败: " + response.getStatusCode());
             }
             
-            if (absolutePaths.isEmpty()) {
-                throw new RuntimeException("所有输入文件都不存在");
-            }
+            logger.info("推理任务已提交: taskId={}", taskId);
             
-            Files.write(fileListPath, absolutePaths);
         } catch (Exception e) {
-            logger.error("生成文件列表失败: {}", fileListPath, e);
-            throw new RuntimeException("生成文件列表失败", e);
+            logger.error("提交推理任务失败: taskId={}", taskId, e);
+            throw new RuntimeException("提交推理任务失败: " + e.getMessage(), e);
         }
-        
-        // 3. 构建 Python 命令
-        List<String> command = new ArrayList<>();
-        command.add(pythonPath);
-        command.add(scriptPath);
-        
-        // 使用 --file-list 替代 --image-dir
-        command.add("--file-list");
-        command.add(fileListPath.toString());
-        
-        command.add("--output-dir");
-        command.add(outputDir.toString());
-        command.add("--roi-weights");
-        command.add(roiWeights);
-        command.add("--primary-weights");
-        command.add(primaryWeights);
-        command.add("--mode");
-        command.add(inferenceMode);
-        
-        // 指定引擎 (支持 yolo, rfdet)
-        command.add("--engine");
-        command.add(engineType);
-        
-        command.add("--device");
-        command.add(device);
-        command.add("--results-json");
-        command.add("inference_results.json");
+    }
 
-        logger.info("==================================================");
-        logger.info("执行 Python 命令: {}", String.join(" ", command));
-        logger.info("==================================================");
-
-        ConcurrentLinkedQueue<String> errorLogs = new ConcurrentLinkedQueue<>();
-        Path progressFile = outputDir.resolve("progress.json");
-
-        try {
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.directory(new File(scriptPath).getParentFile());
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
+    /**
+     * 轮询等待任务完成
+     */
+    private void waitForCompletion(String taskId, int totalFiles, 
+                                   Consumer<Integer> progressCallback, 
+                                   Consumer<List<String>> errorLogCallback) {
+        String statusUrl = inferenceServiceUrl + "/inference/" + taskId + "/status";
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = timeoutMinutes * 60 * 1000L;
+        
+        int lastProgress = 0;
+        
+        while (true) {
+            // 检查超时
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                throw new RuntimeException("推理任务超时: " + timeoutMinutes + "分钟");
+            }
             
-            // 启动进度监控线程
-            Thread monitorThread = new Thread(() -> {
-                while (process.isAlive()) {
-                    try {
-                        if (Files.exists(progressFile)) {
-                            try {
-                                JsonNode progressNode = objectMapper.readTree(progressFile.toFile());
-                                int current = progressNode.path("current").asInt();
-                                if (progressCallback != null) {
-                                    progressCallback.accept(current);
-                                }
-                            } catch (Exception e) {
-                                // Ignore read errors (file might be partial)
-                            }
-                        }
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-            });
-            monitorThread.start();
-            
-            // 读取日志输出并保留最后 200 行
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    logger.debug("[Python]: {}", line);
-                    errorLogs.add(line);
-                    if (errorLogs.size() > 200) {
-                        errorLogs.poll();
-                    }
-                }
-            }
-
-            // 等待进程结束 (使用配置的超时时间)
-            boolean finished = process.waitFor(pythonTimeoutMinutes, TimeUnit.MINUTES);
-            if (!finished) {
-                process.destroyForcibly();
-                throw new RuntimeException("Python 推理进程超时 (" + pythonTimeoutMinutes + "分钟)");
-            }
-
-            // 等待监控线程结束
-            monitorThread.join(2000);
-
-            int exitCode = process.exitValue();
-            if (exitCode != 0) {
-                logger.error("Python 进程异常退出, exitCode={}", exitCode);
-                
-                logger.error("----- Python 错误日志 (最后 {} 行) -----", errorLogs.size());
-                for (String log : errorLogs) {
-                    logger.error(log);
-                }
-                logger.error("----------------------------------------");
-                
-                List<String> logs = new ArrayList<>(errorLogs);
-                if (errorLogCallback != null) {
-                    errorLogCallback.accept(logs);
-                }
-                throw new RuntimeException("Python 推理失败，退出码: " + exitCode);
-            }
-
-            // 4. 解析结果 JSON
-            Path resultJsonPath = outputDir.resolve("inference_results.json");
-            if (!Files.exists(resultJsonPath)) {
-                logger.error("未找到结果文件: {}", resultJsonPath);
-                throw new RuntimeException("推理完成但未生成结果文件");
-            }
-
-            return parseInferenceResults(resultJsonPath, relativeStoredPaths, taskId);
-
-        } catch (Exception e) {
-            logger.error("调用 Python 推理失败: taskId={}", taskId, e);
-            throw new RuntimeException("调用 Python 推理失败", e);
-        } finally {
-            // 清理临时文件
             try {
-                Files.deleteIfExists(progressFile);
+                ResponseEntity<String> response = restTemplate.getForEntity(statusUrl, String.class);
+                
+                if (!response.getStatusCode().is2xxSuccessful()) {
+                    Thread.sleep(POLL_INTERVAL_MS);
+                    continue;
+                }
+                
+                JsonNode statusNode = objectMapper.readTree(response.getBody());
+                String status = statusNode.path("status").asText();
+                int progress = statusNode.path("progress").asInt();
+                
+                // 更新进度
+                if (progress > lastProgress && progressCallback != null) {
+                    progressCallback.accept(progress);
+                    lastProgress = progress;
+                }
+                
+                // 检查状态
+                if ("completed".equals(status)) {
+                    logger.info("推理任务完成: taskId={}", taskId);
+                    return;
+                } else if ("failed".equals(status)) {
+                    String errorMsg = statusNode.path("error_message").asText("未知错误");
+                    logger.error("推理任务失败: taskId={}, error={}", taskId, errorMsg);
+                    if (errorLogCallback != null) {
+                        errorLogCallback.accept(List.of(errorMsg));
+                    }
+                    throw new RuntimeException("推理任务失败: " + errorMsg);
+                }
+                
+                // 等待后继续轮询
+                Thread.sleep(POLL_INTERVAL_MS);
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("推理任务被中断", e);
             } catch (Exception e) {
-                logger.warn("清理进度文件失败: {}", progressFile);
+                if (e instanceof RuntimeException) {
+                    throw (RuntimeException) e;
+                }
+                logger.warn("查询推理状态失败，将重试: taskId={}, error={}", taskId, e.getMessage());
+                try {
+                    Thread.sleep(POLL_INTERVAL_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("推理任务被中断", ie);
+                }
             }
         }
     }
-    
-    private Map<String, String> parseInferenceResults(Path jsonPath, List<String> expectedPaths, String taskId) {
-        Map<String, String> resultMap = new HashMap<>();
+
+    /**
+     * 获取并解析推理结果
+     */
+    private Map<String, String> fetchAndParseResults(String taskId, List<String> expectedPaths) {
+        String resultUrl = inferenceServiceUrl + "/inference/" + taskId + "/result";
+        
         try {
-            JsonNode rootNode = objectMapper.readTree(jsonPath.toFile());
+            ResponseEntity<String> response = restTemplate.getForEntity(resultUrl, String.class);
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("获取推理结果失败: " + response.getStatusCode());
+            }
+            
+            JsonNode rootNode = objectMapper.readTree(response.getBody());
+            return parseInferenceResults(rootNode, expectedPaths, taskId);
+            
+        } catch (Exception e) {
+            logger.error("获取推理结果失败: taskId={}", taskId, e);
+            throw new RuntimeException("获取推理结果失败", e);
+        }
+    }
+
+    /**
+     * 解析推理结果
+     */
+    private Map<String, String> parseInferenceResults(JsonNode rootNode, List<String> expectedPaths, String taskId) {
+        Map<String, String> resultMap = new HashMap<>();
+        
+        try {
             JsonNode resultsArray = rootNode.path("results");
             
             if (resultsArray.isArray()) {
                 for (JsonNode item : resultsArray) {
-                    String fullPath = item.path("image_path").asText();
-                    // Python 返回的是绝对路径，我们需要匹配回 relativeStoredPaths
-                    // 简单的匹配策略：看文件名是否一致
-                    String filename = Paths.get(fullPath).getFileName().toString();
+                    String imagePath = item.path("image_path").asText();
+                    // 从完整路径中提取相对路径进行匹配
+                    String filename = Paths.get(imagePath).getFileName().toString();
                     
                     String matchedRelativePath = expectedPaths.stream()
-                        .filter(p -> p.endsWith(filename)) // 假设文件名唯一
+                        .filter(p -> p.endsWith(filename))
                         .findFirst()
                         .orElse(null);
                         
@@ -269,7 +281,7 @@ public class AiServiceClient {
                 }
             }
         } catch (Exception e) {
-            logger.error("解析结果 JSON 失败: {}", jsonPath, e);
+            logger.error("解析推理结果失败: taskId={}", taskId, e);
         }
         
         // 对于没返回结果的文件，填充空结果防止前端报错
@@ -282,11 +294,11 @@ public class AiServiceClient {
         return resultMap;
     }
 
+    /**
+     * 转换为 AIVision 前端所需格式
+     */
     private String transformToAIVisionFormat(JsonNode pythonResult, String relativePath, String taskId) {
         try {
-            // Python 格式: { "image_path": "...", "rois": [ { "defects": [ { "class_name": "crack", "bbox": [...], "polygon": [...] } ] } ] }
-            // AIVision 格式: { "metadata": { ... }, "results": [ { "strName": "裂纹", "vvContour": [...] } ] }
-            
             Map<String, Object> finalResult = new HashMap<>();
             Map<String, Object> metadata = new HashMap<>();
             List<Map<String, Object>> defectResults = new ArrayList<>();
@@ -362,10 +374,25 @@ public class AiServiceClient {
     }
 
     /**
-     * 健康检查 - 视觉AI服务 (由于是本地调用，总是返回 true，或者检查文件是否存在)
+     * 健康检查 - 视觉AI服务
      */
     public boolean checkVisionAiHealth() {
-        return new File(scriptPath).exists();
+        try {
+            String url = inferenceServiceUrl + "/health";
+            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            logger.warn("AI 推理服务健康检查失败: {}", e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 刷新类别名称缓存（可由外部调用）
+     */
+    public void refreshClassNamesCache() {
+        cachedClassNames = null;
+        getClassNames();
     }
     
     private String mapToRadiographicStandard(String originalType) {
@@ -397,4 +424,3 @@ public class AiServiceClient {
          return res.get(relativeStoredPath);
     }
 }
-

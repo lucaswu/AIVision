@@ -2,7 +2,7 @@ services:
   # ================================
   # 基础设施服务
   # ================================
-  
+
   # PostgreSQL 数据库
   postgres:
     image: postgres:14.12-alpine
@@ -20,7 +20,7 @@ services:
     networks:
       - ai-services
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aiuser -d ai_detection"]
+      test: [ "CMD-SHELL", "pg_isready -U aiuser -d ai_detection" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -29,7 +29,7 @@ services:
   # ================================
   # 应用服务
   # ================================
-  
+
   # API Gateway 后端服务
   api-gateway:
     build:
@@ -47,14 +47,14 @@ services:
       - SPRING_DATASOURCE_USERNAME=aiuser
       - SPRING_DATASOURCE_PASSWORD=aipass123
       - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
-      
-      # Mock AI 服务配置 (代码中已Mock，不会发起真实请求)
-      - AI_SERVICES_VISION_AI_URL=http://localhost:8080
-      
+
+      # AI 推理服务配置 (指向独立的 Python 服务)
+      - AI_SERVICES_INFERENCE_URL=http://ai-inference:8000
+
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
       - SERVER_PORT=8080
-      
+
       # JVM优化参数
       - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport
     networks:
@@ -62,14 +62,56 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ai-inference:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/actuator/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
     volumes:
       - files_data:/app/data/files
+      - results_data:/app/data/results
+
+  # ================================
+  # AI 推理服务 (Python + CUDA)
+  # ================================
+  ai-inference:
+    build:
+      context: ../model
+      dockerfile: Dockerfile.ai
+    image: aivision-ai-inference:latest
+    container_name: ai-detection-inference
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      # 模型权重路径（使用绑定挂载的本地目录）
+      - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
+      - PRIMARY_WEIGHTS=/app/model/weights/primary-weights.pth
+    ports:
+      - "8000:8000"
+    networks:
+      - ai-services
+    volumes:
+      - files_data:/app/data/files
+      - results_data:/app/data/results
+      # 绑定挂载本地权重目录
+      - ../model/weight:/app/model/weights:ro
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   # 前端服务
   frontend:
@@ -97,6 +139,9 @@ volumes:
   files_data:
     driver: local
     name: ai-detection-files-data
+  results_data:
+    driver: local
+    name: ai-detection-results-data
 
 # ================================
 # 网络定义

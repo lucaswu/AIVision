@@ -1508,22 +1508,32 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
 
                   {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
-                  {defectRects.map((rect, idx) => (
-                    <g key={`rect-${idx}`}>
-                      <rect
-                        x={rect.x} y={rect.y} width={rect.w} height={rect.h}
-                        stroke={rect.color} strokeWidth={2 / scale} fill="none"
-                      />
-                      {/* 缺陷名字标签 */}
-                      <text
-                        x={rect.x} y={rect.y - 5}
-                        fill={rect.color} fontSize={14 / scale} fontWeight="bold"
-                        style={{ textShadow: '0 0 2px #000' }}
-                      >
-                        {rect.label}
-                      </text>
-                    </g>
-                  ))}
+                  {/* 从后端加载的数据是原始像素坐标，需要转换为 CSS 坐标 */}
+                  {defectRects.map((rect, idx) => {
+                    // 如果矩形有 defectRecordId，说明是从后端加载的，坐标是原始像素坐标，需要转换
+                    const isFromBackend = !!(rect as any).defectRecordId;
+                    const displayX = isFromBackend && widthRatio > 0 ? rect.x / widthRatio : rect.x;
+                    const displayY = isFromBackend && heightRatio > 0 ? rect.y / heightRatio : rect.y;
+                    const displayW = isFromBackend && widthRatio > 0 ? rect.w / widthRatio : rect.w;
+                    const displayH = isFromBackend && heightRatio > 0 ? rect.h / heightRatio : rect.h;
+
+                    return (
+                      <g key={`rect-${idx}`}>
+                        <rect
+                          x={displayX} y={displayY} width={displayW} height={displayH}
+                          stroke={rect.color} strokeWidth={2 / scale} fill="none"
+                        />
+                        {/* 缺陷名字标签 */}
+                        <text
+                          x={displayX} y={displayY - 5}
+                          fill={rect.color} fontSize={14 / scale} fontWeight="bold"
+                          style={{ textShadow: '0 0 2px #000' }}
+                        >
+                          {rect.label}
+                        </text>
+                      </g>
+                    );
+                  })}
 
                   {/* B. 绘制已保存的多边形 */}
                   {defectPolygons.map((poly, idx) => (

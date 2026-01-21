@@ -1,0 +1,34 @@
+# ==============================================================================
+# AIVision Python 推理服务依赖
+# ==============================================================================
+
+# Core ML/DL - PyTorch with CUDA 12.1 support
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.1.0
+torchvision>=0.16.0
+
+# YOLO & Object Detection
+ultralytics>=8.0.0
+
+# RF-DETR
+rfdetr>=1.0.0
+
+# Computer Vision
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Data Processing
+numpy>=1.24.0
+scikit-learn>=1.3.0
+tqdm>=4.65.0
+PyYAML>=6.0
+numba>=0.58.0
+
+# API Server (FastAPI)
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+httpx>=0.26.0
+
+# Utilities
+pydantic>=2.5.0

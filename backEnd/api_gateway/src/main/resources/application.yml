@@ -37,16 +37,19 @@ storage:
 
 # AI Services Configuration
 ai-services:
+  # 推理服务 URL（独立的 Python 容器）
+  inference-url: ${AI_SERVICES_INFERENCE_URL:http://ai-inference:8000}
   vision-ai:
-    # 移除旧的 HTTP URL，新增 Python 脚本配置
-    python-path: ${AI_SERVICES_PYTHON_PATH:python3}
-    script-path: ${AI_SERVICES_SCRIPT_PATH:/app/model/run_inference_pipeline.py}
-    # 模型路径（可通过环境变量覆盖）
-    roi-weights: ${AI_SERVICES_ROI_WEIGHTS:/app/model/weights/rfdetr/weldROI3.pt}
-    primary-weights: ${AI_SERVICES_PRIMARY_WEIGHTS:/app/model/weights/rfdetr/1120_slice3_res840.pth}
+    # 推理模式配置
     inference-mode: ${AI_SERVICES_INFERENCE_MODE:det}
-    device: ${AI_SERVICES_DEVICE:cpu}
+    device: ${AI_SERVICES_DEVICE:cuda:0}
     engine: ${AI_SERVICES_ENGINE:rfdet}
+    # 检测置信度阈值
+    det-confidence: ${AI_SERVICES_DET_CONFIDENCE:0.25}
+    # 是否启用横切纵拼推理
+    det-wide-slice: ${AI_SERVICES_DET_WIDE_SLICE:true}
+    # 超时配置（分钟）
+    timeout-minutes: ${AI_SERVICES_TIMEOUT_MINUTES:1440}
 
 # Default User Configuration (临时配置，用于未实现认证时的默认用户)
 default-user:
