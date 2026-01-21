@@ -79,7 +79,7 @@ services:
   # ================================
   ai-inference:
     build:
-      context: ../model
+      context: ../model/weld
       dockerfile: Dockerfile.ai
     image: aivision-ai-inference:latest
     container_name: ai-detection-inference
@@ -105,7 +105,7 @@ services:
       - files_data:/app/data/files
       - results_data:/app/data/results
       # 绑定挂载本地权重目录
-      - ../model/weight:/app/model/weights:ro
+      - ../model/weld/weight:/app/model/weights:ro
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s

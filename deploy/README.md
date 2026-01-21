@@ -37,6 +37,8 @@
 ## 🚀 快速启动
 
 ### 1. 前置条件
+#### 1 模型文件
+将模型文件primary-weights.pth和weldROI4.pt放置到model/weight目录下
 
 ```bash
 # 检查Docker和Docker Compose
