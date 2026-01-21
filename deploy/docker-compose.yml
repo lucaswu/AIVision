@@ -50,6 +50,8 @@ services:
 
       # AI 推理服务配置 (指向独立的 Python 服务)
       - AI_SERVICES_INFERENCE_URL=http://ai-inference:8000
+      # OCR 推理服务配置
+      - AI_SERVICES_OCR_INFERENCE_URL=http://ai-inference-ocr:8000
 
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
@@ -106,6 +108,40 @@ services:
       - results_data:/app/data/results
       # 绑定挂载本地权重目录
       - ../model/weld/weight:/app/model/weights:ro
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # ================================
+  # OCR 推理服务 (Python + CUDA + PaddlePaddle)
+  # ================================
+  ai-inference-ocr:
+    build:
+      context: ../model/OCR
+      dockerfile: Dockerfile.ai
+    image: aivision-ai-inference-ocr:latest
+    container_name: ai-detection-inference-ocr
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    ports:
+      - "8001:8000"
+    networks:
+      - ai-services
+    volumes:
+      - files_data:/app/data/files
+      - results_data:/app/data/results
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s

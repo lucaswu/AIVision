@@ -34,6 +34,10 @@ public class AiServiceClient {
     @Value("${ai-services.inference-url:http://ai-inference:8000}")
     private String inferenceServiceUrl;
 
+    // OCR 推理服务 URL
+    @Value("${ai-services.ocr-inference-url:http://ai-inference-ocr:8000}")
+    private String ocrInferenceServiceUrl;
+
     // 推理模式配置
     @Value("${ai-services.vision-ai.inference-mode:det}")
     private String inferenceMode;
@@ -422,5 +426,212 @@ public class AiServiceClient {
     public String callVisionAi(String relativeStoredPath, String taskId) {
          Map<String, String> res = callBatchVisionAi(List.of(relativeStoredPath), taskId, null, null);
          return res.get(relativeStoredPath);
+    }
+
+    // ================== OCR 服务调用 ==================
+    
+    /**
+     * 批量调用 OCR 服务，支持进度回调
+     * @param relativeStoredPaths 一批文件的逻辑/相对路径列表
+     * @param taskId 任务ID (使用不同的任务ID前缀以区分)
+     * @param progressCallback 进度回调函数，参数为已完成数量
+     * @param errorLogCallback 错误日志回调函数
+     * @return Map (relativePath -> ocrResultJson)
+     */
+    public Map<String, String> callBatchOcrAi(List<String> relativeStoredPaths, String taskId, 
+                                              Consumer<Integer> progressCallback, 
+                                              Consumer<List<String>> errorLogCallback) {
+        if (relativeStoredPaths == null || relativeStoredPaths.isEmpty()) {
+            return new HashMap<>();
+        }
+
+        logger.info("批量调用 OCR AI 服务 (HTTP): count={}, taskId={}", relativeStoredPaths.size(), taskId);
+        
+        try {
+            // 1. 提交 OCR 任务
+            submitOcrTask(taskId, relativeStoredPaths);
+            
+            // 2. 轮询等待完成
+            waitForOcrCompletion(taskId, relativeStoredPaths.size(), progressCallback, errorLogCallback);
+            
+            // 3. 获取并解析结果
+            return fetchOcrResults(taskId, relativeStoredPaths);
+            
+        } catch (Exception e) {
+            logger.error("调用 OCR 服务失败: taskId={}", taskId, e);
+            if (errorLogCallback != null) {
+                errorLogCallback.accept(List.of("OCR 服务调用失败: " + e.getMessage()));
+            }
+            // OCR 失败不抛异常，返回空结果
+            Map<String, String> emptyResults = new HashMap<>();
+            for (String path : relativeStoredPaths) {
+                emptyResults.put(path, createEmptyOcrResult(path));
+            }
+            return emptyResults;
+        }
+    }
+
+    /**
+     * 提交 OCR 任务到 Python 服务
+     */
+    private void submitOcrTask(String taskId, List<String> filePaths) {
+        String url = ocrInferenceServiceUrl + "/inference/submit";
+        
+        Map<String, Object> request = new HashMap<>();
+        request.put("task_id", taskId);
+        request.put("file_paths", filePaths);
+        request.put("max_size", 1920);
+        request.put("save_annotations", true);
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
+        
+        logger.info("提交 OCR 任务: url={}, taskId={}, fileCount={}", url, taskId, filePaths.size());
+        
+        try {
+            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("提交 OCR 任务失败: " + response.getStatusCode());
+            }
+            
+            logger.info("OCR 任务已提交: taskId={}", taskId);
+            
+        } catch (Exception e) {
+            logger.error("提交 OCR 任务失败: taskId={}", taskId, e);
+            throw new RuntimeException("提交 OCR 任务失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 轮询等待 OCR 任务完成
+     */
+    private void waitForOcrCompletion(String taskId, int totalFiles, 
+                                      Consumer<Integer> progressCallback, 
+                                      Consumer<List<String>> errorLogCallback) {
+        String statusUrl = ocrInferenceServiceUrl + "/inference/" + taskId + "/status";
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = timeoutMinutes * 60 * 1000L;
+        
+        int lastProgress = 0;
+        
+        while (true) {
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                throw new RuntimeException("OCR 任务超时: " + timeoutMinutes + "分钟");
+            }
+            
+            try {
+                ResponseEntity<String> response = restTemplate.getForEntity(statusUrl, String.class);
+                
+                if (!response.getStatusCode().is2xxSuccessful()) {
+                    Thread.sleep(POLL_INTERVAL_MS);
+                    continue;
+                }
+                
+                JsonNode statusNode = objectMapper.readTree(response.getBody());
+                String status = statusNode.path("status").asText();
+                int progress = statusNode.path("progress").asInt();
+                
+                if (progress > lastProgress && progressCallback != null) {
+                    progressCallback.accept(progress);
+                    lastProgress = progress;
+                }
+                
+                if ("completed".equals(status)) {
+                    logger.info("OCR 任务完成: taskId={}", taskId);
+                    return;
+                } else if ("failed".equals(status)) {
+                    String errorMsg = statusNode.path("error_message").asText("未知错误");
+                    logger.error("OCR 任务失败: taskId={}, error={}", taskId, errorMsg);
+                    if (errorLogCallback != null) {
+                        errorLogCallback.accept(List.of(errorMsg));
+                    }
+                    throw new RuntimeException("OCR 任务失败: " + errorMsg);
+                }
+                
+                Thread.sleep(POLL_INTERVAL_MS);
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("OCR 任务被中断", e);
+            } catch (Exception e) {
+                if (e instanceof RuntimeException) {
+                    throw (RuntimeException) e;
+                }
+                logger.warn("查询 OCR 状态失败，将重试: taskId={}, error={}", taskId, e.getMessage());
+                try {
+                    Thread.sleep(POLL_INTERVAL_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("OCR 任务被中断", ie);
+                }
+            }
+        }
+    }
+
+    /**
+     * 获取 OCR 结果
+     */
+    private Map<String, String> fetchOcrResults(String taskId, List<String> expectedPaths) {
+        String resultUrl = ocrInferenceServiceUrl + "/inference/" + taskId + "/result";
+        Map<String, String> resultMap = new HashMap<>();
+        
+        try {
+            ResponseEntity<String> response = restTemplate.getForEntity(resultUrl, String.class);
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("获取 OCR 结果失败: " + response.getStatusCode());
+            }
+            
+            JsonNode rootNode = objectMapper.readTree(response.getBody());
+            JsonNode resultsArray = rootNode.path("results");
+            
+            if (resultsArray.isArray()) {
+                for (JsonNode item : resultsArray) {
+                    String imagePath = item.path("image_path").asText();
+                    String filename = Paths.get(imagePath).getFileName().toString();
+                    
+                    String matchedPath = expectedPaths.stream()
+                        .filter(p -> p.endsWith(filename))
+                        .findFirst()
+                        .orElse(null);
+                        
+                    if (matchedPath != null) {
+                        resultMap.put(matchedPath, objectMapper.writeValueAsString(item));
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("获取 OCR 结果失败: taskId={}", taskId, e);
+        }
+        
+        // 填充空结果
+        for (String path : expectedPaths) {
+            if (!resultMap.containsKey(path)) {
+                resultMap.put(path, createEmptyOcrResult(path));
+            }
+        }
+        
+        return resultMap;
+    }
+
+    private String createEmptyOcrResult(String path) {
+        return String.format("{\"image_path\": \"%s\", \"recognized_texts\": [], \"field_statistics\": {}, \"error\": null}", path);
+    }
+
+    /**
+     * 健康检查 - OCR AI 服务
+     */
+    public boolean checkOcrAiHealth() {
+        try {
+            String url = ocrInferenceServiceUrl + "/health";
+            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            logger.warn("OCR 推理服务健康检查失败: {}", e.getMessage());
+            return false;
+        }
     }
 }

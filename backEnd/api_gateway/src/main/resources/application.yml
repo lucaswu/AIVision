@@ -39,6 +39,8 @@ storage:
 ai-services:
   # 推理服务 URL（独立的 Python 容器）
   inference-url: ${AI_SERVICES_INFERENCE_URL:http://ai-inference:8000}
+  # OCR 推理服务 URL
+  ocr-inference-url: ${AI_SERVICES_OCR_INFERENCE_URL:http://ai-inference-ocr:8000}
   vision-ai:
     # 推理模式配置
     inference-mode: ${AI_SERVICES_INFERENCE_MODE:det}

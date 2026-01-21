@@ -23,6 +23,8 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @Service
@@ -98,43 +100,86 @@ public class TaskProcessService {
             Map<String, TaskFile> pathToTaskFile = allTaskFiles.stream()
                 .collect(Collectors.toMap(TaskFile::getMinioFilePath, tf -> tf));
             
-            // 3.1 准备进度更新的回调
+            // 3.1 准备进度更新的回调 (综合两个服务的进度)
             final int totalFiles = allTaskFiles.size();
+            final AtomicInteger visionProgress = new AtomicInteger(0);
+            final AtomicInteger ocrProgress = new AtomicInteger(0);
             
-            // 3.2 调用 Python (耗时操作)
-            Map<String, String> visionResults = aiServiceClient.callBatchVisionAi(paths, taskId, 
-                // 进度回调
-                (processedCount) -> {
-                    try {
-                        Task currentTask = taskRepository.findById(taskId).orElse(null);
-                        if (currentTask != null) {
-                            currentTask.setProcessedFiles(processedCount);
-                            // 估算成功数，准确数等结束后更新
-                            currentTask.setSuccessFiles(processedCount); 
-                            taskRepository.save(currentTask);
-                        }
-                    } catch (Exception e) {
-                        logger.warn("更新进度失败: taskId={}", taskId);
+            // 综合进度更新回调
+            Runnable updateCombinedProgress = () -> {
+                try {
+                    Task currentTask = taskRepository.findById(taskId).orElse(null);
+                    if (currentTask != null) {
+                        // 两个服务各占50%权重，取平均值作为总进度
+                        int combinedProgress = (visionProgress.get() + ocrProgress.get()) / 2;
+                        currentTask.setProcessedFiles(combinedProgress);
+                        currentTask.setSuccessFiles(combinedProgress);
+                        taskRepository.save(currentTask);
                     }
-                },
-                // 错误日志回调
-                (errorLogs) -> {
-                    try {
-                        Task currentTask = taskRepository.findById(taskId).orElse(null);
-                        if (currentTask != null) {
-                            String errorMsg = String.join("\n", errorLogs);
-                            // 截断过长的日志
-                            if (errorMsg.length() > 60000) { // 数据库字段限制预留
-                                errorMsg = errorMsg.substring(errorMsg.length() - 60000);
-                            }
-                            currentTask.setErrorMessage(errorMsg);
-                            taskRepository.save(currentTask);
-                        }
-                    } catch (Exception e) {
-                        logger.error("保存错误日志失败: taskId={}", taskId);
-                    }
+                } catch (Exception e) {
+                    logger.warn("更新进度失败: taskId={}", taskId);
                 }
-            );
+            };
+            
+            // 3.2 并行调用 Vision AI 和 OCR 服务
+            String ocrTaskId = taskId + "-ocr"; // OCR 使用不同的任务ID
+            
+            // Vision AI 异步调用
+            CompletableFuture<Map<String, String>> visionFuture = CompletableFuture.supplyAsync(() -> {
+                return aiServiceClient.callBatchVisionAi(paths, taskId, 
+                    (processedCount) -> {
+                        visionProgress.set(processedCount);
+                        updateCombinedProgress.run();
+                    },
+                    (errorLogs) -> {
+                        try {
+                            Task currentTask = taskRepository.findById(taskId).orElse(null);
+                            if (currentTask != null) {
+                                String errorMsg = String.join("\n", errorLogs);
+                                if (errorMsg.length() > 60000) {
+                                    errorMsg = errorMsg.substring(errorMsg.length() - 60000);
+                                }
+                                currentTask.setErrorMessage(errorMsg);
+                                taskRepository.save(currentTask);
+                            }
+                        } catch (Exception e) {
+                            logger.error("保存错误日志失败: taskId={}", taskId);
+                        }
+                    }
+                );
+            });
+            
+            // OCR 异步调用
+            CompletableFuture<Map<String, String>> ocrFuture = CompletableFuture.supplyAsync(() -> {
+                return aiServiceClient.callBatchOcrAi(paths, ocrTaskId, 
+                    (processedCount) -> {
+                        ocrProgress.set(processedCount);
+                        updateCombinedProgress.run();
+                    },
+                    (errorLogs) -> {
+                        logger.warn("OCR 错误: {}", String.join("\n", errorLogs));
+                    }
+                );
+            });
+            
+            // 等待两个服务都完成
+            Map<String, String> visionResults;
+            Map<String, String> ocrResults;
+            try {
+                visionResults = visionFuture.get();
+                ocrResults = ocrFuture.get();
+            } catch (Exception e) {
+                logger.error("并行调用 AI 服务失败: taskId={}", taskId, e);
+                // Vision AI 失败是致命的，OCR 失败可以继续
+                if (visionFuture.isCompletedExceptionally()) {
+                    throw new RuntimeException("Vision AI 调用失败", e);
+                }
+                visionResults = new HashMap<>();
+                ocrResults = new HashMap<>();
+            }
+            
+            logger.info("AI 服务调用完成: taskId={}, visionResults={}, ocrResults={}", 
+                        taskId, visionResults.size(), ocrResults.size());
 
 
             // 4. 处理结果并写回
@@ -172,6 +217,16 @@ public class TaskProcessService {
                         saveDefectRecordsFromVisionResult(tf.getTaskFileId(), res);
                     } catch (Exception e) {
                         logger.warn("保存缺陷记录失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
+                    }
+                    
+                    // 6. 解析 OCR 结果并更新底片信息
+                    String ocrRes = ocrResults.get(tf.getMinioFilePath());
+                    if (ocrRes != null) {
+                        try {
+                            parseOcrResultAndUpdateTaskFile(tf, ocrRes);
+                        } catch (Exception e) {
+                            logger.warn("解析OCR结果失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
+                        }
                     }
                 } else {
                     failedCount++;
@@ -458,6 +513,104 @@ public class TaskProcessService {
             }
         } catch (Exception e) {
             logger.error("记录任务失败状态出错: taskId={}", taskId, e);
+        }
+    }
+    
+    /**
+     * 解析 OCR 结果并更新 TaskFile 的底片信息字段
+     * 
+     * OCR 结果 field_statistics 格式：
+     * {
+     *   "焊道号_片号": ["焊道19/片2"],
+     *   "像质计灵敏度": ["值=13"],
+     *   ...
+     * }
+     * 
+     * 解析规则：
+     * 1. 焊道号_片号: "焊道19/片2" -> weldId="19", filmNumber="2"
+     * 2. 像质计灵敏度: "值=13" -> sensitivity="13"
+     */
+    private void parseOcrResultAndUpdateTaskFile(TaskFile tf, String ocrResultJson) throws Exception {
+        JsonNode rootNode = objectMapper.readTree(ocrResultJson);
+        
+        // 解析 field_statistics
+        JsonNode fieldStats = rootNode.path("field_statistics");
+        if (fieldStats.isMissingNode() || fieldStats.isNull()) {
+            return;
+        }
+        
+        // 1. 解析 焊道号_片号
+        JsonNode weldFilmArray = fieldStats.path("焊道号_片号");
+        if (weldFilmArray.isArray() && weldFilmArray.size() > 0) {
+            String weldFilmStr = weldFilmArray.get(0).asText();
+            // 格式: "焊道19/片2" 或类似
+            parseWeldAndFilmNumber(tf, weldFilmStr);
+        }
+        
+        // 2. 解析 像质计灵敏度
+        JsonNode sensitivityArray = fieldStats.path("像质计灵敏度");
+        if (sensitivityArray.isArray() && sensitivityArray.size() > 0) {
+            String sensitivityStr = sensitivityArray.get(0).asText();
+            // 格式: "值=13" 或类似
+            parseSensitivity(tf, sensitivityStr);
+        }
+        
+        logger.debug("OCR解析完成: taskFileId={}, weldId={}, filmNumber={}, sensitivity={}", 
+                     tf.getTaskFileId(), tf.getWeldId(), tf.getFilmNumber(), tf.getSensitivity());
+    }
+    
+    /**
+     * 解析焊道号和片号
+     * 输入格式: "焊道19/片2" -> weldId="19", filmNumber="2"
+     */
+    private void parseWeldAndFilmNumber(TaskFile tf, String weldFilmStr) {
+        if (weldFilmStr == null || weldFilmStr.isEmpty()) {
+            return;
+        }
+        
+        // 匹配格式: 焊道{数字}/片{数字}
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("焊道(\\d+)/片(\\d+)");
+        java.util.regex.Matcher matcher = pattern.matcher(weldFilmStr);
+        
+        if (matcher.find()) {
+            String weldId = matcher.group(1);
+            String filmNumber = matcher.group(2);
+            tf.setWeldId(weldId);
+            tf.setFilmNumber(filmNumber);
+        } else {
+            // 尝试其他格式，直接提取数字
+            // 格式可能是 "19-2" 等
+            java.util.regex.Pattern altPattern = java.util.regex.Pattern.compile("(\\d+)[/-](\\d+)");
+            java.util.regex.Matcher altMatcher = altPattern.matcher(weldFilmStr);
+            if (altMatcher.find()) {
+                tf.setWeldId(altMatcher.group(1));
+                tf.setFilmNumber(altMatcher.group(2));
+            }
+        }
+    }
+    
+    /**
+     * 解析像质计灵敏度
+     * 输入格式: "值=13" -> sensitivity="13"
+     */
+    private void parseSensitivity(TaskFile tf, String sensitivityStr) {
+        if (sensitivityStr == null || sensitivityStr.isEmpty()) {
+            return;
+        }
+        
+        // 匹配格式: 值={数字}
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("值=(\\d+)");
+        java.util.regex.Matcher matcher = pattern.matcher(sensitivityStr);
+        
+        if (matcher.find()) {
+            tf.setSensitivity(matcher.group(1));
+        } else {
+            // 尝试直接提取数字
+            java.util.regex.Pattern numPattern = java.util.regex.Pattern.compile("(\\d+)");
+            java.util.regex.Matcher numMatcher = numPattern.matcher(sensitivityStr);
+            if (numMatcher.find()) {
+                tf.setSensitivity(numMatcher.group(1));
+            }
         }
     }
 }
