@@ -20,20 +20,23 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
   const [rawGrayData, setRawGrayData] = useState<Uint8Array | null>(null);
   const [imageWidth, setImageWidth] = useState(0);
   const [imageHeight, setImageHeight] = useState(0);
-  
+
+  // 图片是否已加载并渲染完成
+  const [imageReady, setImageReady] = useState(false);
+
   // 窗宽窗位参数
   const [windowData, setWindowData] = useState({ ww: 255, wl: 128 });
-  
+
   // ROI 选择状态
   const [dragStart, setDragStart] = useState<{ x: number, y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number, y: number } | null>(null);
-  
+
   // Canvas引用
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  
+
   // 缓存全图统计信息
   const imageStatsRef = useRef<ImageStats | null>(null);
-  
+
   // 节流控制
   const lastCalcTime = useRef<number>(0);
 
@@ -52,7 +55,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     // 如果未指定区域，使用全图
     const width = w === -1 ? imgWidth : w;
     const height = h === -1 ? data.length / imgWidth : h;
-    
+
     let sum = 0;
     let count = 0;
     const values: number[] = [];
@@ -62,15 +65,15 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     for (let row = y; row < y + height; row += step) {
       for (let col = x; col < x + width; col += step) {
         const index = row * imgWidth + col;
-        
+
         if (index >= 0 && index < data.length) {
           const val = data[index];
           values.push(val);
           sum += val;
-          
+
           if (val < min) min = val;
           if (val > max) max = val;
-          
+
           count++;
         }
       }
@@ -99,10 +102,10 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     const window_min = wl - ww / 2;
     const window_max = wl + ww / 2;
     const result = new Uint8Array(data.length);
-    
+
     for (let i = 0; i < data.length; i++) {
       const val = data[i];
-      
+
       if (val <= window_min) {
         result[i] = 0;
       } else if (val >= window_max) {
@@ -111,7 +114,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
         result[i] = Math.round(((val - window_min) / ww) * 255);
       }
     }
-    
+
     return result;
   }, []);
 
@@ -132,7 +135,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     // 创建RGBA ImageData
     const imageData = new ImageData(imageWidth, imageHeight);
     const rgbaData = imageData.data;
-    
+
     for (let i = 0; i < processedData.length; i++) {
       const idx = i * 4;
       const gray = processedData[i];
@@ -141,33 +144,42 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
       rgbaData[idx + 2] = gray; // B
       rgbaData[idx + 3] = 255;  // A
     }
-    
+
     ctx.putImageData(imageData, 0, 0);
+
+    // 图片已渲染到 canvas，标记为就绪
+    // 使用 requestAnimationFrame 确保 Canvas 绘制指令已提交给浏览器，避免 SVG 抢先显示的闪烁
+    requestAnimationFrame(() => {
+      setImageReady(true);
+    });
   }, [imageWidth, imageHeight]);
 
   // ==========================================================================
   // 更新显示
   // ==========================================================================
   const updateDisplay = useCallback(() => {
-    if (!rawGrayData) return;
-    
+    // 关键修复：如果你没有 imageFile，绝对不要尝试渲染，即使 rawGrayData 还是旧值
+    // 这防止了在切换文件（imageFile=undefined）但状态清理尚未完成的短暂间隙中，
+    // 旧数据被错误地绘制到（刚刚新建的）Canvas 上。
+    if (!imageFile || !rawGrayData) return;
+
     const processed = applyWindowLevelToGrayData(
       rawGrayData,
       windowData.ww,
       windowData.wl
     );
-    
+
     renderToCanvas(processed);
-  }, [rawGrayData, windowData, applyWindowLevelToGrayData, renderToCanvas]);
+  }, [imageFile, rawGrayData, windowData, applyWindowLevelToGrayData, renderToCanvas]);
 
   // ==========================================================================
   // 更新窗宽窗位
   // ==========================================================================
   const updateWindowLevel = useCallback((newWW: number, newWL: number) => {
     const stats = imageStatsRef.current;
-    
+
     const w = Math.max(1, newWW);
-    
+
     let l: number;
     if (stats) {
       l = Math.max(stats.min, Math.min(stats.max, newWL));
@@ -182,14 +194,30 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
   // 加载图像文件（关键：直接读取原始数据）
   // ==========================================================================
   useEffect(() => {
-    if (!imageFile) return;
+    if (!imageFile) {
+      setRawGrayData(null);
+      setImageWidth(0);
+      setImageHeight(0);
+      setImageReady(false);
+
+      // 清空画布
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      return;
+    }
+
+    // 开始加载新图片时，立即标记为未就绪
+    setImageReady(false);
 
     const loadImage = async () => {
       try {
         // 创建临时Image对象加载
         const img = new Image();
         const url = URL.createObjectURL(imageFile);
-        
+
         await new Promise<void>((resolve, reject) => {
           img.onload = () => resolve();
           img.onerror = reject;
@@ -203,22 +231,22 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = width;
         tempCanvas.height = height;
-        
+
         const tempCtx = tempCanvas.getContext('2d', {
           willReadFrequently: true,
         });
-        
+
         if (!tempCtx) {
           throw new Error('无法创建Canvas上下文');
         }
 
         // 绘制图像
         tempCtx.drawImage(img, 0, 0);
-        
+
         // 获取RGBA数据
         const imageData = tempCtx.getImageData(0, 0, width, height);
         const rgbaData = imageData.data;
-        
+
         // 转换为单通道灰度数据（这才是真正的"原始数据"）
         const grayData = new Uint8Array(width * height);
         for (let i = 0; i < grayData.length; i++) {
@@ -238,26 +266,26 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
 
         // 计算全图统计
         const stats = calculateStatsFromGrayData(grayData, 0, 0, -1, -1, width, 2);
-        
+
         if (stats) {
           imageStatsRef.current = stats;
-          
+
           // 应用自动窗位
           const autoWW = Math.max(1, Math.min(4 * stats.std, stats.max - stats.min));
           const autoWL = stats.mean;
-          
+
           console.log(`图像加载完成: ${width}x${height}`);
           console.log(`像素范围: [${stats.min}, ${stats.max}]`);
           console.log(`均值: ${stats.mean.toFixed(2)}, 标准差: ${stats.std.toFixed(2)}`);
           console.log(`自动窗宽窗位: WW=${autoWW.toFixed(1)}, WL=${autoWL.toFixed(1)}`);
-          
+
           updateWindowLevel(autoWW, autoWL);
         } else {
           updateWindowLevel(255, 128);
         }
 
         URL.revokeObjectURL(url);
-        
+
       } catch (error) {
         console.error('图像加载失败:', error);
         message.error('图像加载失败');
@@ -288,7 +316,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     // 🔑 关键修复：获取Canvas的显示尺寸
     const displayWidth = canvas.clientWidth;
     const displayHeight = canvas.clientHeight;
-    
+
     // 🔑 关键修复：计算显示尺寸与原始尺寸的比例
     const scaleX = imageWidth / displayWidth;
     const scaleY = imageHeight / displayHeight;
@@ -354,7 +382,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
   // ==========================================================================
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (activeTool !== 'windowing') return;
-    
+
     e.preventDefault();
     e.stopPropagation();
 
@@ -368,13 +396,13 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (activeTool !== 'windowing' || !dragStart) return;
-    
+
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
 
     setDragCurrent({ x, y });
-    
+
     const now = Date.now();
     if (now - lastCalcTime.current > 40) {
       computeROI(dragStart.x, dragStart.y, x, y, true);
@@ -400,24 +428,31 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
   // ==========================================================================
   const resetWindow = useCallback(() => {
     const stats = imageStatsRef.current;
-    
+
     if (stats) {
       const resetWW = stats.max - stats.min;
       const resetWL = (stats.max + stats.min) / 2;
       updateWindowLevel(resetWW, resetWL);
-      // message.info(
-      //   `窗宽窗位已重置 (WW=${resetWW.toFixed(0)}, WL=${resetWL.toFixed(0)})`
-      // );
     } else {
       updateWindowLevel(255, 128);
-      // message.info('窗宽窗位已重置');
     }
   }, [updateWindowLevel]);
+
+  // ==========================================================================
+  // 重置图片就绪状态（供外部调用，如切换文件时）
+  // ==========================================================================
+  const resetImageReady = useCallback(() => {
+    setImageReady(false);
+  }, []);
 
   return {
     windowWidth: windowData.ww,
     windowLevel: windowData.wl,
     imageStats: imageStatsRef.current,
+    imageReady, // 图片是否已加载并渲染完成
+    resetImageReady, // 重置图片就绪状态
+    imageWidth,
+    imageHeight,
     isSelecting: !!(dragStart && dragCurrent),
     selectionRect: dragStart && dragCurrent ? {
       left: Math.min(dragStart.x, dragCurrent.x),

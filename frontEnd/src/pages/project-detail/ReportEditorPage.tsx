@@ -329,17 +329,34 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     windowWidth,
     windowLevel,
     setManualWindowLevel,
+    imageReady, // 从 hook 获取图片渲染完成状态
+    resetImageReady, // 重置图片就绪状态的方法
+    imageWidth: rawImageWidth, // 获取同步的图片宽度
+    imageHeight: rawImageHeight, // 获取同步的图片高度
   } = useWindowLevelTool({
     activeTool,
     scale,
     imageFile: imageFile
   });
 
+  // 防止切换文件瞬间闪烁：强制标记状态重置 Ref
+  // 该 Ref 在切换文件时立即设为 true，只有当 imageReady 真正变回 false 后才设为 false
+  const isImageResetingRef = useRef(false);
+
+  useEffect(() => {
+    if (!imageReady) {
+      isImageResetingRef.current = false;
+    }
+  }, [imageReady]);
+
   useEffect(() => {
     if (!selectedFile || !previewUrl) {
       setImageFile(undefined);
       return;
     }
+    // 开始加载新图片时，先清空旧图片，确保WindowLevelTool清除状态
+    setImageFile(undefined);
+
     fetch(previewUrl)
       .then(res => res.blob())
       .then(blob => {
@@ -679,6 +696,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   useEffect(() => {
     if (selectedFile && selectedFile.TaskFileId !== prevTaskFileIdRef.current) {
+      // 切换瞬间，如果当前图片是就绪的（说明是旧图），则标记为重置中，防止闪烁
+      // 如果当前图片本身就不就绪（如首屏加载），则不需要锁，否则会导致死锁（因为解锁逻辑依赖 imageReady 变 false 的动作）
+      if (imageReady) {
+        isImageResetingRef.current = true;
+      }
+
       // 记录当前处理的文件ID
       prevTaskFileIdRef.current = selectedFile.TaskFileId;
 
@@ -689,6 +712,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         filmDensity: selectedFile.FilmDensity || '',
         sensitivity: selectedFile.Sensitivity || '',
       });
+
+      // 立即清空缺陷列表，防止在加载新数据前显示旧数据或发生时序闪烁
+      setDefectRects([]);
+      setDefectCircles([]);
+      setDefectPolygons([]);
 
       // 从后端加载缺陷记录
       defectRecordAPI.getByTaskFileId(selectedFile.TaskFileId).then(resp => {
@@ -761,6 +789,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       // 切换文件时标记为初始加载状态
       isInitialLoadRef.current = true;
+
+      // 立即重置图片就绪状态，确保缺陷信息隐藏，直到新图片渲染完成
+      resetImageReady();
 
       resetWindow();
       setScale(1);
@@ -973,8 +1004,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     { wait: 500 }
   );
 
-  const widthRatio = (originalSize.w > 0 && imgSize.w > 0) ? (originalSize.w / imgSize.w) : 1;
-  const heightRatio = (originalSize.h > 0 && imgSize.h > 0) ? (originalSize.h / imgSize.h) : 1;
+  // 使用 Hook 返回的同步尺寸计算比例，避免 useEffect 更新 originalSize 带来的渲染延迟（闪烁根本原因）
+  const trueImageW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+  const trueImageH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+
+  const widthRatio = (trueImageW > 0 && imgSize.w > 0) ? (trueImageW / imgSize.w) : 1;
+  const heightRatio = (trueImageH > 0 && imgSize.h > 0) ? (trueImageH / imgSize.h) : 1;
 
   const displayOrigin = useMemo(() => {
     if (activeTool === 'setOrigin' && tempOrigin) {
@@ -1478,6 +1513,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 onTransitionEnd={() => updateImageOffset()}
               >
                 <canvas
+                  key={selectedFile?.TaskFileId || 'default-canvas'}
                   ref={canvasRef}
                   style={{
                     maxHeight: "calc(100vh - 280px)",
@@ -1508,72 +1544,93 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
 
                   {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
-                  {/* 从后端加载的数据是原始像素坐标，需要转换为 CSS 坐标 */}
-                  {defectRects.map((rect, idx) => {
-                    // 如果矩形有 defectRecordId，说明是从后端加载的，坐标是原始像素坐标，需要转换
-                    const isFromBackend = !!(rect as any).defectRecordId;
-                    const displayX = isFromBackend && widthRatio > 0 ? rect.x / widthRatio : rect.x;
-                    const displayY = isFromBackend && heightRatio > 0 ? rect.y / heightRatio : rect.y;
-                    const displayW = isFromBackend && widthRatio > 0 ? rect.w / widthRatio : rect.w;
-                    const displayH = isFromBackend && heightRatio > 0 ? rect.h / heightRatio : rect.h;
+                  {/* 从后端加载的数据是原始像素坐标,需要转换为 CSS 坐标 */}
+                  {/*只在图片加载完成后且当前文件ID匹配时才显示缺陷信息 */}
+                  {(() => {
+                    // 防止切换文件瞬间闪烁：只有当 imageReady 为 true 且当前渲染的文件 ID 与已处理的 ID 一致，且不处于重置过程中时才显示
+                    const isFileSynced = selectedFile?.TaskFileId === prevTaskFileIdRef.current;
+                    const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
 
-                    return (
-                      <g key={`rect-${idx}`}>
-                        <rect
-                          x={displayX} y={displayY} width={displayW} height={displayH}
-                          stroke={rect.color} strokeWidth={2 / scale} fill="none"
-                        />
-                        {/* 缺陷名字标签 */}
-                        <text
-                          x={displayX} y={displayY - 5}
-                          fill={rect.color} fontSize={14 / scale} fontWeight="bold"
-                          style={{ textShadow: '0 0 2px #000' }}
-                        >
-                          {rect.label}
-                        </text>
-                      </g>
-                    );
-                  })}
+                    if (!shouldShowDefects) return null;
+
+                    return defectRects.map((rect, idx) => {
+                      // 如果矩形有 defectRecordId，说明是从后端加载的，坐标是原始像素坐标，需要转换
+                      const isFromBackend = !!(rect as any).defectRecordId;
+                      const displayX = isFromBackend && widthRatio > 0 ? rect.x / widthRatio : rect.x;
+                      const displayY = isFromBackend && heightRatio > 0 ? rect.y / heightRatio : rect.y;
+                      const displayW = isFromBackend && widthRatio > 0 ? rect.w / widthRatio : rect.w;
+                      const displayH = isFromBackend && heightRatio > 0 ? rect.h / heightRatio : rect.h;
+
+                      return (
+                        <g key={`rect-${idx}`}>
+                          <rect
+                            x={displayX} y={displayY} width={displayW} height={displayH}
+                            stroke={rect.color} strokeWidth={2 / scale} fill="none"
+                          />
+                          {/* 缺陷名字标签 */}
+                          <text
+                            x={displayX} y={displayY - 5}
+                            fill={rect.color} fontSize={14 / scale} fontWeight="bold"
+                            style={{ textShadow: '0 0 2px #000' }}
+                          >
+                            {rect.label}
+                          </text>
+                        </g>
+                      );
+                    });
+                  })()}
 
                   {/* B. 绘制已保存的多边形 */}
-                  {defectPolygons.map((poly, idx) => (
-                    <g key={`poly-${idx}`}>
-                      <polygon
-                        points={poly.points.map(p => `${p.x},${p.y}`).join(' ')}
-                        stroke={poly.color} strokeWidth={2 / scale} fill="none"
-                      />
-                      {/* 缺陷名字标签 - 取第一个点上方 */}
-                      <text
-                        x={poly.points[0].x} y={poly.points[0].y - 5}
-                        fill={poly.color} fontSize={14 / scale} fontWeight="bold"
-                        style={{ textShadow: '0 0 2px #000' }}
-                      >
-                        {poly.label}
-                      </text>
-                    </g>
-                  ))}
+                  {(() => {
+                    const isFileSynced = selectedFile?.TaskFileId === prevTaskFileIdRef.current;
+                    const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
+                    if (!shouldShowDefects) return null;
+
+                    return defectPolygons.map((poly, idx) => (
+                      <g key={`poly-${idx}`}>
+                        <polygon
+                          points={poly.points.map(p => `${p.x},${p.y}`).join(' ')}
+                          stroke={poly.color} strokeWidth={2 / scale} fill="none"
+                        />
+                        {/* 缺陷名字标签 - 取第一个点上方 */}
+                        <text
+                          x={poly.points[0].x} y={poly.points[0].y - 5}
+                          fill={poly.color} fontSize={14 / scale} fontWeight="bold"
+                          style={{ textShadow: '0 0 2px #000' }}
+                        >
+                          {poly.label}
+                        </text>
+                      </g>
+                    ));
+                  })()}
 
                   {/* C. 绘制已保存的圆形 */}
-                  {defectCircles.map((circle, idx) => (
-                    <g key={`circle-${idx}`}>
-                      <circle
-                        cx={circle.x}
-                        cy={circle.y}
-                        r={circle.r}
-                        stroke={circle.color}
-                        strokeWidth={2 / scale}
-                        fill="none"
-                      />
-                      {/* 缺陷名字标签 - 圆顶上方 */}
-                      <text
-                        x={circle.x} y={circle.y - circle.r - 5}
-                        fill={circle.color} fontSize={14 / scale} fontWeight="bold"
-                        style={{ textShadow: '0 0 2px #000' }}
-                      >
-                        {circle.label}
-                      </text>
-                    </g>
-                  ))}
+                  {(() => {
+                    const isFileSynced = selectedFile?.TaskFileId === prevTaskFileIdRef.current;
+                    const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
+                    if (!shouldShowDefects) return null;
+
+                    return defectCircles.map((circle, idx) => (
+                      <g key={`circle-${idx}`}>
+                        <circle
+                          cx={circle.x}
+                          cy={circle.y}
+                          r={circle.r}
+                          stroke={circle.color}
+                          strokeWidth={2 / scale}
+                          fill="none"
+                        />
+                        {/* 缺陷名字标签 - 圆顶上方 */}
+                        <text
+                          x={circle.x} y={circle.y - circle.r - 5}
+                          fill={circle.color} fontSize={14 / scale} fontWeight="bold"
+                          style={{ textShadow: '0 0 2px #000' }}
+                        >
+                          {circle.label}
+                        </text>
+                      </g>
+                    ));
+                  })()}
 
                   {/* D. 绘制当前正在拖拽的矩形 (虚线框, 默认红色) */}
                   {activeTool === 'defect' && drawingType === 'rect' && currentDefectRect && (
