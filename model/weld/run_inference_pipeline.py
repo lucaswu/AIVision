@@ -210,7 +210,7 @@ class InferencePipelineRunner:
                 debug_root=debug_dir,
                 wide_slice=wide_slice_cfg
             )
-            rois, _ = self.run_detection_func(image, image_path, config)
+            rois = self.run_detection_func(image, config)
         else:
             if self.roi_detector is None:
                 raise ValueError("seg 模式必须提供 ROI 检测器")
