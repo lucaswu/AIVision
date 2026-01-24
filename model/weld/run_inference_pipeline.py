@@ -144,6 +144,7 @@ class InferencePipelineRunner:
         self.roi_detector = roi_detector
         self.font_renderer = font_renderer
         self.debug_root = debug_root
+        self.output_dir = Path(args.output_dir) if args.output_dir else None
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -160,7 +161,9 @@ class InferencePipelineRunner:
 
     def run(self, image_paths: List[Path]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
-        for image_path in tqdm(image_paths, desc="推理中"):
+        total = len(image_paths)
+        
+        for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
             try:
                 rois, width, height = self._process_image(image_path)
                 results.append({
@@ -173,7 +176,24 @@ class InferencePipelineRunner:
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
+            
+            # Update progress
+            if self.output_dir:
+                self._update_progress_file(self.output_dir, idx + 1, total, image_path.name)
+                
         return results
+
+    def _update_progress_file(self, output_dir: Path, current: int, total: int, last_file: str):
+        progress_file = output_dir / "progress.json"
+        try:
+            with open(progress_file, "w") as f:
+                json.dump({
+                    "current": current,
+                    "total": total,
+                    "last_file": last_file
+                }, f)
+        except Exception:
+            pass  # Ignore write errors to avoid crashing inference
 
     def _build_primary_model(self):
         if self.mode == "det":

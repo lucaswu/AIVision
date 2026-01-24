@@ -161,6 +161,17 @@ async def get_task_status(task_id: str):
     
     task = inference_tasks[task_id]
     
+    # 尝试从 progress.json 读取最新进度
+    progress_file = Path(f"/app/data/results/{task_id}/progress.json")
+    if progress_file.exists():
+        try:
+            with open(progress_file, 'r') as f:
+                progress_data = json.load(f)
+                task["progress"] = progress_data.get("current", task["progress"])
+                task["current_file"] = progress_data.get("last_file", task.get("current_file"))
+        except:
+            pass
+    
     return TaskStatus(
         task_id=task_id,
         status=task["status"],

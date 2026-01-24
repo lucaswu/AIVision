@@ -114,6 +114,13 @@ public class TaskProcessService {
                         int combinedProgress = (visionProgress.get() + ocrProgress.get()) / 2;
                         currentTask.setProcessedFiles(combinedProgress);
                         currentTask.setSuccessFiles(combinedProgress);
+
+                        // 如果推理全部完成（即达到 100%），强制设置为 99%，
+                        // 这样只有在后续写入数据库完成后才会变为 100%
+                        if (combinedProgress == totalFiles && totalFiles > 0) {
+                             currentTask.setProgress(99); 
+                        }
+                        
                         taskRepository.save(currentTask);
                     }
                 } catch (Exception e) {

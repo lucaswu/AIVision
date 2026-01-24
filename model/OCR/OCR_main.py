@@ -484,6 +484,9 @@ def main():
             results.append(result)
             processor.statistics.append(processor._extract_statistics(result))
 
+        # Update progress
+        _update_progress_file(output_dir, i, len(image_paths), os.path.basename(img_path))
+
     # 保存统计结果
     processor._save_statistics()
 
@@ -497,6 +500,19 @@ def main():
 
     print(f"\n处理完成！共处理 {len(results)} 个文件")
     print(f"结果JSON: {results_path}")
+
+
+def _update_progress_file(output_dir: str, current: int, total: int, last_file: str):
+    progress_file = os.path.join(output_dir, "progress.json")
+    try:
+        with open(progress_file, "w") as f:
+            json.dump({
+                "current": current,
+                "total": total,
+                "last_file": last_file
+            }, f)
+    except Exception:
+        pass  # Ignore write errors
 
 
 def test_single_image():
