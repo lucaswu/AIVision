@@ -214,13 +214,19 @@ def draw_annotations(image: Image.Image,
         '未分类': (200, 200, 200)  # 浅灰色
     }
 
-    for result in ocr_results:
-        rec_texts = result.get('rec_texts', [])
-        rec_polys = result.get('rec_polys', [])
-
-        for i, (text, poly) in enumerate(zip(rec_texts, rec_polys)):
+    # PaddleOCR list format support
+    # ocr_results is [[ [box, (text, score)], ... ]]
+    if ocr_results and len(ocr_results) > 0 and ocr_results[0]:
+        lines = ocr_results[0]
+        for i, line in enumerate(lines):
             if i >= len(classified_results):
                 break
+            
+            # line structure: [box, (text, score)]
+            # box is [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+            poly = line[0]
+            text = line[1][0]
+            # score = line[1][1]
 
             classification = classified_results[i]
 

@@ -3,7 +3,11 @@
 # 支持 CUDA 12.1 + Python 3.10
 # ==============================================================================
 
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+FROM ${BASE_IMAGE}
+
+ARG USE_GPU=true
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive
@@ -42,8 +46,12 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 WORKDIR /app
 
 # 复制依赖文件并安装（分层缓存优化）
+# 复制依赖文件并安装（分层缓存优化）
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+RUN if [ "$USE_GPU" = "false" ]; then \
+    sed -i '/--extra-index-url/d' requirements.txt; \
+    fi && \
+    pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
 # 创建必要目录
 RUN mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights

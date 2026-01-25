@@ -83,19 +83,16 @@ services:
     build:
       context: ../model/weld
       dockerfile: Dockerfile.ai
+      args:
+        BASE_IMAGE: ${WELD_BASE_IMAGE:-nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04}
+        USE_GPU: ${USE_GPU:-true}
     image: aivision-ai-inference:latest
     container_name: ai-detection-inference
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
+      - USE_GPU=${USE_GPU:-true}
       # 模型权重路径（使用绑定挂载的本地目录）
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
       - PRIMARY_WEIGHTS=/app/model/weights/primary-weights.pth
@@ -122,19 +119,18 @@ services:
     build:
       context: ../model/OCR
       dockerfile: Dockerfile.ai
+      args:
+        BASE_IMAGE: ${OCR_BASE_IMAGE:-nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04}
+        USE_GPU: ${USE_GPU:-true}
+        INSTALL_PADDLE: ${INSTALL_PADDLE:-true}
+        SETUP_PYTHON: ${SETUP_PYTHON:-true}
     image: aivision-ai-inference-ocr:latest
     container_name: ai-detection-inference-ocr
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
+      - USE_GPU=${USE_GPU:-true}
     ports:
       - "8001:8000"
     networks:

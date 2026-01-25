@@ -46,7 +46,10 @@ class BatchOCRProcessor:
 
         # 初始化PaddleOCR
         print("初始化PaddleOCR...")
+        use_gpu = os.environ.get('USE_GPU', 'true').lower() == 'true'
+        print(f"PaddleOCR使用设备: {'GPU' if use_gpu else 'CPU'}")
         self.ocr = PaddleOCR(
+            use_gpu=use_gpu,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=True
@@ -78,7 +81,8 @@ class BatchOCRProcessor:
             img_array, original_img, scale = process_image_for_ocr(img_path, self.max_image_size)
 
             # 2. OCR识别
-            results = self.ocr.predict(input=img_array)
+            # PaddleOCR.ocr returns a list of lists: [[[box, (text, score)], ...]]
+            results = self.ocr.ocr(img_array, cls=True)
 
             # 3. 解析结果
             if not results or not results[0]:
@@ -92,8 +96,15 @@ class BatchOCRProcessor:
                     'error': '未识别到文本'
                 }
 
-            result = results[0]
-            rec_texts = result.get('rec_texts', [])
+            # PaddleOCR 结果格式: [[[[x1,y1],[x2,y2]...], ("text", score)], ...]
+            # results[0] 是第一张图片的结果列表
+            rec_texts = []
+            ocr_result = results[0]
+            if ocr_result:
+                for line in ocr_result:
+                    # line format: [box, (text, score)]
+                    if len(line) >= 2 and len(line[1]) >= 1:
+                        rec_texts.append(line[1][0])
 
             if not rec_texts:
                 print("未识别到任何文本")

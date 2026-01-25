@@ -174,6 +174,7 @@ public class TaskService {
             tf.setErrorMessage(null);
             tf.setProcessingStartTime(null);
             tf.setProcessingEndTime(null);
+            tf.setReviewStatus(TaskFile.ReviewStatus.PENDING);
         }
         taskFileRepository.saveAll(taskFiles);
 

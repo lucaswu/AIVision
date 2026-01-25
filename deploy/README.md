@@ -49,17 +49,37 @@ docker-compose --version
 cd backEnd/deploy
 ```
 
-### 2. 完整系统启动
+### 2. 系统启动 (环境切换)
 
+本项目支持双环境 (CPU / GPU) 快速切换。
+
+**前置操作 (必选):**
+进入部署目录
 ```bash
-# 启动所有必需服务
-docker-compose up -d
+cd deploy
+```
 
+**方案 A: 切换到 GPU 模式 (推荐)**
+```bash
+cp .env.gpu .env
+docker compose up -d --build
+```
+> 适用场景: 生产环境、NVIDIA显卡主机
+
+**方案 B: 切换到 CPU 模式**
+```bash
+cp .env.cpu .env
+docker compose up -d --build
+```
+> 适用场景: 开发测试、无显卡主机 (OCR使用百度预装镜像，速度较慢但兼容性好)
+
+**常用命令:**
+```bash
 # 查看服务状态
-docker-compose ps
+docker compose ps
 
 # 查看启动日志
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### 3. 分步启动 (推荐)
