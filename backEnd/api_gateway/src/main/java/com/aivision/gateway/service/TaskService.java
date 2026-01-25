@@ -274,10 +274,24 @@ public class TaskService {
     }
 
     private void scheduleAsyncProcessing(String taskId) {
-        CompletableFuture.runAsync(() -> {
-            try { Thread.sleep(200); taskProcessService.processTaskAsync(taskId); }
+        Runnable trigger = () -> CompletableFuture.runAsync(() -> {
+            // 移除 sleep，因为已经确保在 commit 后执行
+            try { taskProcessService.processTaskAsync(taskId); }
             catch (Exception e) { logger.error("启动异步处理失败: taskId={}, error={}", taskId, e.getMessage()); }
         });
+
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        trigger.run();
+                    }
+                }
+            );
+        } else {
+            trigger.run();
+        }
     }
 
     @Transactional(readOnly = true)
