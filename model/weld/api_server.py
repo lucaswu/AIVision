@@ -159,7 +159,20 @@ async def submit_inference(request: InferenceRequest, background_tasks: Backgrou
         "error_message": None,
         "start_time": time.time()
     }
-    
+
+    # 清理旧的进度文件和结果文件
+    output_dir = Path(f"/app/data/results/{task_id}")
+    if output_dir.exists():
+        import shutil
+        try:
+            # 删除目录下的关键文件，而不是删除整个目录（防止权限问题）
+            for f in output_dir.glob("*"):
+                if f.is_file():
+                    f.unlink()
+            print(f"Cleaned up old results for task {task_id}")
+        except Exception as e:
+            print(f"Warning: Failed to clean up old results for task {task_id}: {e}")
+
     # 在后台执行推理
     background_tasks.add_task(run_inference_task, request)
     
