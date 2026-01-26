@@ -71,6 +71,7 @@ import GeometricMeasureTool from './tool/GeometricMeasureTool';
 import { useWindowLevelTool } from './tool/WindowLevelTool';
 import Ruler from './tool/Ruler';
 import DefectMarking, { DrawingType } from './tool/DefectMarking';
+import PositionAndSizeTool, { PositionSizeType } from './tool/PositionAndSizeTool';
 
 const { Content, Sider } = Layout;
 const { Title, Text, Link } = Typography;
@@ -110,6 +111,76 @@ interface DefectBase {
 interface SavedRect extends DefectBase { x: number; y: number; w: number; h: number; }
 interface SavedCircle extends DefectBase { x: number; y: number; r: number; }
 interface SavedPolygon extends DefectBase { points: { x: number, y: number }[]; }
+
+// --- 椭圆工具相关接口 ---
+interface EllipseShape {
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  rotation: number;
+}
+
+interface EllipseDragState {
+  active: boolean;
+  type: 'move' | 'rotate' | 'resize-t' | 'resize-b' | 'resize-l' | 'resize-r' | null;
+  startMouse: { x: number, y: number };
+  startShape: EllipseShape;
+  startRotationAngle?: number;
+}
+
+interface EllipseToolState {
+  mode: 'idle' | 'placing' | 'editing';
+  shape: EllipseShape | null;
+  drag: EllipseDragState;
+  isVisible: boolean;
+}
+
+// 垂直成像状态（复用 EllipseShape，但 ry 固定很小，rotation 固定为 0）
+interface VerticalDragState {
+  active: boolean;
+  type: 'move' | 'resize-l' | 'resize-r' | null;  // 只允许左右拉伸
+  startMouse: { x: number, y: number };
+  startShape: EllipseShape;
+}
+
+interface VerticalToolState {
+  mode: 'idle' | 'placing' | 'editing';
+  shape: EllipseShape | null;  // cx, cy, rx, ry=15(固定), rotation=0(固定)
+  drag: VerticalDragState;
+  isVisible: boolean;
+}
+
+// --- 数学工具函数 ---
+const HANDLE_SIZE = 8;
+const ROTATE_HANDLE_OFFSET = 30;
+
+function rotateVector(dx: number, dy: number, angle: number) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+}
+
+function getRotatedPoint(lx: number, ly: number, shape: EllipseShape) {
+  const cos = Math.cos(shape.rotation);
+  const sin = Math.sin(shape.rotation);
+  return { x: shape.cx + (lx * cos - ly * sin), y: shape.cy + (lx * sin + ly * cos) };
+}
+
+function hitTestRect(x: number, y: number, cx: number, cy: number) {
+  return x >= cx - HANDLE_SIZE && x <= cx + HANDLE_SIZE &&
+    y >= cy - HANDLE_SIZE && y <= cy + HANDLE_SIZE;
+}
+
+function hitTestEllipse(x: number, y: number, shape: EllipseShape) {
+  const dx = x - shape.cx;
+  const dy = y - shape.cy;
+  const cos = Math.cos(-shape.rotation);
+  const sin = Math.sin(-shape.rotation);
+  const lx = dx * cos - dy * sin;
+  const ly = dx * sin + dy * cos;
+  return (lx * lx) / (shape.rx * shape.rx) + (ly * ly) / (shape.ry * shape.ry) <= 1;
+}
 
 const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   taskId,
@@ -160,7 +231,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [tempOrigin, setTempOrigin] = useState<{ x: number, y: number } | null>(null);
 
   // 标定相关状态
-  const [pixelRatio, setPixelRatio] = useState<number>(5);
+  const [pixelRatio, setPixelRatio] = useState<number>(1);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [calibrateLine, setCalibrateLine] = useState<{ x1: number, y1: number, x2: number, y2: number } | null>(null);
   const [calibrateModalVisible, setCalibrateModalVisible] = useState(false);
@@ -189,6 +260,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 2. 新增：缺陷类型选择弹窗状态 ---
   const [labelModalVisible, setLabelModalVisible] = useState(false);
   const [selectedLabelCode, setSelectedLabelCode] = useState<string | null>(null);
+
+  // --- 3. 新增：位置和尺寸工具状态 ---
+  const [positionSizeType, setPositionSizeType] = useState<PositionSizeType | null>(null);
+
+  // --- 4. 椭圆工具状态 ---
+  const [ellipseState, setEllipseState] = useState<EllipseToolState>({
+    mode: 'idle',
+    shape: null,
+    drag: {
+      active: false,
+      type: null,
+      startMouse: { x: 0, y: 0 },
+      startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
+    },
+    isVisible: false
+  });
+
+  // --- 5. 垂直成像工具状态 ---
+  const [verticalState, setVerticalState] = useState<VerticalToolState>({
+    mode: 'idle',
+    shape: null,
+    drag: {
+      active: false,
+      type: null,
+      startMouse: { x: 0, y: 0 },
+      startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
+    },
+    isVisible: false
+  });
+
+  // --- 6. 定位标记成像状态（复用设置坐标原点的状态，共享同一个原点数据） ---
+  const [isSettingPositioning, setIsSettingPositioning] = useState(false);
 
   // 暂存刚画完但未分类的形状数据
   const [pendingShape, setPendingShape] = useState<any>(null);
@@ -304,7 +407,98 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setCurrentDefectCircle(null);
       setCursorInImage(null);
     }
+    // 当切换到位置和尺寸工具时，重置子类型为 null（默认不选中任何选项）
+    if (activeTool === 'positionSize') {
+      setPositionSizeType(null);
+    }
   }, [activeTool]);
+
+  // --- 椭圆工具初始化/重置 ---
+  useEffect(() => {
+    if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
+      setEllipseState({
+        mode: 'placing',
+        shape: { cx: 0, cy: 0, rx: 120, ry: 60, rotation: 0 },
+        drag: {
+          active: false,
+          type: null,
+          startMouse: { x: 0, y: 0 },
+          startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
+        },
+        isVisible: true
+      });
+      message.info("请移动鼠标选择位置，点击左键固定");
+    } else {
+      // 如果切出椭圆工具，重置状态
+      setEllipseState(prev => ({ ...prev, mode: 'idle', isVisible: false }));
+    }
+  }, [activeTool, positionSizeType]);
+
+  // --- 垂直成像工具初始化/重置 ---
+  useEffect(() => {
+    if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
+      setVerticalState({
+        mode: 'placing',
+        shape: { cx: 0, cy: 0, rx: 180, ry: 15, rotation: 0 },  // ry 固定为 15，非常扁平
+        drag: {
+          active: false,
+          type: null,
+          startMouse: { x: 0, y: 0 },
+          startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
+        },
+        isVisible: true
+      });
+      message.info("垂直成像：请移动鼠标选择位置，点击左键固定");
+    } else {
+      // 如果切出垂直工具，重置状态
+      setVerticalState(prev => ({ ...prev, mode: 'idle', isVisible: false }));
+    }
+  }, [activeTool, positionSizeType]);
+
+  // --- 定位标记成像工具初始化/重置 ---
+  useEffect(() => {
+    if (activeTool === 'positionSize' && positionSizeType === 'positioning') {
+      setIsSettingPositioning(false);
+      setTempOrigin(null);
+      message.info("定位标记成像：点击图片设置坐标原点");
+    } else {
+      // 如果切出定位标记工具，重置状态
+      setIsSettingPositioning(false);
+      if (activeTool !== 'setOrigin') {
+        // 只有在不是设置原点工具时才清除 tempOrigin
+        // setTempOrigin(null); // 这里不需要清除，让 setOrigin 的 useEffect 处理
+      }
+    }
+  }, [activeTool, positionSizeType]);
+
+  // --- 切换图片时清除椭圆、垂直成像和定位标记成像状态 ---
+  useEffect(() => {
+    // 当图片切换时，重置椭圆和垂直成像的状态
+    setEllipseState({
+      mode: 'idle',
+      shape: null,
+      drag: {
+        active: false,
+        type: null,
+        startMouse: { x: 0, y: 0 },
+        startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
+      },
+      isVisible: false
+    });
+    setVerticalState({
+      mode: 'idle',
+      shape: null,
+      drag: {
+        active: false,
+        type: null,
+        startMouse: { x: 0, y: 0 },
+        startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
+      },
+      isVisible: false
+    });
+    // 重置定位标记成像状态（复用 originPoint 和 tempOrigin，不需要单独清除）
+    setIsSettingPositioning(false);
+  }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
     const step = 0.1;
@@ -389,6 +583,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     cursorStyle = 'crosshair';
   } else if (activeTool === 'setOrigin') {
     cursorStyle = 'crosshair';
+  } else if (activeTool === 'positionSize' && positionSizeType === 'positioning') {
+    cursorStyle = 'crosshair';
   } else if (activeTool === 'defect') {
     cursorStyle = 'crosshair';
   }
@@ -436,6 +632,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     };
   };
 
+  // 反向转换：从真实坐标转换回图像坐标（用于SVG绘制）
+  const calculateImageCoordinates = (trueX: number, trueY: number) => {
+    const ratioX = (originalSize.w > 0 && imgSize.w > 0) ? originalSize.w / imgSize.w : 1;
+    const ratioY = (originalSize.h > 0 && imgSize.h > 0) ? originalSize.h / imgSize.h : 1;
+    return {
+      x: trueX / ratioX,
+      y: trueY / ratioY
+    };
+  };
+
   // --- 鼠标按下 ---
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
@@ -465,6 +671,104 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       e.preventDefault();
       const { x, y } = getImageCoordinates(e);
       setIsSettingOrigin(true);
+      setTempOrigin({ x, y });
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
+      e.stopPropagation();
+      e.preventDefault();
+      const { x, y } = getImageCoordinates(e);
+
+      // 1. 放置模式：点击确认放置
+      if (ellipseState.mode === 'placing') {
+        const newShape = { ...ellipseState.shape!, cx: x, cy: y };
+        setEllipseState({
+          ...ellipseState,
+          mode: 'editing',
+          shape: newShape
+        });
+        message.success("已固定。可拖拽调整或重新放置");
+        return;
+      }
+
+      // 2. 编辑模式：命中检测
+      if (ellipseState.mode === 'editing' && ellipseState.shape) {
+        const s = ellipseState.shape;
+        // 计算四个关键点
+        const pRight = getRotatedPoint(s.rx, 0, s);
+        const pLeft = getRotatedPoint(-s.rx, 0, s);
+        const pBottom = getRotatedPoint(0, s.ry, s);
+        const pTop = getRotatedPoint(0, -s.ry, s);
+        const pRotate = getRotatedPoint(0, -s.ry - ROTATE_HANDLE_OFFSET, s);
+
+        let action: EllipseDragState['type'] = null;
+        if (Math.hypot(x - pRotate.x, y - pRotate.y) < HANDLE_SIZE + 4) action = 'rotate';
+        else if (hitTestRect(x, y, pRight.x, pRight.y)) action = 'resize-r';
+        else if (hitTestRect(x, y, pLeft.x, pLeft.y)) action = 'resize-l';
+        else if (hitTestRect(x, y, pBottom.x, pBottom.y)) action = 'resize-b';
+        else if (hitTestRect(x, y, pTop.x, pTop.y)) action = 'resize-t';
+        else if (hitTestEllipse(x, y, s)) action = 'move';
+
+        if (action) {
+          setEllipseState(prev => ({
+            ...prev,
+            drag: {
+              active: true,
+              type: action,
+              startMouse: { x, y },
+              startShape: { ...s },
+              startRotationAngle: action === 'rotate' ? Math.atan2(y - s.cy, x - s.cx) : undefined
+            }
+          }));
+        }
+      }
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
+      e.stopPropagation();
+      e.preventDefault();
+      const { x, y } = getImageCoordinates(e);
+
+      // 1. 放置模式：点击确认放置
+      if (verticalState.mode === 'placing') {
+        const newShape = { ...verticalState.shape!, cx: x, cy: y };
+        setVerticalState({
+          ...verticalState,
+          mode: 'editing',
+          shape: newShape
+        });
+        message.success("垂直成像已固定。可拖拽平移或左右拉伸");
+        return;
+      }
+
+      // 2. 编辑模式：命中检测（只检测左右手柄和椭圆内部）
+      if (verticalState.mode === 'editing' && verticalState.shape) {
+        const s = verticalState.shape;
+        // 垂直成像：只有左右两个手柄（9' 和 3'）
+        const pLeft = { x: s.cx - s.rx, y: s.cy };   // 9' 位置（最左）
+        const pRight = { x: s.cx + s.rx, y: s.cy };  // 3' 位置（最右）
+
+        let action: VerticalDragState['type'] = null;
+        if (hitTestRect(x, y, pLeft.x, pLeft.y)) action = 'resize-l';
+        else if (hitTestRect(x, y, pRight.x, pRight.y)) action = 'resize-r';
+        else if (hitTestEllipse(x, y, s)) action = 'move';
+
+        if (action) {
+          setVerticalState(prev => ({
+            ...prev,
+            drag: {
+              active: true,
+              type: action,
+              startMouse: { x, y },
+              startShape: { ...s }
+            }
+          }));
+        }
+      }
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'positioning') {
+      e.stopPropagation();
+      e.preventDefault();
+      const { x, y } = getImageCoordinates(e);
+      setIsSettingPositioning(true);
       setTempOrigin({ x, y });
     }
     else if (activeTool === 'calibrate') {
@@ -513,6 +817,86 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         });
       }
     }
+    else if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
+      const { x, y } = getImageCoordinates(e);
+      if (ellipseState.mode === 'placing' && ellipseState.shape) {
+        // 放置中：跟随鼠标
+        setEllipseState(prev => ({
+          ...prev,
+          shape: { ...prev.shape!, cx: x, cy: y }
+        }));
+      }
+      else if (ellipseState.mode === 'editing' && ellipseState.drag.active && ellipseState.shape) {
+        // 编辑中：拖拽处理
+        const drag = ellipseState.drag;
+        const dx = x - drag.startMouse.x;
+        const dy = y - drag.startMouse.y;
+        const s = ellipseState.shape;
+        const startS = drag.startShape;
+
+        let newShape = { ...s };
+
+        if (drag.type === 'move') {
+          newShape.cx = startS.cx + dx;
+          newShape.cy = startS.cy + dy;
+        } else if (drag.type === 'rotate') {
+          const currentAngle = Math.atan2(y - s.cy, x - s.cx);
+          const angleDiff = currentAngle - (drag.startRotationAngle || 0);
+          // 保持 rotation 为弧度，与数学辅助函数（rotateVector, getRotatedPoint）
+          // 和 SVG 渲染（rotate(rotation * 180 / Math.PI)）保持一致
+          newShape.rotation = startS.rotation + angleDiff;
+        } else {
+          // 缩放逻辑：将世界坐标系中的鼠标增量转换到椭圆本地坐标系
+          // 通过反向旋转 -startS.rotation，使增量与椭圆坐标轴对齐
+          const localDelta = rotateVector(dx, dy, -startS.rotation);
+          // 右侧/底部手柄：正向增加对应轴的半径
+          // 左侧/顶部手柄：反向减少对应轴的半径（因为拖拽方向相反）
+          if (drag.type === 'resize-r') newShape.rx = Math.max(10, startS.rx + localDelta.x);
+          else if (drag.type === 'resize-l') newShape.rx = Math.max(10, startS.rx - localDelta.x);
+          else if (drag.type === 'resize-b') newShape.ry = Math.max(10, startS.ry + localDelta.y);
+          else if (drag.type === 'resize-t') newShape.ry = Math.max(10, startS.ry - localDelta.y);
+        }
+        setEllipseState(prev => ({ ...prev, shape: newShape }));
+      }
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
+      const { x, y } = getImageCoordinates(e);
+      if (verticalState.mode === 'placing' && verticalState.shape) {
+        // 放置中：跟随鼠标
+        setVerticalState(prev => ({
+          ...prev,
+          shape: { ...prev.shape!, cx: x, cy: y }
+        }));
+      }
+      else if (verticalState.mode === 'editing' && verticalState.drag.active && verticalState.shape) {
+        // 编辑中：拖拽处理
+        const drag = verticalState.drag;
+        const dx = x - drag.startMouse.x;
+        const dy = y - drag.startMouse.y;
+        const s = verticalState.shape;
+        const startS = drag.startShape;
+
+        let newShape = { ...s };
+
+        if (drag.type === 'move') {
+          // 平移：直接移动中心点
+          newShape.cx = startS.cx + dx;
+          newShape.cy = startS.cy + dy;
+        } else {
+          // 左右拉伸：只改变 rx，ry 固定为 15，rotation 固定为 0
+          if (drag.type === 'resize-r') newShape.rx = Math.max(30, startS.rx + dx);  // 右侧拉伸
+          else if (drag.type === 'resize-l') newShape.rx = Math.max(30, startS.rx - dx);  // 左侧拉伸
+          // 保持 ry 和 rotation 不变
+          newShape.ry = 15;
+          newShape.rotation = 0;
+        }
+        setVerticalState(prev => ({ ...prev, shape: newShape }));
+      }
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'positioning' && isSettingPositioning) {
+      const { x, y } = getImageCoordinates(e);
+      setTempOrigin({ x, y });
+    }
     else if (activeTool === 'setOrigin' && isSettingOrigin) {
       const { x, y } = getImageCoordinates(e);
       setTempOrigin({ x, y });
@@ -559,6 +943,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         setDefectStartPoint(null);
       }
     }
+    else if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
+      if (ellipseState.drag.active) {
+        setEllipseState(prev => ({
+          ...prev,
+          drag: { ...prev.drag, active: false }
+        }));
+      }
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
+      if (verticalState.drag.active) {
+        setVerticalState(prev => ({
+          ...prev,
+          drag: { ...prev.drag, active: false }
+        }));
+      }
+    }
+    else if (activeTool === 'positionSize' && positionSizeType === 'positioning' && isSettingPositioning && tempOrigin) {
+      setIsSettingPositioning(false);
+      const trueCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+      setOriginPoint(trueCoords);
+      message.success(`定位标记已设置（坐标原点）: (${trueCoords.x}, ${trueCoords.y})`);
+      setTempOrigin(null);
+      // 不切换工具，允许用户继续调整定位标记
+    }
     else if (activeTool === 'setOrigin' && isSettingOrigin && tempOrigin) {
       setIsSettingOrigin(false);
       const trueCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
@@ -573,7 +981,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       const dy = calibrateLine.y2 - calibrateLine.y1;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > 5) {
-        setMeasuredPixelDistance(parseFloat(dist.toFixed(2)));
+        setMeasuredPixelDistance(Math.round(dist)); // 四舍五入为整数
         setCalibrateModalVisible(true);
         setActualLength(null);
       } else {
@@ -610,6 +1018,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const handleMouseLeaveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     if (isPanning) setIsPanning(false);
     if (activeTool === 'setOrigin') setIsSettingOrigin(false);
+    if (activeTool === 'positionSize' && positionSizeType === 'positioning') setIsSettingPositioning(false);
     if (isDrawingDefect) {
       setIsDrawingDefect(false);
       setCurrentDefectRect(null);
@@ -1012,11 +1421,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const heightRatio = (trueImageH > 0 && imgSize.h > 0) ? (trueImageH / imgSize.h) : 1;
 
   const displayOrigin = useMemo(() => {
-    if (activeTool === 'setOrigin' && tempOrigin) {
+    // 如果是设置原点工具或定位标记成像工具，且有临时原点，显示临时坐标
+    if ((activeTool === 'setOrigin' || (activeTool === 'positionSize' && positionSizeType === 'positioning')) && tempOrigin) {
       return calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
     }
     return originPoint || { x: 0, y: 0 };
-  }, [activeTool, tempOrigin, originPoint, originalSize, imgSize]);
+  }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize]);
 
   // --- 更新缺陷信息的辅助函数 ---
   const updateDefectInfo = (
@@ -1417,6 +1827,23 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <Tooltip title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 180)} /></Tooltip>
             <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipV(v => v * -1)} /></Tooltip>
             <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipH(h => h * -1)} /></Tooltip>
+
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+            <Tooltip title="位置和尺寸">
+              <Button
+                type={activeTool === 'positionSize' ? 'primary' : 'text'}
+                ghost={activeTool !== 'positionSize'}
+                icon={<img src="/codepen.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{
+                  color: '#fff', width: 36, height: 32, padding: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: activeTool === 'positionSize' ? '#1890ff' : 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool(activeTool === 'positionSize' ? 'pan' : 'positionSize');
+                }}
+              />
+            </Tooltip>
           </Space>
 
           <Space size={8}>
@@ -1690,12 +2117,285 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   </svg>
                 )}
 
+                {/* 3.5. 坐标原点垂直辅助线（定位标记成像后显示） */}
+                {originPoint && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 11 }}
+                  >
+                    {(() => {
+                      const imageCoords = calculateImageCoordinates(originPoint.x, originPoint.y);
+                      return (
+                        <line
+                          x1={imageCoords.x}
+                          y1={0}
+                          x2={imageCoords.x}
+                          y2={imgSize.h}
+                          stroke="rgba(245, 34, 45, 1"
+                          strokeWidth={1 / scale}
+                          strokeDasharray="5 5"
+                        />
+                      );
+                    })()}
+                  </svg>
+                )}
+
                 {/* 4. 标定线绘制层 */}
                 {activeTool === 'calibrate' && calibrateLine && (
-                  <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}>
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
                     <line x1={calibrateLine.x1} y1={calibrateLine.y1} x2={calibrateLine.x2} y2={calibrateLine.y2} stroke="#faad14" strokeWidth={2 / scale} strokeDasharray="4 2" />
                     <circle cx={calibrateLine.x1} cy={calibrateLine.y1} r={3 / scale} fill="#faad14" />
                     <circle cx={calibrateLine.x2} cy={calibrateLine.y2} r={3 / scale} fill="#faad14" />
+                  </svg>
+                )}
+
+                {/* 5. 椭圆工具绘制层 */}
+                {activeTool === 'positionSize' && positionSizeType === 'elliptical' && ellipseState.shape && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    <g
+                      transform={`translate(${ellipseState.shape.cx} ${ellipseState.shape.cy}) rotate(${ellipseState.shape.rotation * 180 / Math.PI})`}
+                    >
+                    {/* A. 椭圆本体 */}
+                    <ellipse
+                      cx={0} cy={0}
+                      rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
+                      fill="none"
+                      stroke={ellipseState.mode === 'placing' ? '#00ccff' : 'rgba(255, 255, 255, 0.3)'}
+                      strokeWidth={ellipseState.mode === 'placing' ? 2 / scale : 15 / scale}
+                      strokeDasharray={ellipseState.mode === 'placing' ? '5 5' : 'none'}
+                    />
+
+                    {/* B. 时钟系统刻度 */}
+                    {Array.from({ length: 12 }).map((_, i) => {
+                      const startAngle = -Math.PI / 2;
+                      const angle = startAngle + (i * (Math.PI / 6));
+                      const px = ellipseState.shape!.rx * Math.cos(angle);
+                      const py = ellipseState.shape!.ry * Math.sin(angle);
+
+                      // 根据椭圆大小动态调整标签偏移量
+                      // 使用椭圆较小半径的15%作为偏移，最小20像素，最大40像素
+                      const minRadius = Math.min(ellipseState.shape!.rx, ellipseState.shape!.ry);
+                      const labelOffset = Math.max(20, Math.min(40, minRadius * 0.15)) / scale;
+                      const tx = (ellipseState.shape!.rx + labelOffset) * Math.cos(angle);
+                      const ty = (ellipseState.shape!.ry + labelOffset) * Math.sin(angle);
+                      const label = i === 0 ? "12'" : i + "'";
+
+                      return (
+                        <g key={`clock-${i}`}>
+                          <circle cx={px} cy={py} r={3 / scale} fill="#00ccff" />
+                          <text
+                            x={tx} y={ty}
+                            fill={(i % 3 === 0) ? "#ffcc00" : "#00ccff"}
+                            fontSize={16 / scale}
+                            fontWeight="bold"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                          >
+                            {label}
+                          </text>
+                        </g>
+                      );
+                    })}
+
+                    {/* C. 控制手柄 (仅编辑模式) */}
+                    {ellipseState.mode === 'editing' && (
+                      <g>
+                        {/* 辅助框 */}
+                        <ellipse
+                          cx={0} cy={0}
+                          rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
+                          fill="none" stroke="#00ff00" strokeWidth={1 / scale} strokeDasharray="5 3"
+                        />
+                        {/* 旋转杆 */}
+                        <line
+                          x1={0} y1={-ellipseState.shape.ry}
+                          x2={0} y2={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
+                          stroke="#fff" strokeWidth={2 / scale}
+                        />
+                        {/* 旋转手柄 */}
+                        <circle
+                          cx={0} cy={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
+                          r={HANDLE_SIZE / scale}
+                          fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                        />
+
+                        {/* 缩放手柄 */}
+                        {[
+                          { x: ellipseState.shape.rx, y: 0 },
+                          { x: -ellipseState.shape.rx, y: 0 },
+                          { x: 0, y: ellipseState.shape.ry },
+                          { x: 0, y: -ellipseState.shape.ry }
+                        ].map((pt, idx) => (
+                          <rect
+                            key={`handle-${idx}`}
+                            x={pt.x - HANDLE_SIZE / scale}
+                            y={pt.y - HANDLE_SIZE / scale}
+                            width={HANDLE_SIZE * 2 / scale}
+                            height={HANDLE_SIZE * 2 / scale}
+                            fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                          />
+                        ))}
+                      </g>
+                    )}
+                    </g>
+                  </svg>
+                )}
+
+                {/* 6. 垂直成像绘制层 */}
+                {activeTool === 'positionSize' && positionSizeType === 'vertical' && verticalState.shape && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    <g>
+                      {/* A. 扁平椭圆本体 */}
+                      <ellipse
+                        cx={verticalState.shape.cx}
+                        cy={verticalState.shape.cy}
+                        rx={verticalState.shape.rx}
+                        ry={verticalState.shape.ry}
+                        fill="none"
+                        stroke={verticalState.mode === 'placing' ? '#00ccff' : 'rgba(255, 255, 255, 0.3)'}
+                        strokeWidth={verticalState.mode === 'placing' ? 2 / scale : 15 / scale}
+                        strokeDasharray={verticalState.mode === 'placing' ? '5 5' : 'none'}
+                      />
+
+                      {/* B. 垂直成像时钟刻度（重叠显示） */}
+                      {verticalState.mode === 'editing' && (() => {
+                        const s = verticalState.shape;
+                        const labelOffsetY = 25 / scale;
+
+                        // 5个位置：9', (8',10'), (12',6'), (2',4'), 3'
+                        const positions = [
+                          { x: s.cx - s.rx, labels: ["9'"], color: "#ffcc00" },                    // 最左：9'
+                          { x: s.cx - s.rx * 0.5, labels: ["8'", "10'"], color: "#ff6666" },       // 左中：8' 和 10' 重叠
+                          { x: s.cx, labels: ["12'", "6'"], color: "#ffcc00" },                    // 中间：12' 和 6' 重叠
+                          { x: s.cx + s.rx * 0.5, labels: ["2'", "4'"], color: "#ff6666" },        // 右中：2' 和 4' 重叠
+                          { x: s.cx + s.rx, labels: ["3'"], color: "#ffcc00" }                     // 最右：3'
+                        ];
+
+                        return positions.map((pos, idx) => (
+                          <g key={`vertical-clock-${idx}`}>
+                            {/* 刻度点 */}
+                            {pos.labels.length === 1 ? (
+                              // 单个点
+                              <circle cx={pos.x} cy={s.cy} r={3 / scale} fill={pos.color} />
+                            ) : (
+                              // 重叠的两个点（上下分开）
+                              <>
+                                <circle cx={pos.x} cy={s.cy - 5 / scale} r={3 / scale} fill={pos.color} />
+                                <circle cx={pos.x} cy={s.cy + 5 / scale} r={3 / scale} fill={pos.color} />
+                              </>
+                            )}
+
+                            {/* 标签文字 */}
+                            {pos.labels.map((label, labelIdx) => (
+                              <text
+                                key={`label-${labelIdx}`}
+                                x={pos.x}
+                                y={s.cy + (pos.labels.length === 1 ? -labelOffsetY : (labelIdx === 0 ? -labelOffsetY : labelOffsetY + 10 / scale))}
+                                fill={pos.color}
+                                fontSize={pos.labels.length === 1 ? 20 / scale : 16 / scale}
+                                fontWeight="bold"
+                                textAnchor="middle"
+                              >
+                                {label}
+                              </text>
+                            ))}
+
+                            {/* 重叠位置的连接线 */}
+                            {pos.labels.length > 1 && (
+                              <>
+                                <line
+                                  x1={pos.x} y1={s.cy - 5 / scale}
+                                  x2={pos.x} y2={s.cy - labelOffsetY + 5 / scale}
+                                  stroke={pos.color} strokeWidth={1 / scale}
+                                />
+                                <line
+                                  x1={pos.x} y1={s.cy + 5 / scale}
+                                  x2={pos.x} y2={s.cy + labelOffsetY - 5 / scale}
+                                  stroke={pos.color} strokeWidth={1 / scale}
+                                />
+                              </>
+                            )}
+                          </g>
+                        ));
+                      })()}
+
+                      {/* C. 控制手柄（仅编辑模式，只有左右两个） */}
+                      {verticalState.mode === 'editing' && (
+                        <g>
+                          {/* 辅助框 */}
+                          <ellipse
+                            cx={verticalState.shape.cx}
+                            cy={verticalState.shape.cy}
+                            rx={verticalState.shape.rx}
+                            ry={verticalState.shape.ry}
+                            fill="none" stroke="#00ff00" strokeWidth={1 / scale} strokeDasharray="5 3"
+                          />
+
+                          {/* 左右拉伸手柄 */}
+                          {[
+                            { x: verticalState.shape.cx - verticalState.shape.rx, y: verticalState.shape.cy },  // 9' 位置（左）
+                            { x: verticalState.shape.cx + verticalState.shape.rx, y: verticalState.shape.cy }   // 3' 位置（右）
+                          ].map((pt, idx) => (
+                            <rect
+                              key={`handle-${idx}`}
+                              x={pt.x - HANDLE_SIZE / scale}
+                              y={pt.y - HANDLE_SIZE / scale}
+                              width={HANDLE_SIZE * 2 / scale}
+                              height={HANDLE_SIZE * 2 / scale}
+                              fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                            />
+                          ))}
+                        </g>
+                      )}
+                    </g>
+                  </svg>
+                )}
+
+                {/* 7. 定位标记成像绘制层（十字线） - 复用设置坐标原点的 tempOrigin */}
+                {activeTool === 'positionSize' && positionSizeType === 'positioning' && tempOrigin && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    {/* 十字线 */}
+                    <line
+                      x1={tempOrigin.x} y1={0}
+                      x2={tempOrigin.x} y2={imgSize.h}
+                      stroke="#f5222d" strokeWidth={1 / scale}
+                    />
+                    <line
+                      x1={0} y1={tempOrigin.y}
+                      x2={imgSize.w} y2={tempOrigin.y}
+                      stroke="#f5222d" strokeWidth={1 / scale}
+                    />
+                    {/* x 和 y 标签 */}
+                    <text
+                      x={tempOrigin.x + 10 / scale}
+                      y={tempOrigin.y - 6 / scale}
+                      fill="#f5222d"
+                      fontSize={12 / scale}
+                      style={{ userSelect: 'none' }}
+                    >
+                      x
+                    </text>
+                    <text
+                      x={tempOrigin.x + 6 / scale}
+                      y={tempOrigin.y + 14 / scale}
+                      fill="#f5222d"
+                      fontSize={12 / scale}
+                      style={{ userSelect: 'none' }}
+                    >
+                      y
+                    </text>
                   </svg>
                 )}
 
@@ -1791,12 +2491,28 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </div>
           )}
 
+          {/* 位置和尺寸工具条 */}
+          {activeTool === 'positionSize' && (
+            <div style={{
+              position: 'absolute',
+              left: '32px',
+              top: '32px',
+              zIndex: 300
+            }}>
+              <PositionAndSizeTool
+                currentType={positionSizeType}
+                onTypeChange={setPositionSizeType}
+                onClose={() => setActiveTool('pan')}
+              />
+            </div>
+          )}
+
         </div>
 
         {/* 底部状态条 */}
         <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
           {/* 显示图像尺寸和实时鼠标坐标 */}
-          图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : '窗位窗宽'}
+          图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
       </Content>
 
