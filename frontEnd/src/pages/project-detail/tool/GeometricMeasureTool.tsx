@@ -42,6 +42,13 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
     }
   }, [visible]);
 
+  // 监听 imageUrl 变化，当切换图片时，重置测量状态
+  useEffect(() => {
+    setStartPoint(null);
+    setCurrPoint(null);
+    setIsDragging(false);
+  }, [imageUrl]);
+
   // 计算真实的图像坐标
   const getCoordinate = (e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
