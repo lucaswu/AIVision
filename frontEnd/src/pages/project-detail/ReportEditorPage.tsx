@@ -237,6 +237,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [calibrateModalVisible, setCalibrateModalVisible] = useState(false);
   const [measuredPixelDistance, setMeasuredPixelDistance] = useState(0);
   const [actualLength, setActualLength] = useState<number | null>(null);
+  // 测量距离前的尺寸定标确认弹窗
+  const [calibratePromptModalVisible, setCalibratePromptModalVisible] = useState(false);
+  const [measureAfterCalibrate, setMeasureAfterCalibrate] = useState(false);
 
   // --- 缺陷绘制相关状态 ---
 
@@ -1035,7 +1038,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       message.success(`标定成功：1px ≈ ${ratio.toFixed(4)}mm`);
       setCalibrateModalVisible(false);
       setCalibrateLine(null);
-      setActiveTool('pan');
+      // 如果是从测量距离触发的标定，标定完成后进入测量模式
+      if (measureAfterCalibrate) {
+        setActiveTool('measure');
+        setMeasureAfterCalibrate(false);
+      } else {
+        setActiveTool('pan');
+      }
     } else {
       message.warning('请输入有效的实际长度');
     }
@@ -1126,6 +1135,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setDefectRects([]);
       setDefectCircles([]);
       setDefectPolygons([]);
+
+      // 切换图片时，如果当前是测量距离工具，则重置为平移工具
+      if (activeTool === 'measure') {
+        setActiveTool('pan');
+      }
 
       // 从后端加载缺陷记录
       defectRecordAPI.getByTaskFileId(selectedFile.TaskFileId).then(resp => {
@@ -1816,7 +1830,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <Button
                 type={activeTool === 'measure' ? 'primary' : 'text'}
                 ghost={activeTool !== 'measure'} icon={<img src="/ruler.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
-                onClick={() => setActiveTool(activeTool === 'measure' ? 'pan' : 'measure')}
+                onClick={() => {
+                  if (activeTool === 'measure') {
+                    setActiveTool('pan');
+                  } else {
+                    // 弹出确认框询问是否需要尺寸定标
+                    setCalibratePromptModalVisible(true);
+                  }
+                }}
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'measure' ? '#1890ff' : 'transparent' }} /></Tooltip>
 
 
@@ -2642,6 +2663,42 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         </div>
       </Sider>
 
+      {/* 测量距离前的尺寸定标确认弹窗 */}
+      <Modal
+        title="尺寸定标确认"
+        open={calibratePromptModalVisible}
+        onCancel={() => setCalibratePromptModalVisible(false)}
+        footer={null}
+        width={360}
+        centered
+        maskClosable={false}
+      >
+        <div style={{ marginBottom: 24 }}>
+          <Text>是否需要先进行尺寸定标？</Text>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button
+            onClick={() => {
+              setCalibratePromptModalVisible(false);
+              setActiveTool('measure');
+            }}
+          >
+            否，直接测量
+          </Button>
+          <Button
+            type="primary"
+            onClick={() => {
+              setCalibratePromptModalVisible(false);
+              setMeasureAfterCalibrate(true);
+              setActiveTool('calibrate');
+              setCalibrateLine(null);
+            }}
+          >
+            是，先定标
+          </Button>
+        </div>
+      </Modal>
+
       {/* 4. 像素标定弹窗 */}
       <Modal
         title="像素标定"
@@ -2650,6 +2707,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         onCancel={() => {
           setCalibrateModalVisible(false);
           setCalibrateLine(null);
+          setMeasureAfterCalibrate(false);
           setActiveTool('pan');
         }}
         okText="确认"
