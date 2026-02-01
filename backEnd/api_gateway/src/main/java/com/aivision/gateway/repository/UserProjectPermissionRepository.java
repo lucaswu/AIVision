@@ -13,6 +13,7 @@ public interface UserProjectPermissionRepository extends JpaRepository<UserProje
     List<UserProjectPermission> findByProjectId(String projectId);
     Optional<UserProjectPermission> findByUserIdAndProjectId(String userId, String projectId);
     void deleteByUserId(String userId);
+    void deleteByProjectId(String projectId);
 }
 
 

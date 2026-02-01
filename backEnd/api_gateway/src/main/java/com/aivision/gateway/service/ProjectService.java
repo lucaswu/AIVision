@@ -6,6 +6,9 @@ import com.aivision.gateway.repository.DirectoryRepository;
 import com.aivision.gateway.repository.FileRepository;
 import com.aivision.gateway.repository.UserProjectPermissionRepository;
 import com.aivision.gateway.repository.UserRepository;
+import com.aivision.gateway.repository.TaskRepository;
+import com.aivision.gateway.repository.TaskFileRepository;
+import com.aivision.gateway.repository.ReportRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +35,15 @@ public class ProjectService {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    @Autowired
+    private TaskFileRepository taskFileRepository;
+
+    @Autowired
+    private ReportRepository reportRepository;
     
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
@@ -230,6 +242,29 @@ public class ProjectService {
         // 但如果文件存储在 MinIO，这里需要调用 FileService 删除物理文件
         // TODO: 集成 MinIO 删除逻辑
         
+        // delete related entities
+        // 1. fetch all tasks for the project
+        List<Task> tasks = taskRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        for (Task task : tasks) {
+            taskFileRepository.deleteByTaskId(task.getTaskId());
+        }
+
+        // 2. delete reports
+        reportRepository.deleteByProjectId(projectId);
+
+        // 3. delete tasks
+        taskRepository.deleteByProjectId(projectId);
+
+        // 4. delete files
+        fileRepository.deleteByProjectId(projectId);
+
+        // 5. delete directories
+        directoryRepository.deleteByProjectId(projectId);
+
+        // 6. delete permissions
+        permissionRepository.deleteByProjectId(projectId);
+      
+        // 7. delete project 
         projectRepository.delete(project);
     }
     

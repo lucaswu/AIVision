@@ -67,4 +67,9 @@ public interface DirectoryRepository extends JpaRepository<Directory, String> {
      * 根据项目ID查找所有目录（用于构建文件树）
      */
     List<Directory> findByProjectIdAndStatusOrderByDirLevelAscDirNameAsc(String projectId, Directory.Status status);
+
+    /**
+     * 根据项目ID删除所有目录
+     */
+    void deleteByProjectId(String projectId);
 } 

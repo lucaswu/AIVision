@@ -65,4 +65,9 @@ public interface TaskRepository extends JpaRepository<Task, String> {
      * 根据项目ID查找所有任务（用于项目统计）
      */
     List<Task> findByProjectIdOrderByCreatedAtDesc(String projectId);
+
+    /**
+     * 根据项目ID删除任务
+     */
+    void deleteByProjectId(String projectId);
 } 

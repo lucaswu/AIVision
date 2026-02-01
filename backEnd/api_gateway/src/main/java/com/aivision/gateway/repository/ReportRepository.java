@@ -12,6 +12,7 @@ public interface ReportRepository extends JpaRepository<Report, String> {
     List<Report> findByProjectIdOrderByCreatedAtDesc(String projectId);
     Optional<Report> findByTaskId(String taskId);
     void deleteByTaskId(String taskId);
+    void deleteByProjectId(String projectId);
 }
 
 

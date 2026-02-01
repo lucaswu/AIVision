@@ -90,4 +90,9 @@ public interface FileRepository extends JpaRepository<File, String> {
      * 批量查询文件详情
      */
     List<File> findByFileIdIn(List<String> fileIds);
+
+    /**
+     * 根据项目ID删除所有文件记录
+     */
+    void deleteByProjectId(String projectId);
 } 
