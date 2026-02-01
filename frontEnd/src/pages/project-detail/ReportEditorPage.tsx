@@ -65,6 +65,7 @@ import {
   DownOutlined,
   UpOutlined,
   ReloadOutlined,
+  FullscreenExitOutlined,
   RightOutlined as CollapseRightOutlined, // 为了区分普通向右箭头
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
@@ -234,6 +235,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [canvasContainer, setCanvasContainer] = useState<HTMLDivElement | null>(null);
+
+  // --- Full Screen Ref ---
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullScreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullScreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullScreenChange);
+    };
+  }, []);
+
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      editorContainerRef.current?.requestFullscreen().catch(err => {
+        message.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
 
   //  坐标原点状态管理
   const [originPoint, setOriginPoint] = useState<{ x: number, y: number } | null>(null);
@@ -1920,7 +1945,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       </Sider>
 
       {/* 中间编辑区 */}
-      <Content style={{ display: "flex", flexDirection: "column", background: '#f0f2f5' }}>
+      <Content
+        ref={editorContainerRef}
+        style={{ display: "flex", flexDirection: "column", background: '#f0f2f5', height: '100%', overflow: 'hidden' }}
+      >
         {/* 顶部工具栏 (保持不变) */}
         <div style={{
           height: 48,
@@ -1934,7 +1962,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         }}>
           <Space size={0}>
 
-            <Tooltip title="重置视图">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="重置视图">
               <Button
                 type="text" ghost
                 icon={<img src="/fullscreen.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
@@ -1946,14 +1974,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 }} /></Tooltip>
 
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
-            <Tooltip title="窗宽调整">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="窗宽调整">
               <Button type="text" ghost
                 icon={<img src="/contrast.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
                 onClick={() => setActiveTool(activeTool === 'windowing' ? 'pan' : 'windowing')}
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'windowing' ? '#1890ff' : 'transparent' }}
               />
             </Tooltip>
-            <Tooltip title="负片">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="负片">
               <Button
                 type={isNegative ? 'primary' : 'text'}
                 ghost={!isNegative}
@@ -1962,7 +1990,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isNegative ? '#1890ff' : 'transparent' }} /></Tooltip>
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="缺陷标记">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="缺陷标记">
               <Button
                 type={activeTool === 'defect' ? 'primary' : 'text'}
                 ghost={activeTool !== 'defect'}
@@ -1976,10 +2004,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               />
             </Tooltip>
 
-            {/* <Tooltip title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip> */}
+            {/* <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip> */}
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="设置坐标原点">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="设置坐标原点">
               <Button
                 type={activeTool === 'setOrigin' ? 'primary' : 'text'}
                 ghost={activeTool !== 'setOrigin'}
@@ -1995,7 +2023,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               />
             </Tooltip>
 
-            <Tooltip title="测量距离">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="测量距离">
               <Button
                 type={activeTool === 'measure' ? 'primary' : 'text'}
                 ghost={activeTool !== 'measure'} icon={<img src="/ruler.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
@@ -2012,14 +2040,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r - 90)} /></Tooltip>
-            <Tooltip title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 90)} /></Tooltip>
-            <Tooltip title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 180)} /></Tooltip>
-            <Tooltip title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipV(v => v * -1)} /></Tooltip>
-            <Tooltip title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipH(h => h * -1)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r - 90)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 90)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 180)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipV(v => v * -1)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipH(h => h * -1)} /></Tooltip>
 
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
-            <Tooltip title="位置和尺寸">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="位置和尺寸">
               <Button
                 type={activeTool === 'positionSize' ? 'primary' : 'text'}
                 ghost={activeTool !== 'positionSize'}
@@ -2037,6 +2065,19 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Space>
 
           <Space size={8}>
+            <Button
+              type="text"
+              ghost
+              icon={isFullScreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+              onClick={toggleFullScreen}
+              style={{
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px',
+                background: '#303030',
+                borderRadius: '4px', display: 'flex', alignItems: 'center'
+              }}
+            >
+              {isFullScreen ? '退出全屏' : '全屏显示'}
+            </Button>
             <Button
               type={activeTool === 'calibrate' ? 'primary' : 'text'}
               ghost={activeTool !== 'calibrate'}
@@ -2909,6 +2950,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         width={360}
         centered
         maskClosable={false}
+        getContainer={() => editorContainerRef.current || document.body}
       >
         <div style={{ marginBottom: 24 }}>
           <Text>是否需要先进行尺寸定标？</Text>
@@ -2952,6 +2994,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         width={300}
         centered
         maskClosable={false}
+        getContainer={() => editorContainerRef.current || document.body}
       >
         <div style={{ marginBottom: 16 }}>
           <Text type="secondary">选择的距离 (像素)：</Text>
@@ -2988,6 +3031,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         centered
         maskClosable={false}
         destroyOnClose
+        getContainer={() => editorContainerRef.current || document.body}
       >
         {!isDefectTypesFromBackend && (
           <Alert
@@ -3005,6 +3049,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           onChange={setSelectedLabelCode}
           defaultOpen
           listHeight={200}
+          getPopupContainer={() => editorContainerRef.current || document.body}
         >
           {DEFECT_TYPES.map(type => (
             <Option key={type.code} value={type.code}>
