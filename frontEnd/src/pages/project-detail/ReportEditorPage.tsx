@@ -57,11 +57,14 @@ import {
   ArrowRightOutlined,
   PlusOutlined,
   LinkOutlined,
+  UndoOutlined,
+  RedoOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
   DeleteOutlined,
   DownOutlined,
   UpOutlined,
+  ReloadOutlined,
   RightOutlined as CollapseRightOutlined, // 为了区分普通向右箭头
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
@@ -149,6 +152,13 @@ interface VerticalToolState {
   shape: EllipseShape | null;  // cx, cy, rx, ry=15(固定), rotation=0(固定)
   drag: VerticalDragState;
   isVisible: boolean;
+}
+
+// --- 撤销/重做历史记录接口 ---
+interface HistorySnapshot {
+  rects: SavedRect[];
+  polygons: SavedPolygon[];
+  circles: SavedCircle[];
 }
 
 // --- 数学工具函数 ---
@@ -309,6 +319,59 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // --- 标记是否为初始加载（防止自动保存时触发） ---
   const isInitialLoadRef = useRef(true);
+
+  // --- 原始数据引用 (用于不可用的Reset状态判断) ---
+  const originalFilmInfoRef = useRef<any>({});
+  const originalDefectsRef = useRef<HistorySnapshot>({
+    rects: [], polygons: [], circles: []
+  });
+
+  // --- 历史记录状态 ---
+  const [history, setHistory] = useState<HistorySnapshot[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  // 一个引用来避免闭包陷阱（在某些回调中）
+  const historyRef = useRef<HistorySnapshot[]>([]);
+  const historyIndexRef = useRef(-1);
+
+  const updateHistoryState = (newHistory: HistorySnapshot[], newIndex: number) => {
+    setHistory(newHistory);
+    setHistoryIndex(newIndex);
+    historyRef.current = newHistory;
+    historyIndexRef.current = newIndex;
+  };
+
+  // --- 统一更新缺陷状态并记录历史 ---
+  const updateAllDefects = (
+    newRects: SavedRect[],
+    newPolys: SavedPolygon[],
+    newCircles: SavedCircle[],
+    recordHistory: boolean = true
+  ) => {
+    // 1. 更新 React 状态 (渲染用)
+    setDefectRects(newRects);
+    setDefectPolygons(newPolys);
+    setDefectCircles(newCircles);
+
+    if (recordHistory) {
+      // 2. 截断未来分支 (如果当前不在最新)
+      const currentHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+
+      // 3. 构造新快照
+      const snapshot: HistorySnapshot = {
+        rects: JSON.parse(JSON.stringify(newRects)),
+        polygons: JSON.parse(JSON.stringify(newPolys)),
+        circles: JSON.parse(JSON.stringify(newCircles))
+      };
+
+      // 4. 入栈
+      const nextHistory = [...currentHistory, snapshot];
+
+      // 5. 限制历史长度（如50步）
+      if (nextHistory.length > 50) nextHistory.shift();
+
+      updateHistoryState(nextHistory, nextHistory.length - 1);
+    }
+  };
 
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
@@ -1071,19 +1134,37 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
     if (pendingShapeType === 'rect') {
       const { w, h, x, y } = pendingShape;
-      const trueW = Math.round(w * widthRatio);
-      const trueH = Math.round(h * heightRatio);
       // 简单计算一下中心位置和宽高作为默认值
-      const sizeStr = `${trueW}x${trueH}`;
+      // const sizeStr = `${trueW}x${trueH}`;
 
-      const newRect: SavedRect = { ...pendingShape, label, color, ...defaultExtra, size: sizeStr };
-      setDefectRects([...defectRects, newRect]);
+      const newRect: SavedRect = {
+        ...pendingShape,
+        x: pendingShape.x * widthRatio,
+        y: pendingShape.y * heightRatio,
+        w: pendingShape.w * widthRatio,
+        h: pendingShape.h * heightRatio,
+        label, color, ...defaultExtra, size: ''
+      };
+      updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true);
     } else if (pendingShapeType === 'polygon') {
-      const newPoly: SavedPolygon = { ...pendingShape, label, color, ...defaultExtra };
-      setDefectPolygons([...defectPolygons, newPoly]);
+      const newPoints = pendingShape.points.map(p => ({
+        x: p.x * widthRatio,
+        y: p.y * heightRatio
+      }));
+      const newPoly: SavedPolygon = {
+        points: newPoints,
+        label, color, ...defaultExtra
+      };
+      updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true);
     } else if (pendingShapeType === 'circle') {
-      const newCircle: SavedCircle = { ...pendingShape, label, color, ...defaultExtra };
-      setDefectCircles([...defectCircles, newCircle]);
+      const newCircle: SavedCircle = {
+        ...pendingShape,
+        x: pendingShape.x * widthRatio,
+        y: pendingShape.y * heightRatio,
+        r: (pendingShape.r * widthRatio), // 假设圆按宽比例缩放，或者平均值
+        label, color, ...defaultExtra
+      };
+      updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true);
     }
 
     // 关闭弹窗并清理
@@ -1124,12 +1205,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       prevTaskFileIdRef.current = selectedFile.TaskFileId;
 
       // 从后端加载底片信息字段
-      filmInfoForm.setFieldsValue({
+      // 从后端加载底片信息字段
+      const initialFilmInfo = {
         weldId: selectedFile.WeldId || '',
         filmNumber: selectedFile.FilmNumber || '',
         filmDensity: selectedFile.FilmDensity || '',
         sensitivity: selectedFile.Sensitivity || '',
-      });
+      };
+      filmInfoForm.setFieldsValue(initialFilmInfo);
+      originalFilmInfoRef.current = initialFilmInfo;
 
       // 立即清空缺陷列表，防止在加载新数据前显示旧数据或发生时序闪烁
       setDefectRects([]);
@@ -1196,6 +1280,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           setDefectRects(loadedRects);
           setDefectCircles(loadedCircles);
           setDefectPolygons(loadedPolygons);
+
+          // 初始化原始数据Ref
+          const initialSnapshot = {
+            rects: JSON.parse(JSON.stringify(loadedRects)),
+            polygons: JSON.parse(JSON.stringify(loadedPolygons)),
+            circles: JSON.parse(JSON.stringify(loadedCircles))
+          };
+          originalDefectsRef.current = initialSnapshot;
+
+          // 初始化历史记录：放入初始状态
+          updateHistoryState([initialSnapshot], 0);
         } else {
           setDefectRects([]);
           setDefectCircles([]);
@@ -1459,7 +1554,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         }
       }
       (newArr[index] as any)[field] = value;
-      setDefectRects(newArr);
+      (newArr[index] as any)[field] = value;
+      // 调用统一更新函数（包含历史记录）
+      updateAllDefects(newArr, defectPolygons, defectCircles, true);
     } else if (type === 'polygon') {
       const newArr = [...defectPolygons];
       if (field === 'label') {
@@ -1467,7 +1564,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         if (match) newArr[index].color = match.color;
       }
       (newArr[index] as any)[field] = value;
-      setDefectPolygons(newArr);
+      // 调用统一更新函数
+      updateAllDefects(defectRects, newArr, defectCircles, true);
     } else if (type === 'circle') {
       const newArr = [...defectCircles];
       if (field === 'label') {
@@ -1475,29 +1573,90 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         if (match) newArr[index].color = match.color;
       }
       (newArr[index] as any)[field] = value;
-      setDefectCircles(newArr);
+      // 调用统一更新函数
+      updateAllDefects(defectRects, defectPolygons, newArr, true);
     }
-    // 触发自动保存
-    autoSaveDefects();
+    // 触发自动保存 (updateAllDefects 改变了 state, useEffect 会监听到并触发)
   };
 
   const deleteDefect = (type: 'rect' | 'polygon' | 'circle', index: number) => {
     if (type === 'rect') {
       const newArr = [...defectRects];
       newArr.splice(index, 1);
-      setDefectRects(newArr);
+      updateAllDefects(newArr, defectPolygons, defectCircles, true);
     } else if (type === 'polygon') {
       const newArr = [...defectPolygons];
       newArr.splice(index, 1);
-      setDefectPolygons(newArr);
+      updateAllDefects(defectRects, newArr, defectCircles, true);
     } else if (type === 'circle') {
       const newArr = [...defectCircles];
       newArr.splice(index, 1);
-      setDefectCircles(newArr);
+      updateAllDefects(defectRects, defectPolygons, newArr, true);
     }
-    // 触发自动保存
-    autoSaveDefects();
   };
+
+  // --- 重置功能 ---
+  const handleResetFilmInfo = () => {
+    if (!selectedFile) return;
+    filmInfoForm.setFieldsValue(originalFilmInfoRef.current);
+    message.success("底片信息已重置");
+    // 触发自动保存以同步后端
+    autoSaveFilmInfo();
+  };
+
+  // --- 撤销/重做/重置 功能 ---
+
+  const handleUndo = () => {
+    if (historyIndexRef.current > 0) {
+      const prevIndex = historyIndexRef.current - 1;
+      const snapshot = historyRef.current[prevIndex];
+      // 恢复快照，但不记录历史（recordHistory=false）
+      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false);
+      // 单独更新索引
+      setHistoryIndex(prevIndex);
+      historyIndexRef.current = prevIndex;
+      message.success("已撤销");
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      const nextIndex = historyIndexRef.current + 1;
+      const snapshot = historyRef.current[nextIndex];
+      // 恢复快照，不记录历史
+      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false);
+      setHistoryIndex(nextIndex);
+      historyIndexRef.current = nextIndex;
+      message.success("已重做");
+    }
+  };
+
+  const handleResetDefects = () => {
+    if (!selectedFile) return;
+    // 重置也是一种操作，应该被记录进历史，这样用户可以"撤销重置"
+    // 获取原始数据
+    const original = originalDefectsRef.current;
+
+    // 使用统一更新函数，recordHistory=true，这样会把原始状态作为新的一步压入栈
+    updateAllDefects(
+      JSON.parse(JSON.stringify(original.rects)),
+      JSON.parse(JSON.stringify(original.polygons)),
+      JSON.parse(JSON.stringify(original.circles)),
+      true
+    );
+    message.success("缺陷信息已恢复初始状态");
+  };
+
+  // 计算重置按钮是否可用：如果当前状态与原始状态完全一致（深比较），则不可用
+  const isResetDisabled = useMemo(() => {
+    // 简单比较 JSON 字符串
+    // 注意：顺序可能会影响，但在严格控制下一般没问题。更严谨可以用 lodash.isEqual
+    // 这里为了性能和简单，假设顺序一致性。由于我们总是整体替换，顺序应该是一致的。
+    if (!selectedFile) return true;
+    const current = { rects: defectRects, polygons: defectPolygons, circles: defectCircles };
+    // 忽略 undefined 差异（JSON.stringify 会把 undefined 字段去掉）
+    return JSON.stringify(current) === JSON.stringify(originalDefectsRef.current);
+  }, [defectRects, defectPolygons, defectCircles, selectedFile]);
 
   // 切换单个缺陷项的展开/收起状态
   const toggleDefectExpand = (key: string) => {
@@ -2002,12 +2161,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     if (!shouldShowDefects) return null;
 
                     return defectRects.map((rect, idx) => {
-                      // 如果矩形有 defectRecordId，说明是从后端加载的，坐标是原始像素坐标，需要转换
-                      const isFromBackend = !!(rect as any).defectRecordId;
-                      const displayX = isFromBackend && widthRatio > 0 ? rect.x / widthRatio : rect.x;
-                      const displayY = isFromBackend && heightRatio > 0 ? rect.y / heightRatio : rect.y;
-                      const displayW = isFromBackend && widthRatio > 0 ? rect.w / widthRatio : rect.w;
-                      const displayH = isFromBackend && heightRatio > 0 ? rect.h / heightRatio : rect.h;
+                      // 统一：defectRects 中存储的是原始像素坐标，渲染时转为 CSS 坐标
+                      const displayX = widthRatio > 0 ? rect.x / widthRatio : rect.x;
+                      const displayY = widthRatio > 0 ? rect.y / widthRatio : rect.y; // Changed from heightRatio
+                      const displayW = widthRatio > 0 ? rect.w / widthRatio : rect.w;
+                      const displayH = widthRatio > 0 ? rect.h / widthRatio : rect.h; // Changed from heightRatio
 
                       return (
                         <g key={`rect-${idx}`}>
@@ -2034,22 +2192,36 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
                     if (!shouldShowDefects) return null;
 
-                    return defectPolygons.map((poly, idx) => (
-                      <g key={`poly-${idx}`}>
-                        <polygon
-                          points={poly.points.map(p => `${p.x},${p.y}`).join(' ')}
-                          stroke={poly.color} strokeWidth={2 / scale} fill="none"
-                        />
-                        {/* 缺陷名字标签 - 取第一个点上方 */}
-                        <text
-                          x={poly.points[0].x} y={poly.points[0].y - 5}
-                          fill={poly.color} fontSize={14 / scale} fontWeight="bold"
-                          style={{ textShadow: '0 0 2px #000' }}
-                        >
-                          {poly.label}
-                        </text>
-                      </g>
-                    ));
+                    return defectPolygons.map((poly, idx) => {
+                      // 统一：转换坐标
+                      const pointsStr = poly.points.map(p => {
+                        const px = widthRatio > 0 ? p.x / widthRatio : p.x;
+                        const py = heightRatio > 0 ? p.y / heightRatio : p.y;
+                        return `${px},${py}`;
+                      }).join(' ');
+
+                      // 第一个点作为标签位置
+                      const labelP = poly.points[0];
+                      const lx = widthRatio > 0 ? labelP.x / widthRatio : labelP.x;
+                      const ly = heightRatio > 0 ? labelP.y / heightRatio : labelP.y;
+
+                      return (
+                        <g key={`poly-${idx}`}>
+                          <polygon
+                            points={pointsStr}
+                            stroke={poly.color} strokeWidth={2 / scale} fill="none"
+                          />
+                          {/* 缺陷名字标签 - 取第一个点上方 */}
+                          <text
+                            x={lx} y={ly - 5}
+                            fill={poly.color} fontSize={14 / scale} fontWeight="bold"
+                            style={{ textShadow: '0 0 2px #000' }}
+                          >
+                            {poly.label}
+                          </text>
+                        </g>
+                      );
+                    });
                   })()}
 
                   {/* C. 绘制已保存的圆形 */}
@@ -2058,27 +2230,35 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
                     if (!shouldShowDefects) return null;
 
-                    return defectCircles.map((circle, idx) => (
-                      <g key={`circle-${idx}`}>
-                        <circle
-                          cx={circle.x}
-                          cy={circle.y}
-                          r={circle.r}
-                          stroke={circle.color}
-                          strokeWidth={2 / scale}
-                          fill="none"
-                        />
-                        {/* 缺陷名字标签 - 圆顶上方 */}
-                        <text
-                          x={circle.x} y={circle.y - circle.r - 5}
-                          fill={circle.color} fontSize={14 / scale} fontWeight="bold"
-                          style={{ textShadow: '0 0 2px #000' }}
-                        >
-                          {circle.label}
-                        </text>
-                      </g>
-                    ));
+                    return defectCircles.map((circle, idx) => {
+                      // 统一：转换坐标
+                      const cx = widthRatio > 0 ? circle.x / widthRatio : circle.x;
+                      const cy = heightRatio > 0 ? circle.y / heightRatio : circle.y;
+                      const r = widthRatio > 0 ? circle.r / widthRatio : circle.r;
+
+                      return (
+                        <g key={`circle-${idx}`}>
+                          <circle
+                            cx={cx}
+                            cy={cy}
+                            r={r}
+                            stroke={circle.color}
+                            strokeWidth={2 / scale}
+                            fill="none"
+                          />
+                          {/* 缺陷名字标签 - 圆顶上方 */}
+                          <text
+                            x={cx} y={cy - r - 5}
+                            fill={circle.color} fontSize={14 / scale} fontWeight="bold"
+                            style={{ textShadow: '0 0 2px #000' }}
+                          >
+                            {circle.label}
+                          </text>
+                        </g>
+                      );
+                    });
                   })()}
+
 
                   {/* D. 绘制当前正在拖拽的矩形 (虚线框, 默认红色) */}
                   {activeTool === 'defect' && drawingType === 'rect' && currentDefectRect && (
@@ -2182,88 +2362,88 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     <g
                       transform={`translate(${ellipseState.shape.cx} ${ellipseState.shape.cy}) rotate(${ellipseState.shape.rotation * 180 / Math.PI})`}
                     >
-                    {/* A. 椭圆本体 */}
-                    <ellipse
-                      cx={0} cy={0}
-                      rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
-                      fill="none"
-                      stroke={ellipseState.mode === 'placing' ? '#00ccff' : 'rgba(255, 255, 255, 0.3)'}
-                      strokeWidth={ellipseState.mode === 'placing' ? 2 / scale : 15 / scale}
-                      strokeDasharray={ellipseState.mode === 'placing' ? '5 5' : 'none'}
-                    />
+                      {/* A. 椭圆本体 */}
+                      <ellipse
+                        cx={0} cy={0}
+                        rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
+                        fill="none"
+                        stroke={ellipseState.mode === 'placing' ? '#00ccff' : 'rgba(255, 255, 255, 0.3)'}
+                        strokeWidth={ellipseState.mode === 'placing' ? 2 / scale : 15 / scale}
+                        strokeDasharray={ellipseState.mode === 'placing' ? '5 5' : 'none'}
+                      />
 
-                    {/* B. 时钟系统刻度 */}
-                    {Array.from({ length: 12 }).map((_, i) => {
-                      const startAngle = -Math.PI / 2;
-                      const angle = startAngle + (i * (Math.PI / 6));
-                      const px = ellipseState.shape!.rx * Math.cos(angle);
-                      const py = ellipseState.shape!.ry * Math.sin(angle);
+                      {/* B. 时钟系统刻度 */}
+                      {Array.from({ length: 12 }).map((_, i) => {
+                        const startAngle = -Math.PI / 2;
+                        const angle = startAngle + (i * (Math.PI / 6));
+                        const px = ellipseState.shape!.rx * Math.cos(angle);
+                        const py = ellipseState.shape!.ry * Math.sin(angle);
 
-                      // 根据椭圆大小动态调整标签偏移量
-                      // 使用椭圆较小半径的15%作为偏移，最小20像素，最大40像素
-                      const minRadius = Math.min(ellipseState.shape!.rx, ellipseState.shape!.ry);
-                      const labelOffset = Math.max(20, Math.min(40, minRadius * 0.15)) / scale;
-                      const tx = (ellipseState.shape!.rx + labelOffset) * Math.cos(angle);
-                      const ty = (ellipseState.shape!.ry + labelOffset) * Math.sin(angle);
-                      const label = i === 0 ? "12'" : i + "'";
+                        // 根据椭圆大小动态调整标签偏移量
+                        // 使用椭圆较小半径的15%作为偏移，最小20像素，最大40像素
+                        const minRadius = Math.min(ellipseState.shape!.rx, ellipseState.shape!.ry);
+                        const labelOffset = Math.max(20, Math.min(40, minRadius * 0.15)) / scale;
+                        const tx = (ellipseState.shape!.rx + labelOffset) * Math.cos(angle);
+                        const ty = (ellipseState.shape!.ry + labelOffset) * Math.sin(angle);
+                        const label = i === 0 ? "12'" : i + "'";
 
-                      return (
-                        <g key={`clock-${i}`}>
-                          <circle cx={px} cy={py} r={3 / scale} fill="#00ccff" />
-                          <text
-                            x={tx} y={ty}
-                            fill={(i % 3 === 0) ? "#ffcc00" : "#00ccff"}
-                            fontSize={16 / scale}
-                            fontWeight="bold"
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                          >
-                            {label}
-                          </text>
-                        </g>
-                      );
-                    })}
+                        return (
+                          <g key={`clock-${i}`}>
+                            <circle cx={px} cy={py} r={3 / scale} fill="#00ccff" />
+                            <text
+                              x={tx} y={ty}
+                              fill={(i % 3 === 0) ? "#ffcc00" : "#00ccff"}
+                              fontSize={16 / scale}
+                              fontWeight="bold"
+                              textAnchor="middle"
+                              dominantBaseline="middle"
+                            >
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      })}
 
-                    {/* C. 控制手柄 (仅编辑模式) */}
-                    {ellipseState.mode === 'editing' && (
-                      <g>
-                        {/* 辅助框 */}
-                        <ellipse
-                          cx={0} cy={0}
-                          rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
-                          fill="none" stroke="#00ff00" strokeWidth={1 / scale} strokeDasharray="5 3"
-                        />
-                        {/* 旋转杆 */}
-                        <line
-                          x1={0} y1={-ellipseState.shape.ry}
-                          x2={0} y2={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
-                          stroke="#fff" strokeWidth={2 / scale}
-                        />
-                        {/* 旋转手柄 */}
-                        <circle
-                          cx={0} cy={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
-                          r={HANDLE_SIZE / scale}
-                          fill="#fff" stroke="#000" strokeWidth={1 / scale}
-                        />
-
-                        {/* 缩放手柄 */}
-                        {[
-                          { x: ellipseState.shape.rx, y: 0 },
-                          { x: -ellipseState.shape.rx, y: 0 },
-                          { x: 0, y: ellipseState.shape.ry },
-                          { x: 0, y: -ellipseState.shape.ry }
-                        ].map((pt, idx) => (
-                          <rect
-                            key={`handle-${idx}`}
-                            x={pt.x - HANDLE_SIZE / scale}
-                            y={pt.y - HANDLE_SIZE / scale}
-                            width={HANDLE_SIZE * 2 / scale}
-                            height={HANDLE_SIZE * 2 / scale}
+                      {/* C. 控制手柄 (仅编辑模式) */}
+                      {ellipseState.mode === 'editing' && (
+                        <g>
+                          {/* 辅助框 */}
+                          <ellipse
+                            cx={0} cy={0}
+                            rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
+                            fill="none" stroke="#00ff00" strokeWidth={1 / scale} strokeDasharray="5 3"
+                          />
+                          {/* 旋转杆 */}
+                          <line
+                            x1={0} y1={-ellipseState.shape.ry}
+                            x2={0} y2={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
+                            stroke="#fff" strokeWidth={2 / scale}
+                          />
+                          {/* 旋转手柄 */}
+                          <circle
+                            cx={0} cy={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
+                            r={HANDLE_SIZE / scale}
                             fill="#fff" stroke="#000" strokeWidth={1 / scale}
                           />
-                        ))}
-                      </g>
-                    )}
+
+                          {/* 缩放手柄 */}
+                          {[
+                            { x: ellipseState.shape.rx, y: 0 },
+                            { x: -ellipseState.shape.rx, y: 0 },
+                            { x: 0, y: ellipseState.shape.ry },
+                            { x: 0, y: -ellipseState.shape.ry }
+                          ].map((pt, idx) => (
+                            <rect
+                              key={`handle-${idx}`}
+                              x={pt.x - HANDLE_SIZE / scale}
+                              y={pt.y - HANDLE_SIZE / scale}
+                              width={HANDLE_SIZE * 2 / scale}
+                              height={HANDLE_SIZE * 2 / scale}
+                              fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                            />
+                          ))}
+                        </g>
+                      )}
                     </g>
                   </svg>
                 )}
@@ -2535,14 +2715,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           {/* 显示图像尺寸和实时鼠标坐标 */}
           图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
-      </Content>
+      </Content >
 
       {/* 右侧审核信息 (重构区域) */}
-      <Sider width={320} theme="light" style={{ borderLeft: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column', background: '#fff' }}>
+      < Sider width={320} theme="light" style={{ borderLeft: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column', background: '#fff' }}>
         {/* 设置 height: 100% 和 overflowY: auto，
             确保内容超出时，这个容器内部出现滚动条，而不是把页面撑开。
            */}
-        <div style={{ flex: 1, padding: '20px 16px', overflowY: 'auto', height: '100%' }}>
+        < div style={{ flex: 1, padding: '20px 16px', overflowY: 'auto', height: '100%' }}>
           <Space direction="vertical" style={{ width: '100%' }} size={24}>
 
             {/* 1. 底片信息 (垂直布局，可编辑，带折叠) */}
@@ -2565,7 +2745,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   <UpOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} /> :
                   <DownOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} />
                 }
-                <Title level={5} style={{ margin: 0, fontSize: '15px' }}>底片信息</Title>
+                <Title level={5} style={{ margin: 0, fontSize: '15px', flex: 1 }}>底片信息</Title>
+                <Tooltip title="重置底片信息">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    onClick={(e) => { e.stopPropagation(); handleResetFilmInfo(); }}
+                  />
+                </Tooltip>
               </div>
 
               {/* 内容根据状态显示或隐藏 */}
@@ -2619,7 +2807,36 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   <UpOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} /> :
                   <DownOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} />
                 }
-                <Title level={5} style={{ margin: 0, fontSize: '15px' }}>缺陷信息</Title>
+                <Title level={5} style={{ margin: 0, fontSize: '15px', flex: 1 }}>缺陷信息</Title>
+                <Space size={2}>
+                  <Tooltip title="撤销 (Undo)">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<UndoOutlined />}
+                      disabled={historyIndex <= 0}
+                      onClick={(e) => { e.stopPropagation(); handleUndo(); }}
+                    />
+                  </Tooltip>
+                  <Tooltip title="重做 (Redo)">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<RedoOutlined />}
+                      disabled={historyIndex >= history.length - 1}
+                      onClick={(e) => { e.stopPropagation(); handleRedo(); }}
+                    />
+                  </Tooltip>
+                  <Tooltip title="重置缺陷信息">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      disabled={isResetDisabled}
+                      onClick={(e) => { e.stopPropagation(); handleResetDefects(); }}
+                    />
+                  </Tooltip>
+                </Space>
               </div>
 
               {showDefectList && (
@@ -2660,11 +2877,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
 
           </Space>
-        </div>
-      </Sider>
+        </div >
+      </Sider >
 
       {/* 测量距离前的尺寸定标确认弹窗 */}
-      <Modal
+      < Modal
         title="尺寸定标确认"
         open={calibratePromptModalVisible}
         onCancel={() => setCalibratePromptModalVisible(false)}
@@ -2697,10 +2914,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             是，先定标
           </Button>
         </div>
-      </Modal>
+      </Modal >
 
       {/* 4. 像素标定弹窗 */}
-      <Modal
+      < Modal
         title="像素标定"
         open={calibrateModalVisible}
         onOk={handleCalibrateConfirm}
@@ -2733,10 +2950,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             autoFocus
           />
         </div>
-      </Modal>
+      </Modal >
 
       {/* 5. 新增：缺陷类型选择弹窗 */}
-      <Modal
+      < Modal
         title="选择缺陷类型"
         open={labelModalVisible}
         onOk={handleLabelConfirm}
@@ -2785,9 +3002,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </Option>
           ))}
         </Select>
-      </Modal>
+      </Modal >
 
-    </Layout>
+    </Layout >
   );
 };
 
