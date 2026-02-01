@@ -317,6 +317,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
 
+  // --- 新增：鼠标悬停的高亮缺陷 Key ---
+  const [hoveredDefectKey, setHoveredDefectKey] = useState<string | null>(null);
+
   // --- 标记是否为初始加载（防止自动保存时触发） ---
   const isInitialLoadRef = useRef(true);
 
@@ -1677,14 +1680,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     const isExpanded = expandedDefects.has(defectKey);
 
     return (
-      <div key={defectKey} style={{
-        background: globalIndex % 2 === 0 ? '#f6ffed' : '#fffbe6',
-        border: `1px solid ${item.color || '#f0f0f0'}`,
-        borderLeft: `5px solid ${item.color || '#f0f0f0'}`,
-        borderRadius: '4px',
-        marginBottom: '8px',
-        padding: isExpanded ? '12px' : '8px 12px'
-      }}>
+      <div
+        key={defectKey}
+        onMouseEnter={() => setHoveredDefectKey(defectKey)}
+        onMouseLeave={() => setHoveredDefectKey(null)}
+        style={{
+          background: globalIndex % 2 === 0 ? '#f6ffed' : '#fffbe6',
+          border: `1px solid ${item.color || '#f0f0f0'}`,
+          borderLeft: `5px solid ${item.color || '#f0f0f0'}`,
+          borderRadius: '4px',
+          marginBottom: '8px',
+          padding: isExpanded ? '12px' : '8px 12px',
+          transition: 'all 0.2s',
+          boxShadow: hoveredDefectKey === defectKey ? '0 4px 12px rgba(0,0,0,0.15)' : 'none',
+          transform: hoveredDefectKey === defectKey ? 'translateY(-2px)' : 'none'
+        }}>
         {/* 头部：展开/收起 + 序号 + 缺陷类型 + 删除 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* 展开/收起按钮 - 放在最左侧 */}
@@ -2171,12 +2181,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         <g key={`rect-${idx}`}>
                           <rect
                             x={displayX} y={displayY} width={displayW} height={displayH}
-                            stroke={rect.color} strokeWidth={2 / scale} fill="none"
+                            stroke={rect.color}
+                            strokeWidth={(hoveredDefectKey === `rect-${idx}` ? 4 : 2) / scale}
+                            fill={hoveredDefectKey === `rect-${idx}` ? `${rect.color}4D` : "none"} // 4D is approx 30% opacity
                           />
                           {/* 缺陷名字标签 */}
                           <text
                             x={displayX} y={displayY - 5}
-                            fill={rect.color} fontSize={14 / scale} fontWeight="bold"
+                            fill={rect.color}
+                            fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
+                            fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
                           >
                             {rect.label}
@@ -2209,12 +2223,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         <g key={`poly-${idx}`}>
                           <polygon
                             points={pointsStr}
-                            stroke={poly.color} strokeWidth={2 / scale} fill="none"
+                            stroke={poly.color}
+                            strokeWidth={(hoveredDefectKey === `polygon-${idx}` ? 4 : 2) / scale}
+                            fill={hoveredDefectKey === `polygon-${idx}` ? `${poly.color}4D` : "none"}
                           />
                           {/* 缺陷名字标签 - 取第一个点上方 */}
                           <text
                             x={lx} y={ly - 5}
-                            fill={poly.color} fontSize={14 / scale} fontWeight="bold"
+                            fill={poly.color}
+                            fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
+                            fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
                           >
                             {poly.label}
@@ -2243,13 +2261,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                             cy={cy}
                             r={r}
                             stroke={circle.color}
-                            strokeWidth={2 / scale}
-                            fill="none"
+                            strokeWidth={(hoveredDefectKey === `circle-${idx}` ? 4 : 2) / scale}
+                            fill={hoveredDefectKey === `circle-${idx}` ? `${circle.color}4D` : "none"}
                           />
                           {/* 缺陷名字标签 - 圆顶上方 */}
                           <text
                             x={cx} y={cy - r - 5}
-                            fill={circle.color} fontSize={14 / scale} fontWeight="bold"
+                            fill={circle.color}
+                            fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
+                            fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
                           >
                             {circle.label}
