@@ -297,3 +297,66 @@ FROM pg_stats
 WHERE schemaname = 'public' 
     AND tablename IN ('users', 'user_project_permission', 'project', 'directory', 'file', 'task', 'task_file')
 ORDER BY tablename, attname;
+
+-- =====================================================
+-- 7. 补充更新 (v3 & v4)
+-- =====================================================
+
+-- -----------------------------------------------------
+-- v3_defect_types.sql
+-- -----------------------------------------------------
+
+-- 缺陷类型表
+CREATE TABLE IF NOT EXISTS defect_type (
+    code VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    color VARCHAR(20) NOT NULL,
+    sort_order INT DEFAULT 0,
+    enabled BOOLEAN DEFAULT TRUE
+);
+
+-- 插入8种标准焊缝缺陷类型
+INSERT INTO defect_type (code, name, color, sort_order, enabled) VALUES
+('crack', '裂纹(A)', '#ff4d4f', 1, TRUE),
+('lack_fusion', '未熔合(B)', '#eb2f96', 2, TRUE),
+('incomplete_penetration', '未焊透(C)', '#a0522d', 3, TRUE),
+('linear_defect', '条形缺陷(D)', '#faad14', 4, TRUE),
+('round_defect', '圆形缺陷(E)', '#722ed1', 5, TRUE),
+('undercut', '咬边(F)', '#13c2c2', 6, TRUE),
+('concave', '内凹(G)', '#1890ff', 7, TRUE),
+('other', '其他(H)', '#52c41a', 8, TRUE)
+ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    color = EXCLUDED.color,
+    sort_order = EXCLUDED.sort_order;
+
+-- -----------------------------------------------------
+-- v4_film_defect_info.sql
+-- -----------------------------------------------------
+
+-- 1. 为 task_file 表添加底片信息字段
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS weld_id VARCHAR(100);
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS film_number VARCHAR(100);
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS film_density VARCHAR(50);
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS sensitivity VARCHAR(50);
+
+-- 2. 创建缺陷记录表（包含 geometry 字段）
+CREATE TABLE IF NOT EXISTS defect_record (
+    defect_record_id VARCHAR(255) PRIMARY KEY,
+    task_file_id VARCHAR(255) NOT NULL,
+    defect_name VARCHAR(100),
+    position VARCHAR(100),          -- 算法计算的位置描述
+    size VARCHAR(100),
+    grade VARCHAR(20),
+    remark TEXT,
+    geometry TEXT,                  -- 标注区域的几何坐标 JSON
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    CONSTRAINT fk_defect_record_task_file 
+        FOREIGN KEY (task_file_id) 
+        REFERENCES task_file(task_file_id) 
+        ON DELETE CASCADE
+);
+
+-- 3. 创建索引以优化查询性能
+CREATE INDEX IF NOT EXISTS idx_defect_record_task_file_id ON defect_record(task_file_id);
