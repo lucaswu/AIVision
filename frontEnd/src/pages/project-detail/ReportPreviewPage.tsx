@@ -253,39 +253,18 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
 
   const allFiles = filesResp?.Data || [];
 
-  // 统一获取缺陷列表的逻辑
+  // 统一获取缺陷列表的逻辑 - 仅使用 defect_record 表数据
   const getDefectsForFile = (f: TaskFile) => {
-    // 1. 优先使用 DefectRecords (编辑过的记录)
+    // 只使用 DefectRecords,
     if (f.DefectRecords && f.DefectRecords.length > 0) {
       return f.DefectRecords.map(dr => ({
         strName: dr.DefectName,
-        score: dr.Grade === '严重' ? 1.0 : 0.8, // 模拟置信度，或者不显示
         isDefectRecord: true,
         ...dr
       }));
     }
 
-    // 2. 其次检查 ManualResult (如果有)
-    // 注意：ReportEditorPage 目前保存 ManualResult 可能只是副本，主要依赖 DefectRecords
-    // 这里保留作为回退
-    try {
-      if (f.ManualResult) {
-        const result = JSON.parse(f.ManualResult);
-        if (result.results) {
-          return result.results.filter((r: any) => r.strName && r.strName.toLowerCase() !== "normal");
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-
-    // 3. 最后使用 VisionResult (原始AI结果)
-    try {
-      const result = JSON.parse(f.VisionResult || '{"results":[]}');
-      return result.results?.filter((r: any) => r.strName && r.strName.toLowerCase() !== "normal") || [];
-    } catch (e) {
-      return [];
-    }
+    return [];
   };
 
   // 统一判定逻辑
@@ -675,40 +654,9 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                       {defects.map((d: any, idx: number) => {
                                         const isSevere = d.strName.toLowerCase().includes('crack') || d.strName.toLowerCase().includes('unfused') || d.strName.toLowerCase().includes('penetration');
 
-                                        // 动态计算缺陷尺寸和位置
-                                        let position = "(120, 340)";
-                                        let size = "15×12 px";
-
-                                        if (d.isDefectRecord) {
-                                          // 使用 DefectRecord 的信息
-                                          // Position 可能是 "x,y" 或者是描述性文字
-                                          position = d.Position || position;
-                                          size = d.Size || size;
-
-                                          // 如果有 Geometry，尝试计算更精确的 position/size (如果 Position 字段为空)
-                                          if (!d.Position && d.Geometry) {
-                                            try {
-                                              const geo = JSON.parse(d.Geometry);
-                                              if (geo.type === 'rect') {
-                                                position = `(${Math.round(geo.x)}, ${Math.round(geo.y)})`;
-                                                size = `${Math.round(geo.w)}×${Math.round(geo.h)} px`;
-                                              } else if (geo.type === 'circle') {
-                                                position = `(${Math.round(geo.x)}, ${Math.round(geo.y)})`;
-                                                size = `R=${Math.round(geo.r)} px`;
-                                              }
-                                            } catch (e) { }
-                                          }
-
-                                        } else if (d.vvContour && d.vvContour.length > 0) {
-                                          const xs = d.vvContour.map((p: any) => p[0]);
-                                          const ys = d.vvContour.map((p: any) => p[1]);
-                                          const minX = Math.min(...xs);
-                                          const minY = Math.min(...ys);
-                                          const maxX = Math.max(...xs);
-                                          const maxY = Math.max(...ys);
-                                          position = `(${Math.round(minX)}, ${Math.round(minY)})`;
-                                          size = `${Math.round(maxX - minX)}×${Math.round(maxY - minY)} px`;
-                                        }
+                                        // 只使用 defect_record 表的 Position 和 Size 字段，不进行任何计算
+                                        const position = d.Position || "-";
+                                        const size = d.Size || "-";
 
                                         return (
                                           <div key={idx} style={{ background: isSevere ? '#fff1f0' : '#fff7e6', padding: '16px', borderRadius: '8px', border: `1px solid ${isSevere ? '#ffa39e' : '#ffe58f'}`, position: 'relative' }}>
@@ -720,19 +668,13 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                                     <Tag color={isSevere ? "red" : "orange"} style={{ border: 'none', borderRadius: '10px' }}>{isSevere ? "严重" : "一般"}</Tag>
                                                   </Space>
 
-                                                  {d.isDefectRecord ? (
-                                                    <div style={{ marginTop: 4, display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '8px 24px', fontSize: '13px', color: '#595959' }}>
-                                                      {/* 编辑记录显示: 位置, 尺寸, 等级, 备注 */}
-                                                      <div><span style={{ color: '#8c8c8c' }}>位置:</span> {position || '-'}</div>
-                                                      <div><span style={{ color: '#8c8c8c' }}>尺寸:</span> {size || '-'}</div>
-                                                      <div><span style={{ color: '#8c8c8c' }}>等级:</span> {d.Grade || '-'}</div>
-                                                      <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#8c8c8c' }}>备注:</span> {d.Remark || '-'}</div>
-                                                    </div>
-                                                  ) : (
-                                                    <Text type="secondary" style={{ fontSize: '13px', color: isSevere ? '#cf1322' : '#d46b08' }}>
-                                                      位置: {position} | 尺寸: {size} | 置信度: {(d.score * 100).toFixed(1)}%
-                                                    </Text>
-                                                  )}
+                                                  {/* 只显示 defect_record 表的数据 */}
+                                                  <div style={{ marginTop: 4, display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '8px 24px', fontSize: '13px', color: '#595959' }}>
+                                                    <div><span style={{ color: '#8c8c8c' }}>位置:</span> {position}</div>
+                                                    <div><span style={{ color: '#8c8c8c' }}>尺寸:</span> {size}</div>
+                                                    <div><span style={{ color: '#8c8c8c' }}>等级:</span> {d.Grade || '-'}</div>
+                                                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#8c8c8c' }}>备注:</span> {d.Remark || '-'}</div>
+                                                  </div>
                                                 </Space>
                                               </div>
                                             </div>
