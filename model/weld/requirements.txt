@@ -2,16 +2,18 @@
 # AIVision Python 推理服务依赖
 # ==============================================================================
 
-# Core ML/DL - PyTorch with CUDA 12.1 support
---extra-index-url https://download.pytorch.org/whl/cu121
-torch>=2.1.0
-torchvision>=0.16.0
+# Core ML/DL - PyTorch with CUDA 12.8 support
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch
+torchvision
 
 # YOLO & Object Detection
 ultralytics>=8.0.0
 
 # RF-DETR
 rfdetr>=1.0.0
+transformers>=4.38.0,<4.45.0
+peft==0.7.1
 
 # Computer Vision
 opencv-python>=4.8.0
