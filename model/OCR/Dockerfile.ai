@@ -15,6 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+RUN ln -sf /usr/lib/x86_64-linux-gnu/libcudnn.so.8 /usr/lib/x86_64-linux-gnu/libcudnn.so
 
 ARG SETUP_PYTHON=true
 
@@ -55,9 +57,9 @@ WORKDIR /app
 ARG INSTALL_PADDLE=true
 RUN if [ "$INSTALL_PADDLE" = "true" ]; then \
     if [ "$USE_GPU" = "true" ]; then \
-    pip install --no-cache-dir paddlepaddle-gpu==2.6.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/; \
+    pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/; \
     else \
-    pip install --no-cache-dir paddlepaddle==2.6.1 -i https://mirror.baidu.com/pypi/simple; \
+    pip install paddlepaddle==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/; \
     fi \
     fi
 
