@@ -37,7 +37,7 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  --force       强制停止并删除容器"
-    echo "  --clean       停止服务并清理数据卷 (⚠️ 会删除所有数据)"
+    echo "  --clean       停止服务并清理数据卷 (⚠️ 会删除数据库和文件数据)"
     echo "  --network     同时删除Docker网络"
     echo "  --help        显示此帮助信息"
     echo ""
@@ -59,10 +59,10 @@ stop_services() {
     fi
     
     log_info "检查运行中的服务..."
-    docker-compose ps
+    docker compose ps
     
     if [ "$clean" = true ]; then
-        log_warning "⚠️  即将删除所有数据，包括数据库和文件存储！"
+        log_warning "⚠️  即将删除所有数据，包括PostgreSQL数据库、文件存储和推理结果！"
         echo -n "确认继续？(输入 'yes' 确认): "
         read confirmation
         if [ "$confirmation" != "yes" ]; then
@@ -71,17 +71,17 @@ stop_services() {
         fi
         
         log_info "停止并删除所有容器和数据卷..."
-        docker-compose down -v --remove-orphans
+        docker compose down -v --remove-orphans
         log_success "所有服务和数据已清理"
         
     elif [ "$force" = true ]; then
         log_info "强制停止并删除所有容器..."
-        docker-compose down --remove-orphans
+        docker compose down --remove-orphans
         log_success "所有容器已删除"
         
     else
         log_info "正常停止所有服务..."
-        docker-compose stop
+        docker compose stop
         log_success "所有服务已停止"
     fi
 }
@@ -103,7 +103,7 @@ show_status() {
     log_info "当前状态："
     echo ""
     echo "📊 容器状态："
-    docker-compose ps 2>/dev/null || echo "  无运行中的服务"
+    docker compose ps 2>/dev/null || echo "  无运行中的服务"
     echo ""
     echo "💾 数据卷："
     docker volume ls | grep ai-detection || echo "  无AI Vision相关数据卷"
@@ -170,7 +170,7 @@ main() {
         log_success "系统已停止！"
         echo ""
         echo "📝 重新启动命令："
-        echo "  docker-compose up -d"
+        echo "  docker compose up -d"
         echo "  ./start.sh"
     fi
 }

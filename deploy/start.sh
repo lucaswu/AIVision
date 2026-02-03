@@ -38,8 +38,8 @@ check_docker() {
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose未安装，请先安装Docker Compose"
+    if ! docker compose version &> /dev/null; then
+        log_error "Docker Compose未安装，请先安装Docker Compose V2"
         exit 1
     fi
     
@@ -55,7 +55,7 @@ check_docker() {
 check_ports() {
     log_info "检查端口占用情况..."
     
-    ports=(5432 8080 8001 9000 9001 11434)
+    ports=(5432 9541 8000 8001 3000)
     for port in "${ports[@]}"; do
         if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
             log_warning "端口 $port 已被占用"
@@ -87,29 +87,29 @@ start_services() {
     case $mode in
         "full")
             log_info "启动完整系统..."
-            docker-compose up -d
+            docker compose up -d
             ;;
         "step")
             log_info "分步启动系统..."
             
-            log_info "1. 启动基础存储服务..."
-            docker-compose up -d postgres minio minio-init
+            log_info "1. 启动数据库服务..."
+            docker compose up -d postgres
             
-            log_info "等待基础服务就绪..."
+            log_info "等待数据库就绪..."
             sleep 30
             
-            log_info "2. 启动AI服务..."
-            docker-compose up -d vision-ai deepseek-llm
+            log_info "2. 启动AI推理服务..."
+            docker compose up -d ai-inference ai-inference-ocr
             
             log_info "等待AI服务就绪..."
             sleep 60
             
-            log_info "3. 启动API Gateway..."
-            docker-compose up -d api-gateway
+            log_info "3. 启动应用服务..."
+            docker compose up -d api-gateway frontend
             ;;
         "basic")
-            log_info "仅启动基础服务..."
-            docker-compose up -d postgres minio minio-init
+            log_info "仅启动数据库服务..."
+            docker compose up -d postgres
             ;;
         *)
             log_error "未知的启动模式: $mode"
@@ -123,7 +123,7 @@ check_services() {
     log_info "检查服务状态..."
     
     sleep 10
-    docker-compose ps
+    docker compose ps
     
     log_info "等待服务完全启动..."
     sleep 30
@@ -133,9 +133,9 @@ check_services() {
     
     services=(
         "http://localhost:9541/actuator/health|API Gateway"
-        "http://localhost:8001/health|Vision AI"
-        "http://localhost:11434/api/tags|LLM AI"
-        "http://localhost:9000/minio/health/live|MinIO"
+        "http://localhost:8000/health|AI Inference"
+        "http://localhost:8001/health|AI Inference OCR"
+        "http://localhost:3000|Frontend"
     )
     
     for service in "${services[@]}"; do
@@ -153,18 +153,19 @@ show_access_info() {
     log_success "系统启动完成！"
     echo ""
     echo "🌐 访问地址："
+    echo "  🎨 Frontend:        http://localhost:3000"
     echo "  📊 API Gateway:     http://localhost:9541"
     echo "  📚 Swagger UI:      http://localhost:9541/swagger-ui.html"
-    echo "  💾 MinIO Console:   http://localhost:9001"
+    echo "  🤖 AI Inference:    http://localhost:8000"
+    echo "  📝 OCR Inference:   http://localhost:8001"
     echo ""
     echo "🔑 默认凭据："
-    echo "  MinIO: minioadmin / minioadmin123"
     echo "  PostgreSQL: aiuser / aipass123"
     echo ""
     echo "📝 管理命令："
-    echo "  查看日志: docker-compose logs -f"
-    echo "  查看状态: docker-compose ps"
-    echo "  停止服务: docker-compose stop"
+    echo "  查看日志: docker compose logs -f [service]"
+    echo "  查看状态: docker compose ps"
+    echo "  停止服务: docker compose stop"
     echo ""
 }
 
@@ -238,8 +239,7 @@ main() {
     
     # 启动N8N (如果需要)
     if [ "$with_n8n" = true ]; then
-        log_info "启动N8N工作流引擎..."
-        docker-compose --profile n8n up -d n8n
+        log_warning "N8N服务未在docker-compose.yml中配置，跳过启动"
     fi
     
     # 检查服务状态
