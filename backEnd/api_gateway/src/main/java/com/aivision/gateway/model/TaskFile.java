@@ -7,7 +7,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "task_file")
+@Table(name = "task_file", indexes = {
+    @Index(name = "idx_task_file_weld_id", columnList = "weld_id")
+})
 public class TaskFile {
     
     public enum Status {

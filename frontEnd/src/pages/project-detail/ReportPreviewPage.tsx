@@ -654,8 +654,25 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                       {defects.map((d: any, idx: number) => {
                                         const isSevere = d.strName.toLowerCase().includes('crack') || d.strName.toLowerCase().includes('unfused') || d.strName.toLowerCase().includes('penetration');
 
-                                        // 只使用 defect_record 表的 Position 和 Size 字段，不进行任何计算
-                                        const position = d.Position || "-";
+                                        // 辅助函数：从 Geometry 格式化位置
+                                        const formatPositionFromGeometry = (geoStr: string) => {
+                                          try {
+                                            const geo = JSON.parse(geoStr);
+                                            if (geo.type === 'rect' && geo.x !== undefined && geo.y !== undefined) {
+                                              return `X:${Math.round(geo.x)}, Y:${Math.round(geo.y)}`;
+                                            } else if (geo.type === 'polygon' && Array.isArray(geo.points) && geo.points.length > 0) {
+                                              return `X:${Math.round(geo.points[0].x)}, Y:${Math.round(geo.points[0].y)}`;
+                                            } else if (geo.type === 'circle' && geo.x !== undefined && geo.y !== undefined) {
+                                              return `X:${Math.round(geo.x)}, Y:${Math.round(geo.y)}`;
+                                            }
+                                            return "-";
+                                          } catch (e) {
+                                            return "-";
+                                          }
+                                        };
+
+                                        // 优先使用 Position，如果为空则尝试从 Geometry 解析
+                                        const position = d.Position || (d.Geometry ? formatPositionFromGeometry(d.Geometry) : "-");
                                         const size = d.Size || "-";
 
                                         return (

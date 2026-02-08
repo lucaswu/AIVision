@@ -1,0 +1,13 @@
+# 基于已构建的基础镜像
+FROM aivision-ai-inference:latest
+
+# 更新代码和配置 (覆盖镜像中旧的代码)
+COPY . /app/model/
+
+# 将本地的模型权重文件复制到镜像内的指定目录
+# 注意：本地目录是 weight (单数)，容器内代码可能预期 weights (复数) 或者通过环境变量指定
+# 为了保险，我们显式复制到 /app/model/weights/
+COPY weight/ /app/model/weights/
+
+# 打印一下，确保复制成功
+RUN ls -l /app/model/weights/

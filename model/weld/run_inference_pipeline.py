@@ -14,6 +14,19 @@ Features:
 import argparse
 import json
 import sys
+import os
+import ssl
+
+# Globally disable SSL verification for local dev
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# Disable Ultralytics auto-download/sync
+os.environ['YOLO_VERBOSE'] = 'False'
+from ultralytics import settings
+settings.update({'sync': False})
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from tqdm import tqdm

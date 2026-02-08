@@ -66,6 +66,19 @@ public class TaskController {
         }
     }
 
+    @PostMapping("/report-result")
+    @Operation(summary = "获取详细报告结果（跨任务查询）", description = "根据项目ID列表和工件编号列表查询详细的检测报告数据")
+    public ResponseEntity<ApiResponse<ReportResultResponse>> getTaskReportResult(
+            @RequestHeader("user-id") String userId,
+            @RequestBody ReportResultRequest request) {
+        try {
+            ReportResultResponse response = taskService.getTaskReportResult(userId, request);
+            return ResponseEntity.ok(ApiResponse.success("获取成功", response));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
     @PostMapping("/{task_id}/restart")
     @Operation(summary = "重跑任务", description = "重置任务进度并重新开始检测")
     public ResponseEntity<ApiResponse<Void>> restartTask(

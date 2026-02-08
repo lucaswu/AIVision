@@ -1,0 +1,11 @@
+# 基于已构建的 AMD64 基础镜像
+FROM aivision-ai-inference-ocr:latest
+
+# 更新代码和配置 (覆盖镜像中旧的代码)
+COPY . /app/model/
+
+# 将本地的模型权重文件复制到镜像内的指定目录
+COPY weights/ /app/model/weights/
+
+# 打印一下，确保复制成功
+RUN ls -l /app/model/weights/

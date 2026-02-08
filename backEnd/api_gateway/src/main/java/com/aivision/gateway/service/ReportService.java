@@ -190,18 +190,31 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
         Task task = taskRepository.findById(taskId)
             .orElseThrow(() -> new RuntimeException("任务不存在"));
         
-        // 如果已存在则删除旧的（覆盖逻辑）
-        reportRepository.findByTaskId(taskId).ifPresent(r -> reportRepository.delete(r));
+        Optional<Report> existingReport = reportRepository.findByTaskId(taskId);
+        Report report;
         
-        Report report = new Report(
-            UUID.randomUUID().toString(),
-            taskId,
-            task.getProjectId(),
-            task.getUserId(),
-            "检测报告_" + task.getTaskName()
-        );
-        report.setTotalFiles(task.getTotalFiles());
-        report.setStatus(Report.Status.PENDING);
+        if (existingReport.isPresent()) {
+            // 更新已有报告
+            report = existingReport.get();
+            report.setProjectId(task.getProjectId());
+            report.setUserId(task.getUserId());
+            report.setReportName("检测报告_" + task.getTaskName());
+            report.setTotalFiles(task.getTotalFiles());
+            report.setStatus(Report.Status.PENDING);
+            report.setUpdatedAt(LocalDateTime.now());
+        } else {
+            // 创建新报告
+            report = new Report(
+                UUID.randomUUID().toString(),
+                taskId,
+                task.getProjectId(),
+                task.getUserId(),
+                "检测报告_" + task.getTaskName()
+            );
+            report.setTotalFiles(task.getTotalFiles());
+            report.setStatus(Report.Status.PENDING);
+        }
+        
         reportRepository.save(report);
         
         updateReportStats(taskId);

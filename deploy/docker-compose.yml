@@ -32,9 +32,7 @@ services:
 
   # API Gateway 后端服务
   api-gateway:
-    build:
-      context: ..
-      dockerfile: backEnd/api_gateway/Dockerfile
+    # 使用本地构建好的镜像
     image: aivision-backend:latest
     container_name: ai-detection-gateway
     restart: unless-stopped
@@ -56,6 +54,11 @@ services:
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
       - SERVER_PORT=8080
+      
+      # 存储配置 (使用本地文件系统)
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_BASE_DIR=/app/data/files
+      - STORAGE_RESULT_DIR=/app/data/results
 
       # JVM优化参数
       - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport
@@ -80,12 +83,7 @@ services:
   # AI 推理服务 (Python + CUDA)
   # ================================
   ai-inference:
-    build:
-      context: ../model/weld
-      dockerfile: Dockerfile.ai
-      args:
-        BASE_IMAGE: ${WELD_BASE_IMAGE:-nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04}
-        USE_GPU: ${USE_GPU:-true}
+    # 使用本地构建好的镜像
     image: aivision-ai-inference:latest
     container_name: ai-detection-inference
     restart: unless-stopped
@@ -116,15 +114,8 @@ services:
   # OCR 推理服务 (Python + CUDA + PaddlePaddle)
   # ================================
   ai-inference-ocr:
-    build:
-      context: ../model/OCR
-      dockerfile: Dockerfile.ai
-      args:
-        BASE_IMAGE: ${OCR_BASE_IMAGE:-nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04}
-        USE_GPU: ${USE_GPU:-true}
-        INSTALL_PADDLE: ${INSTALL_PADDLE:-true}
-        SETUP_PYTHON: ${SETUP_PYTHON:-true}
-    image: aivision-ai-inference-ocr:latest
+    # 使用本地构建好的镜像 (Mac 本地环境使用 packed 版本，它是 arm64 架构)
+    image: aivision-ai-inference-ocr:packed
     container_name: ai-detection-inference-ocr
     restart: unless-stopped
     environment:
@@ -147,9 +138,7 @@ services:
 
   # 前端服务
   frontend:
-    build:
-      context: ../frontEnd
-      dockerfile: Dockerfile
+    # 使用本地构建好的镜像
     image: aivision-frontend:latest
     container_name: ai-detection-frontend
     restart: unless-stopped

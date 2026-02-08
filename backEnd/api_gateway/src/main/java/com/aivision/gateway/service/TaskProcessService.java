@@ -201,6 +201,19 @@ public class TaskProcessService {
                 
                 tf.setVisionResult(res);
                 
+                // 解析 metadata 中的建议评级
+                if (res != null) {
+                    try {
+                        JsonNode root = objectMapper.readTree(res);
+                        if (root.has("metadata") && root.get("metadata").has("suggested_quality_level")) {
+                            String qLevel = root.get("metadata").get("suggested_quality_level").asText();
+                            tf.setPlateQuality(qLevel);
+                        }
+                    } catch (Exception e) {
+                        logger.warn("解析建议评级失败: {}", e.getMessage());
+                    }
+                }
+                
                 // 只要有结果返回就算成功完成处理，无论是否有缺陷
                 tf.setStatus(res != null ? TaskFile.Status.COMPLETED : TaskFile.Status.FAILED);
                 tf.setProcessingEndTime(LocalDateTime.now());
@@ -569,31 +582,41 @@ public class TaskProcessService {
     /**
      * 解析焊道号和片号
      * 输入格式: "焊道19/片2" -> weldId="19", filmNumber="2"
+     * 兼容格式: "焊道/片32" -> weldId=null, filmNumber="32"
      */
     private void parseWeldAndFilmNumber(TaskFile tf, String weldFilmStr) {
         if (weldFilmStr == null || weldFilmStr.isEmpty()) {
             return;
         }
         
-        // 匹配格式: 焊道{数字}/片{数字}
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("焊道(\\d+)/片(\\d+)");
-        java.util.regex.Matcher matcher = pattern.matcher(weldFilmStr);
+        String weldId = null;
+        String filmNumber = null;
+
+        // 1. 尝试分别提取 "焊道" 和 "片" 后面的数字
+        java.util.regex.Pattern weldPattern = java.util.regex.Pattern.compile("焊道(\\d+)");
+        java.util.regex.Matcher weldMatcher = weldPattern.matcher(weldFilmStr);
+        if (weldMatcher.find()) {
+            weldId = weldMatcher.group(1);
+        }
+
+        java.util.regex.Pattern filmPattern = java.util.regex.Pattern.compile("片(\\d+)");
+        java.util.regex.Matcher filmMatcher = filmPattern.matcher(weldFilmStr);
+        if (filmMatcher.find()) {
+            filmNumber = filmMatcher.group(1);
+        }
         
-        if (matcher.find()) {
-            String weldId = matcher.group(1);
-            String filmNumber = matcher.group(2);
-            tf.setWeldId(weldId);
-            tf.setFilmNumber(filmNumber);
-        } else {
-            // 尝试其他格式，直接提取数字
-            // 格式可能是 "19-2" 等
-            java.util.regex.Pattern altPattern = java.util.regex.Pattern.compile("(\\d+)[/-](\\d+)");
+        // 2. 如果上面都失败，尝试匹配 "19/2" 或 "19-2" 这种纯数字组合
+        if (weldId == null && filmNumber == null) {
+            java.util.regex.Pattern altPattern = java.util.regex.Pattern.compile("^(\\d+)[/-](\\d+)$");
             java.util.regex.Matcher altMatcher = altPattern.matcher(weldFilmStr);
             if (altMatcher.find()) {
-                tf.setWeldId(altMatcher.group(1));
-                tf.setFilmNumber(altMatcher.group(2));
+                weldId = altMatcher.group(1);
+                filmNumber = altMatcher.group(2);
             }
         }
+        
+        if (weldId != null) tf.setWeldId(weldId);
+        if (filmNumber != null) tf.setFilmNumber(filmNumber);
     }
     
     /**

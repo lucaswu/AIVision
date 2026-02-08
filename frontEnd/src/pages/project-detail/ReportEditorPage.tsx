@@ -69,7 +69,10 @@ import {
   RightOutlined as CollapseRightOutlined, // 为了区分普通向右箭头
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, defectRecordAPI, getUserId } from "../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI } from "../../utils/api";
+
+// 移除本地 Mock defectRecordAPI
+// const defectRecordAPI = { ... };
 import { TaskFile, Report, DefectType, DefectRecord } from "../../utils/data";
 import GeometricMeasureTool from './tool/GeometricMeasureTool';
 import { useWindowLevelTool } from './tool/WindowLevelTool';
@@ -1271,10 +1274,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             }
 
             // Position 是算法计算的位置，直接使用数据库值
+            // 如果为空，尝试从 Geometry 生成
+            let displayPosition = dr.Position || '';
+            if (!displayPosition && dr.Geometry) {
+                try {
+                    const g = JSON.parse(dr.Geometry);
+                    // 矩形: x, y, w, h
+                    if (g.type === 'rect' && g.x !== undefined && g.y !== undefined) {
+                        displayPosition = `X:${Math.round(g.x)}, Y:${Math.round(g.y)}`;
+                    }
+                    // 多边形: points [{x,y}, ...]
+                    else if (g.type === 'polygon' && Array.isArray(g.points) && g.points.length > 0) {
+                        displayPosition = `X:${Math.round(g.points[0].x)}, Y:${Math.round(g.points[0].y)}`;
+                    }
+                    // 圆形: x, y, r
+                    else if (g.type === 'circle' && g.x !== undefined && g.y !== undefined) {
+                        displayPosition = `X:${Math.round(g.x)}, Y:${Math.round(g.y)}`;
+                    }
+                } catch(e) {}
+            }
+
             const baseInfo = {
               label: dr.DefectName || '未知',
               color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
-              position: dr.Position || '',  // 算法位置，空则显示空
+              position: displayPosition,  // 算法位置，空则显示空
               size: dr.Size || '',
               quality: dr.Grade || '',
               remark: dr.Remark || '',

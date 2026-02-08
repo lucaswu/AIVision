@@ -273,14 +273,14 @@ export const defectTypeAPI = {
 // 缺陷记录相关API
 export const defectRecordAPI = {
   getByTaskFileId: (taskFileId: string) =>
-    request<any[]>(`/api/v1/defect-records/by-task-file/${taskFileId}`),
+    request<any[]>(`/api/v1/defect-records/task-file/${taskFileId}`),
   create: (data: any) =>
     request<any>("/api/v1/defect-records", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   createBatch: (data: any[]) =>
-    request<any[]>("/api/v1/defect-records/batch", {
+    request<any>("/api/v1/defect-records/batch", {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -290,8 +290,8 @@ export const defectRecordAPI = {
       body: JSON.stringify(data),
     }),
   replace: (taskFileId: string, data: any[]) =>
-    request<any[]>(`/api/v1/defect-records/replace/${taskFileId}`, {
-      method: "PUT",
+    request<any>(`/api/v1/defect-records/task-file/${taskFileId}/replace`, {
+      method: "POST",
       body: JSON.stringify(data),
     }),
   delete: (defectRecordId: string) =>
@@ -299,7 +299,36 @@ export const defectRecordAPI = {
       method: "DELETE",
     }),
   deleteByTaskFileId: (taskFileId: string) =>
-    request<void>(`/api/v1/defect-records/by-task-file/${taskFileId}`, {
+    request<void>(`/api/v1/defect-records/task-file/${taskFileId}`, {
+      method: "DELETE",
+    }),
+};
+
+// 训练数据相关API
+export const trainingDataAPI = {
+  getSummary: (projectId: string) =>
+    request<any>(`/api/v1/training-data/summary?projectId=${projectId}`),
+  getDataSources: (projectId: string) =>
+    request<any[]>(`/api/v1/training-data/sources?projectId=${projectId}`),
+  uploadDataSource: (projectId: string, name: string, files: File[]) => {
+    const formData = new FormData();
+    formData.append("name", name);
+    files.forEach((file) => formData.append("files", file));
+    return uploadRequest(`/api/v1/training-data/sources?projectId=${projectId}`, formData);
+  },
+  deleteDataSource: (projectId: string, sourceId: string) =>
+    request<void>(`/api/v1/training-data/sources/${sourceId}?projectId=${projectId}`, {
+      method: "DELETE",
+    }),
+  getDatasets: (projectId: string) =>
+    request<any[]>(`/api/v1/training-data/datasets?projectId=${projectId}`),
+  createDataset: (projectId: string, data: any) =>
+    request<any>(`/api/v1/training-data/datasets?projectId=${projectId}`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteDataset: (projectId: string, datasetId: string) =>
+    request<void>(`/api/v1/training-data/datasets/${datasetId}?projectId=${projectId}`, {
       method: "DELETE",
     }),
 };

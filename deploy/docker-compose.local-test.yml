@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:14.12-alpine
+    container_name: ai-detection-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ai_detection
+      POSTGRES_USER: aiuser
+      POSTGRES_PASSWORD: aipass123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init_database.sql:/docker-entrypoint-initdb.d/init_database.sql:ro
+    networks:
+      - ai-services
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U aiuser -d ai_detection" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # MinIO 对象存储
+  minio:
+    image: minio/minio:RELEASE.2024-01-18T22-51-28Z
+    container_name: ai-detection-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    networks:
+      - ai-services
+    healthcheck:
+      test: ["CMD-SHELL", "sh -c '</dev/tcp/localhost/9000' || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # AI 推理服务 (Python + CUDA) - Weld Detection
+  # 使用 packed 镜像 (包含模型)，架构为 linux/amd64
+  ai-inference:
+    image: aivision-ai-inference:packed
+    platform: linux/amd64
+    container_name: ai-detection-inference
+    restart: unless-stopped
+    environment:
+      - USE_GPU=${USE_GPU:-false}
+      - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
+      - PRIMARY_WEIGHTS=/app/model/weights/primary-weights.pth
+      - CUDA_VISIBLE_DEVICES=
+    ports:
+      - "8000:8000"
+    networks:
+      - ai-services
+    volumes:
+      - ../data/files:/app/data/files
+      - ../data/results:/app/data/results
+      # 模型已打包在镜像中，无需挂载
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # OCR 推理服务
+  # 使用 packed 镜像 (包含模型)，架构为 linux/arm64 (本地 Mac 专用)
+  ai-inference-ocr:
+    image: aivision-ai-inference-ocr:packed
+    container_name: ai-detection-inference-ocr
+    restart: unless-stopped
+    environment:
+      - USE_GPU=${USE_GPU:-false}
+      - CUDA_VISIBLE_DEVICES=
+    ports:
+      - "8001:8000"
+    networks:
+      - ai-services
+    volumes:
+      - ../data/files:/app/data/files
+      - ../data/results:/app/data/results
+      # 模型已打包在镜像中，无需挂载
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  ai-services:
+    name: ai-services
+    driver: bridge

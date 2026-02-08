@@ -28,10 +28,16 @@ spring:
 
 # Local storage configuration (replacing MinIO)
 storage:
+  type: ${STORAGE_TYPE:local} # local or minio
   local:
     # Use a path within /app to avoid permission issues with non-root user
     base-dir: ${STORAGE_LOCAL_BASE_DIR:/app/data/files}
     result-dir: ${STORAGE_RESULT_DIR:/app/data/results}
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+    bucket: ${MINIO_BUCKET:ai-vision-files}
   # 外部可访问路径（传给非容器化的 huodian_ai 服务），可与本地不同
   external-base-dir: ${STORAGE_EXTERNAL_BASE_DIR:/app/data/files}
 
@@ -109,4 +115,15 @@ logging:
     com.aivision.gateway: ${LOGGING_LEVEL_GATEWAY:INFO}
     org.springframework.web: ${LOGGING_LEVEL_SPRING_WEB:INFO}
     org.hibernate.SQL: ${LOGGING_LEVEL_HIBERNATE_SQL:ERROR}
-    root: ${LOGGING_LEVEL_ROOT:INFO} 
+    root: ${LOGGING_LEVEL_ROOT:INFO}
+
+# Third Party Project Sync Configuration
+third-party:
+  project-sync:
+    enabled: ${THIRD_PARTY_SYNC_ENABLED:true}
+    cron: ${THIRD_PARTY_SYNC_CRON:0 0 2 * * ?}
+    auth-url: ${THIRD_PARTY_AUTH_URL:https://zjndt.ztpc.com/api/blade-auth/oauth/getToken}
+    project-url: ${THIRD_PARTY_PROJECT_URL:https://zjndt.ztpc.com/api/rocan-project/project/queryAllWithDetails}
+    basic-auth: ${THIRD_PARTY_BASIC_AUTH:Basic c2FiZXI6c2FiZXJfc2VjcmV0}
+    account: ${THIRD_PARTY_ACCOUNT:qualificationOauthUser}
+ 

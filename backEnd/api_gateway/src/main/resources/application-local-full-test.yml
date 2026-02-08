@@ -1,0 +1,115 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: ai-vision-gateway
+    
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ai_detection}
+    username: ${SPRING_DATASOURCE_USERNAME:aiuser}
+    password: ${SPRING_DATASOURCE_PASSWORD:aipass123}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.postgresql.Driver}
+    
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 10GB
+      enabled: true
+
+# Storage configuration (Local)
+storage:
+  type: local
+  local:
+    base-dir: /Users/Dylan.Min/Documents/Code/work/huodian/AIVision/data/files
+    result-dir: /Users/Dylan.Min/Documents/Code/work/huodian/AIVision/data/results
+  minio:
+    endpoint: http://localhost:9000
+    access-key: minioadmin
+    secret-key: minioadmin123
+    bucket: ai-vision-files
+  external-base-dir: /tmp/ai-vision/files
+
+# AI Services Configuration (Local Docker Ports)
+ai-services:
+  inference-url: http://localhost:8000
+  ocr-inference-url: http://localhost:8001
+  vision-ai:
+    inference-mode: det
+    device: cpu # Local test default to CPU
+    engine: rfdet
+    det-confidence: 0.25
+    det-wide-slice: true
+    timeout-minutes: 1440
+
+# Default User Configuration
+default-user:
+  user-id: default-user
+  user-name: 默认用户
+
+# File Upload Configuration
+file-upload:
+  allowed-image-types:
+    - jpg
+    - jpeg
+    - png
+    - gif
+    - bmp
+    - webp
+  max-file-size: 200MB
+  max-total-size: 10GB
+
+# SpringDoc OpenAPI Configuration
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    try-it-out-enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    filter: true
+  packages-to-scan: com.aivision.gateway.controller
+
+# Spring Boot Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  health:
+    datasource:
+      enabled: true
+    diskspace:
+      enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    com.aivision.gateway: INFO
+    org.springframework.web: INFO
+    org.hibernate.SQL: WARN
+    root: INFO
+
+# Third Party Project Sync Configuration (Local Test)
+third-party:
+  project-sync:
+    enabled: false # Disable by default for local test unless configured
+    cron: "0 0 2 * * ?"
+    auth-url: https://zjndt.ztpc.com/api/blade-auth/oauth/getToken
+    project-url: https://zjndt.ztpc.com/api/rocan-project/project/queryAllWithDetails
+    basic-auth: Basic c2FiZXI6c2FiZXJfc2VjcmV0
+    account: qualificationOauthUser

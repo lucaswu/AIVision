@@ -1,6 +1,6 @@
 # 多阶段构建
 # 第一阶段：构建前端应用
-FROM node:18-alpine AS builder
+FROM hub.rat.dev/library/node:18-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -20,7 +20,7 @@ COPY . .
 RUN yarn build
 
 # 第二阶段：生产环境
-FROM nginx:alpine
+FROM hub.rat.dev/library/nginx:alpine
 
 # 删除默认的nginx配置和文件
 RUN rm -rf /usr/share/nginx/html/*

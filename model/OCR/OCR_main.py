@@ -5,6 +5,14 @@
 """
 
 import os
+import os
+import ssl
+
+# Globally disable SSL verification for local dev
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+ssl._create_default_https_context = ssl._create_unverified_context
+
 import json
 from typing import Dict, List, Optional
 import argparse
@@ -48,12 +56,34 @@ class BatchOCRProcessor:
         print("初始化PaddleOCR...")
         use_gpu = os.environ.get('USE_GPU', 'true').lower() == 'true'
         print(f"PaddleOCR使用设备: {'GPU' if use_gpu else 'CPU'}")
-        self.ocr = PaddleOCR(
-            use_gpu=use_gpu,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=True
-        )
+        
+        # Check if local weights exist
+        weights_dir = '/app/model/weights'
+        det_model_dir = os.path.join(weights_dir, 'ch_PP-OCRv4_det_infer')
+        rec_model_dir = os.path.join(weights_dir, 'ch_PP-OCRv4_rec_infer')
+        cls_model_dir = os.path.join(weights_dir, 'ch_ppocr_mobile_v2.0_cls_infer')
+        
+        use_local_weights = os.path.exists(det_model_dir) and os.path.exists(rec_model_dir) and os.path.exists(cls_model_dir)
+        
+        if use_local_weights:
+            print(f"使用本地模型权重: {weights_dir}")
+            self.ocr = PaddleOCR(
+                use_gpu=use_gpu,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=True,
+                det_model_dir=det_model_dir,
+                rec_model_dir=rec_model_dir,
+                cls_model_dir=cls_model_dir
+            )
+        else:
+            print("未找到完整本地模型，尝试自动下载...")
+            self.ocr = PaddleOCR(
+                use_gpu=use_gpu,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=True
+            )
 
         # 统计信息
         self.statistics = []

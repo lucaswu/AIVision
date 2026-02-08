@@ -141,6 +141,74 @@ public class TaskService {
         return taskFileInfos;
     }
 
+    @Transactional(readOnly = true)
+    public ReportResultResponse getTaskReportResult(String userId, ReportResultRequest request) {
+        if (request == null || request.getProjectIds() == null || request.getProjectIds().isEmpty()) {
+            throw new IllegalArgumentException("项目ID列表不能为空");
+        }
+
+        // 1. 权限校验：确保用户对所有请求的项目有访问权限
+        for (String projectId : request.getProjectIds()) {
+            validateProjectAccess(projectId, userId);
+        }
+
+        // 2. 查询数据
+        List<TaskFile> taskFiles;
+        if (request.getWeldNos() != null && !request.getWeldNos().isEmpty()) {
+            taskFiles = taskFileRepository.findByProjectIdsAndWeldNos(request.getProjectIds(), request.getWeldNos());
+        } else {
+            taskFiles = taskFileRepository.findByProjectIds(request.getProjectIds());
+        }
+        
+        // 3. 组装结果
+        List<ReportResultResponse.ReportItem> items = new ArrayList<>();
+        for (TaskFile tf : taskFiles) {
+            ReportResultResponse.ReportItem item = new ReportResultResponse.ReportItem();
+            item.setFileId(tf.getFileId());
+            
+            // 尝试获取文件名
+            Optional<File> fileOpt = fileRepository.findById(tf.getFileId());
+            item.setFileName(fileOpt.map(File::getOriginalName).orElse("unknown"));
+            
+            item.setWeldNo(tf.getWeldId());
+            item.setSliceNo(tf.getFilmNumber());
+            item.setFilmDensity(tf.getFilmDensity());
+            item.setIqiSensitivity(tf.getSensitivity());
+            item.setQualityLevel(tf.getPlateQuality());
+            
+            // 评定结果逻辑：优先取人工结果，没有则取 ReviewStatus，最后取 VisionStatus
+            if (tf.getManualResult() != null && !tf.getManualResult().isEmpty()) {
+                item.setEvaluationResult(tf.getManualResult());
+            } else if (tf.getReviewStatus() == TaskFile.ReviewStatus.CONFIRMED) {
+                item.setEvaluationResult("合格"); // 默认确认即合格，需根据业务调整
+            } else {
+                item.setEvaluationResult(tf.getStatus() == TaskFile.Status.COMPLETED ? "待评定" : "检测中");
+            }
+            
+            // 备注：使用 ErrorMessage 作为备注，或者 ManualResult 的一部分
+            item.setRemark(tf.getErrorMessage());
+            
+            // 缺陷列表
+            List<ReportResultResponse.DefectItem> defects = new ArrayList<>();
+            for (DefectRecord dr : tf.getDefectRecords()) {
+                ReportResultResponse.DefectItem d = new ReportResultResponse.DefectItem();
+                d.setDefectId(dr.getDefectRecordId());
+                d.setDefectNature(dr.getDefectName());
+                // 优先使用 position (语义描述)，如果没有则使用 geometry (坐标JSON)
+                d.setDefectLocation(dr.getPosition() != null ? dr.getPosition() : dr.getGeometry());
+                d.setDefectSize(dr.getSize());
+                d.setDefectLevel(dr.getGrade());
+                d.setRemark(dr.getRemark());
+                defects.add(d);
+            }
+            item.setDefects(defects);
+            
+            items.add(item);
+        }
+        
+        return new ReportResultResponse(items);
+    }
+
     @Transactional
     public void restartTask(String taskId, String projectId, String userId) {
         Task task = taskRepository.findById(taskId).orElseThrow(() -> new RuntimeException("任务不存在: " + taskId));

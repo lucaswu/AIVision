@@ -7,6 +7,7 @@ import com.aivision.gateway.repository.FileRepository;
 import com.aivision.gateway.repository.ProjectRepository;
 import com.aivision.gateway.repository.UserProjectPermissionRepository;
 import com.aivision.gateway.repository.UserRepository;
+import com.aivision.gateway.service.storage.StorageStrategy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -50,8 +51,8 @@ public class FileService {
     @Autowired
     private FileUploadProperties fileUploadProperties;
     
-    @Value("${storage.local.base-dir:/data/files}")
-    private String localBaseDir;
+    @Autowired
+    private StorageStrategy storageStrategy;
     
     /**
      * 上传多个文件
@@ -186,8 +187,10 @@ public class FileService {
             String objectPath = buildObjectPath(projectId, userId, directory.getDirPath(), storedName);
             String fullPath = objectPath; // 逻辑路径
             
-            // 3. 保存文件到本地文件系统
-            saveToLocal(file, fullPath);
+            // 3. 保存文件到存储服务 (Local or MinIO)
+            try (InputStream inputStream = file.getInputStream()) {
+                storageStrategy.upload(inputStream, fullPath, file.getContentType(), file.getSize());
+            }
             
             // 4. 保存到数据库（只存元数据，不存内容）
             File fileEntity = new File(
@@ -239,23 +242,11 @@ public class FileService {
     }
     
     /**
-     * 构建MinIO对象路径
+     * 构建对象路径
      */
     private String buildObjectPath(String projectId, String userId, String dirPath, String storedName) {
         String normalizedDir = dirPath == null ? "" : dirPath;
         return String.format("/%s/%s%s/%s", projectId, userId, normalizedDir, storedName);
-    }
-    
-    /**
-     * 上传文件到本地文件系统
-     */
-    private void saveToLocal(MultipartFile file, String objectPath) throws Exception {
-        String relative = objectPath.startsWith("/") ? objectPath.substring(1) : objectPath;
-        Path target = Path.of(localBaseDir).resolve(relative).normalize();
-        Files.createDirectories(target.getParent());
-        try (InputStream inputStream = file.getInputStream()) {
-            Files.copy(inputStream, target, StandardCopyOption.REPLACE_EXISTING);
-        }
     }
     
     /**
@@ -288,15 +279,13 @@ public class FileService {
         }
         
         try {
-            // 3. 从本地文件系统读取文件
-            String rel = file.getFilePath().startsWith("/") ? file.getFilePath().substring(1) : file.getFilePath();
-            Path path = Path.of(localBaseDir).resolve(rel).normalize();
+            // 3. 从存储服务读取文件
+            String rel = file.getFilePath();
             
-            if (!Files.exists(path)) {
-                throw new RuntimeException("文件物理路径不存在: " + path);
+            byte[] imageBytes;
+            try (InputStream is = storageStrategy.download(rel)) {
+                imageBytes = is.readAllBytes();
             }
-            
-            byte[] imageBytes = Files.readAllBytes(path);
             
             // 5. 确定Content-Type
             String contentType = file.getMimeType();
@@ -410,11 +399,9 @@ public class FileService {
             
             File file = fileOpt.get();
             
-            // 2. 从本地删除文件（忽略失败）
+            // 2. 从存储服务删除文件（忽略失败）
             try {
-                String rel = file.getFilePath().startsWith("/") ? file.getFilePath().substring(1) : file.getFilePath();
-                Path path = Path.of(localBaseDir).resolve(rel).normalize();
-                Files.deleteIfExists(path);
+                storageStrategy.delete(file.getFilePath());
             } catch (Exception ignore) {}
             
             // 3. 从数据库删除记录

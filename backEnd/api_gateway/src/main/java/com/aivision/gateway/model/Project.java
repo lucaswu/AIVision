@@ -40,6 +40,16 @@ public class Project {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
     
+    // Third Party Integration Fields
+    @Column(name = "third_party_id")
+    private String thirdPartyId;
+    
+    @Column(name = "third_party_project_code")
+    private String thirdPartyProjectCode;
+    
+    @Column(name = "third_party_project_order_number")
+    private String thirdPartyProjectOrderNumber;
+    
     // 构造函数
     public Project() {}
     
@@ -129,6 +139,30 @@ public class Project {
     
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+    
+    public String getThirdPartyId() {
+        return thirdPartyId;
+    }
+
+    public void setThirdPartyId(String thirdPartyId) {
+        this.thirdPartyId = thirdPartyId;
+    }
+
+    public String getThirdPartyProjectCode() {
+        return thirdPartyProjectCode;
+    }
+
+    public void setThirdPartyProjectCode(String thirdPartyProjectCode) {
+        this.thirdPartyProjectCode = thirdPartyProjectCode;
+    }
+
+    public String getThirdPartyProjectOrderNumber() {
+        return thirdPartyProjectOrderNumber;
+    }
+
+    public void setThirdPartyProjectOrderNumber(String thirdPartyProjectOrderNumber) {
+        this.thirdPartyProjectOrderNumber = thirdPartyProjectOrderNumber;
     }
     
     @PrePersist
