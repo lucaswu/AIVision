@@ -73,7 +73,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, default="outputs/welddetect",
                         help="Root directory for training outputs")
     parser.add_argument("--run", type=str, default="crack_baseline", help="Run name")
-    parser.add_argument("--model", type=str, default="yolo11l.pt", help="Model checkpoint or yaml")
+    parser.add_argument("--model", type=str, default="yolo26l.pt", help="Model checkpoint or yaml")
     parser.add_argument("--pretrained", type=str, default="true",
                         help="Whether to use pretrained weights (true/false)")
     parser.add_argument("--degrees", type=float, default=180, help="Rotation augmentation degrees")
