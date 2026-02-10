@@ -40,6 +40,7 @@ DEBUG_STEP = True
 from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
+from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
 
 
 SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
@@ -79,10 +80,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--primary-conf", type=float, default=0.25, help="主模型置信度阈值")
     parser.add_argument("--device", help="推理设备（如0, cuda:0, cpu）")
 
-    # 检测模式参数（RF-DETR）
-    parser.add_argument("--det-device", help="RF-DETR推理设备（如cuda:0, cpu）")
+    # 检测模式参数(RF-DETR)
+    parser.add_argument("--det-device", help="RF-DETR推理设备(如cuda:0, cpu)")
     parser.add_argument("--wide-slice", action="store_true",
-                        help="启用横切纵拼推理（seg/det模式），结果与主干一起融合")
+                        help="启用横切纵拼推理(seg/det模式),结果与主干一起融合")
+    
+    # 焊缝底片矫正预处理
+    parser.add_argument("--enable-correction", action="store_true",
+                        help="启用焊缝底片方向矫正预处理")
+    parser.add_argument("--correction-model", 
+                        default="weight/weld_orientation_model.pth",
+                        help="焊缝方向矫正模型路径")
+    parser.add_argument("--correction-verbose", action="store_true",
+                        help="显示矫正过程详细信息")
 
     return parser.parse_args()
 
@@ -151,13 +161,15 @@ class InferencePipelineRunner:
                  args: argparse.Namespace,
                  roi_detector: WeldROIDetector,
                  font_renderer: FontRenderer,
-                 debug_root: Optional[Path]):
+                 debug_root: Optional[Path],
+                 corrector: Optional[WeldOrientationCorrector] = None):
         self.args = args
         self.mode = args.mode
         self.roi_detector = roi_detector
         self.font_renderer = font_renderer
         self.debug_root = debug_root
         self.output_dir = Path(args.output_dir) if args.output_dir else None
+        self.corrector = corrector
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -229,6 +241,21 @@ class InferencePipelineRunner:
 
     def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], int, int]:
         image = load_image(image_path)
+        
+        # Apply weld orientation correction preprocessing if enabled
+        if self.corrector is not None:
+            image, correction_info = self.corrector.correct_image(
+                image, 
+                verbose=self.args.correction_verbose
+            )
+            # Optionally save corrected image for debugging
+            if self.debug_root and correction_info['corrected']:
+                corrected_dir = self.debug_root / "corrected_images"
+                corrected_dir.mkdir(parents=True, exist_ok=True)
+                corrected_path = corrected_dir / f"corrected_{image_path.name}"
+                import cv2
+                cv2.imwrite(str(corrected_path), image)
+        
         h, w = image.shape[:2]
         debug_dir = self._image_debug_dir(image_path)
 
@@ -281,12 +308,22 @@ def main():
     debug_root = (output_dir / "temp") if DEBUG_STEP else None
     if debug_root is not None:
         debug_root.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize weld orientation corrector if enabled
+    corrector = None
+    if args.enable_correction:
+        print(f"启用焊缝底片方向矫正,模型路径: {args.correction_model}")
+        corrector = WeldOrientationCorrector(
+            model_path=args.correction_model,
+            model_type='resnet50'
+        )
 
     runner = InferencePipelineRunner(
         args=args,
         roi_detector=roi_detector,
         font_renderer=font_renderer,
-        debug_root=debug_root
+        debug_root=debug_root,
+        corrector=corrector
     )
     results = runner.run(image_paths)
 
