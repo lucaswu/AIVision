@@ -322,6 +322,16 @@ def _sync_run_inference_via_script(request: InferenceRequest):
     if request.wide_slice:
         cmd.append("--wide-slice")
     
+    # 自动检测矫正模型，存在则启用方向矫正预处理
+    correction_model = os.environ.get(
+        "CORRECTION_MODEL", "/app/model/weights/weld_orientation_model.pth"
+    )
+    if os.path.exists(correction_model):
+        cmd += ["--enable-correction", "--correction-model", correction_model]
+        print(f"[Task {task_id}] 矫正模型已预设，启用方向矫正: {correction_model}")
+    else:
+        print(f"[Task {task_id}] 矫正模型未找到，跳过方向矫正: {correction_model}")
+    
     print(f"[Task {task_id}] Executing command: {' '.join(cmd)}")
     
     # 执行脚本

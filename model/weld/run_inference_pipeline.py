@@ -45,6 +45,19 @@ from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
 
 SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
 
+# 矫正 label (0-7) 到前端 CSS transform 的映射
+# label 表示图片当前状态，矫正操作是其逆操作
+LABEL_TO_FRONTEND_TRANSFORM = {
+    0: {"rotation": 0,    "flip": False},  # Normal
+    1: {"rotation": -90,  "flip": False},  # 顺时90° → 逆时90°矫正
+    2: {"rotation": 180,  "flip": False},  # 倒置180° → 旋转180°矫正
+    3: {"rotation": 90,   "flip": False},  # 逆时90° → 顺时90°矫正
+    4: {"rotation": 0,    "flip": True},   # 镜像 → 水平翻转矫正
+    5: {"rotation": -90,  "flip": True},   # 镜像+顺时90°
+    6: {"rotation": 180,  "flip": True},   # 镜像+180°
+    7: {"rotation": 90,   "flip": True},   # 镜像+逆时90°
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -93,6 +106,8 @@ def parse_args() -> argparse.Namespace:
                         help="焊缝方向矫正模型路径")
     parser.add_argument("--correction-verbose", action="store_true",
                         help="显示矫正过程详细信息")
+    parser.add_argument("--save-corrected-dir", 
+                        help="可选，将矫正后的图像保存到指定目录")
 
     return parser.parse_args()
 
@@ -190,13 +205,20 @@ class InferencePipelineRunner:
         
         for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
             try:
-                rois, width, height = self._process_image(image_path)
+                rois, width, height, correction_info = self._process_image(image_path)
+                label = correction_info.get('label', 0)
+                transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
                 results.append({
                     "mode": self.mode,
                     "image_path": str(image_path),
                     "width": width,
                     "height": height,
                     "num_rois": len(rois),
+                    "correction": {
+                        "label": label,
+                        "rotation": transform["rotation"],
+                        "flip": transform["flip"],
+                    },
                     "rois": rois
                 })
             except Exception as exc:
@@ -239,22 +261,37 @@ class InferencePipelineRunner:
             return None
         return self.debug_root / image_path.stem
 
-    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], int, int]:
+    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], int, int, dict]:
         image = load_image(image_path)
         
+        # 默认矫正信息（未进行矫正时使用）
+        correction_info: dict = {'label': 0, 'corrected': False}
+
         # Apply weld orientation correction preprocessing if enabled
         if self.corrector is not None:
             image, correction_info = self.corrector.correct_image(
                 image, 
                 verbose=self.args.correction_verbose
             )
+            
+            # Save corrected image if a directory is specified
+            save_dir = getattr(self.args, 'save_corrected_dir', None)
+            if save_dir:
+                save_dir_path = Path(save_dir)
+                save_dir_path.mkdir(parents=True, exist_ok=True)
+                corrected_path = save_dir_path / image_path.name
+                import cv2
+                # Use imencode and tofile to support potential Chinese paths
+                ext = image_path.suffix if image_path.suffix else '.jpg'
+                cv2.imencode(ext, image)[1].tofile(str(corrected_path))
             # Optionally save corrected image for debugging
-            if self.debug_root and correction_info['corrected']:
+            elif self.debug_root and correction_info.get('corrected', False):
                 corrected_dir = self.debug_root / "corrected_images"
                 corrected_dir.mkdir(parents=True, exist_ok=True)
                 corrected_path = corrected_dir / f"corrected_{image_path.name}"
                 import cv2
-                cv2.imwrite(str(corrected_path), image)
+                ext = image_path.suffix if image_path.suffix else '.jpg'
+                cv2.imencode(ext, image)[1].tofile(str(corrected_path))
         
         h, w = image.shape[:2]
         debug_dir = self._image_debug_dir(image_path)
@@ -285,7 +322,7 @@ class InferencePipelineRunner:
                 fusion_iou=self.fusion_iou
             )
 
-        return rois, w, h
+        return rois, w, h, correction_info
 
 
 def main():

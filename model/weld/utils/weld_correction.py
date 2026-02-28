@@ -16,6 +16,8 @@ using a trained deep learning model. It can detect 8 different orientations:
 - 7: Mirrored + 90° counter-clockwise
 """
 
+import os
+import importlib.util
 import torch
 import cv2
 import numpy as np
@@ -50,7 +52,8 @@ class WeldOrientationCorrector:
                  model_path: Union[str, Path],
                  model_type: str = 'resnet50',
                  device: Optional[str] = None,
-                 num_classes: int = 8):
+                 num_classes: int = 8,
+                 adaptive_processor_path: Optional[str] = None):
         """
         Initialize the weld orientation corrector.
         
@@ -59,6 +62,8 @@ class WeldOrientationCorrector:
             model_type: Model architecture type (default: 'resnet50')
             device: Device to run inference on (default: auto-detect CUDA)
             num_classes: Number of orientation classes (default: 8)
+            adaptive_processor_path: Path to adaptive-image-processor.py.
+                If None, will search relative to this file and cwd.
         """
         self.model_path = Path(model_path)
         self.model_type = model_type
@@ -70,6 +75,9 @@ class WeldOrientationCorrector:
         else:
             self.device = torch.device(device)
         
+        # Load AdaptiveImageProcessor (must match training preprocessing)
+        self.adaptive_processor = self._load_adaptive_processor(adaptive_processor_path)
+        
         # Load model
         self.model = self._load_model()
         
@@ -79,6 +87,37 @@ class WeldOrientationCorrector:
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
+    
+    def _load_adaptive_processor(self, filepath: Optional[str] = None):
+        """
+        Load the AdaptiveImageProcessor from adaptive-image-processor.py.
+        Searches in: provided path → directory of this file's parent → cwd.
+        
+        Returns:
+            AdaptiveImageProcessor instance (use_negative=True), or None if not found.
+        """
+        search_paths = []
+        if filepath:
+            search_paths.append(filepath)
+        # Relative to model/weld/ directory (parent of utils/)
+        search_paths.append(str(Path(__file__).parent.parent / "adaptive-image-processor.py"))
+        # cwd fallback
+        search_paths.append(os.path.join(os.getcwd(), "adaptive-image-processor.py"))
+        
+        for path in search_paths:
+            if os.path.exists(path):
+                try:
+                    spec = importlib.util.spec_from_file_location("adaptive_image_processor", path)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    processor = module.AdaptiveImageProcessor(use_negative=True)
+                    print(f">>> AdaptiveImageProcessor loaded from: {path}")
+                    return processor
+                except Exception as e:
+                    print(f"警告: 加载 AdaptiveImageProcessor 失败 ({path}): {e}")
+        
+        print("警告: 未找到 adaptive-image-processor.py，将跳过自适应预处理（推理精度可能下降）。")
+        return None
     
     def _get_model_architecture(self) -> nn.Module:
         """
@@ -178,20 +217,27 @@ class WeldOrientationCorrector:
         """
         Predict the orientation of a weld film image.
         
+        The model input is preprocessed with AdaptiveImageProcessor to match
+        training-time preprocessing. The original image is NOT modified.
+        
         Args:
             image: Input image as numpy array (BGR format from cv2)
         
         Returns:
             Tuple of (label_index, confidence_score)
         """
-        # Convert BGR to RGB and then to PIL
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb_image)
+        # Apply adaptive preprocessing for model input (matches training pipeline)
+        # This converts to windowed grayscale + optional negative, same as training
+        if self.adaptive_processor is not None:
+            processed = self.adaptive_processor.process_image(image)  # grayscale uint8
+            pil_img = Image.fromarray(cv2.cvtColor(processed, cv2.COLOR_GRAY2RGB))
+        else:
+            # Fallback: direct BGR→RGB conversion (reduced accuracy)
+            pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         
-        # Preprocess
+        # Apply transform and run inference
         input_tensor = self.preprocess(pil_img).unsqueeze(0).to(self.device)
         
-        # Inference
         with torch.no_grad():
             outputs = self.model(input_tensor)
             probabilities = torch.nn.functional.softmax(outputs, dim=1)
@@ -257,8 +303,11 @@ class WeldOrientationCorrector:
         """
         Load an image from path and correct its orientation.
         
+        Uses cv2.imdecode(np.fromfile(...)) to support non-ASCII (e.g. Chinese)
+        file paths, consistent with genimi_predict.py.
+        
         Args:
-            image_path: Path to the image file
+            image_path: Path to the image file (supports non-ASCII/Chinese paths)
             verbose: If True, print diagnostic information
         
         Returns:
@@ -269,8 +318,8 @@ class WeldOrientationCorrector:
         if verbose:
             print(f"\nProcessing: {image_path.name}")
         
-        # Load image
-        image = cv2.imread(str(image_path))
+        # Use np.fromfile to support non-ASCII (Chinese) paths
+        image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError(f"Cannot read image: {image_path}")
         
