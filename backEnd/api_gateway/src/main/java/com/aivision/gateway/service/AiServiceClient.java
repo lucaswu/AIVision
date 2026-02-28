@@ -348,6 +348,16 @@ public class AiServiceClient {
             metadata.put("total_defects", String.valueOf(totalDefects));
             metadata.put("suggested_quality_level", totalDefects > 0 ? "III" : "I");
             
+            // 提取矫正信息（如果 Python 结果包含 correction 字段）
+            JsonNode correction = pythonResult.path("correction");
+            if (!correction.isMissingNode() && correction.isObject()) {
+                metadata.put("correction_rotation", correction.path("rotation").asInt(0));
+                metadata.put("correction_flip", correction.path("flip").asBoolean(false));
+            } else {
+                metadata.put("correction_rotation", 0);
+                metadata.put("correction_flip", false);
+            }
+            
             finalResult.put("metadata", metadata);
             finalResult.put("results", defectResults);
             

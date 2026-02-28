@@ -196,6 +196,39 @@ function hitTestEllipse(x: number, y: number, shape: EllipseShape) {
   return (lx * lx) / (shape.rx * shape.rx) + (ly * ly) / (shape.ry * shape.ry) <= 1;
 }
 
+/**
+ * 将矫正后坐标点反变换回原图坐标系（CSS 变换作用前的坐标系）。
+ * AI 检测结果的 bbox 存储在矫正后坐标系中，需要逆变换使 CSS transform 能正确对齐。
+ * @param px - 矫正后图像中的 x 坐标（像素）
+ * @param py - 矫正后图像中的 y 坐标（像素）
+ * @param corrW - 矫正后图像的宽度（像素）
+ * @param corrH - 矫正后图像的高度（像素）
+ * @param rotationDeg - 矫正旋转角度（0/90/180/270/-90）
+ * @param flipH - 水平翻转系数（1 不翻转, -1 翻转）
+ */
+function inverseTransformPoint(
+  px: number, py: number,
+  corrW: number, corrH: number,
+  rotationDeg: number, flipH: number
+): { x: number; y: number } {
+  // 归一化旋转角度到 0/90/180/270
+  const r = ((rotationDeg % 360) + 360) % 360;
+  // 先逆旋转（顺/逆各自的逆是对方）
+  // corrW/corrH 是矫正后图像的尺寸；原图尺寸在 90/270° 时宽高互换
+  let x: number, y: number;
+  if (r === 0) { x = px; y = py; }
+  else if (r === 90) { x = py; y = corrW - px; }  // 顺90°的逆是逆90°
+  else if (r === 180) { x = corrW - px; y = corrH - py; }
+  else /* 270 */ { x = corrH - py; y = px; }           // 逆270°（=顺90°）
+  // 再逆翻转（水平翻转是自逆操作）
+  if (flipH === -1) {
+    // 逆变换后，x 轴反转基于原图宽度
+    const origW = (r === 90 || r === 270) ? corrH : corrW;
+    x = origW - x;
+  }
+  return { x, y };
+}
+
 const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   taskId,
   projectId,
@@ -1265,7 +1298,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           const loadedPolygons: SavedPolygon[] = [];
 
           resp.Data.forEach((dr: DefectRecord) => {
-            // 从 Geometry 字段解析几何坐标
+            // 从 Geometry 字段解析几何坐标（保持原始坐标，即矫正后坐标系）
             let geometry: any = null;
             try {
               geometry = dr.Geometry ? JSON.parse(dr.Geometry) : null;
@@ -1273,35 +1306,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               console.warn('Failed to parse defect geometry:', dr.Geometry);
             }
 
-            // Position 是算法计算的位置，直接使用数据库值
-            // 如果为空，尝试从 Geometry 生成
-            let displayPosition = dr.Position || '';
-            if (!displayPosition && dr.Geometry) {
-                try {
-                    const g = JSON.parse(dr.Geometry);
-                    // 矩形: x, y, w, h
-                    if (g.type === 'rect' && g.x !== undefined && g.y !== undefined) {
-                        displayPosition = `X:${Math.round(g.x)}, Y:${Math.round(g.y)}`;
-                    }
-                    // 多边形: points [{x,y}, ...]
-                    else if (g.type === 'polygon' && Array.isArray(g.points) && g.points.length > 0) {
-                        displayPosition = `X:${Math.round(g.points[0].x)}, Y:${Math.round(g.points[0].y)}`;
-                    }
-                    // 圆形: x, y, r
-                    else if (g.type === 'circle' && g.x !== undefined && g.y !== undefined) {
-                        displayPosition = `X:${Math.round(g.x)}, Y:${Math.round(g.y)}`;
-                    }
-                } catch(e) {}
-            }
-
             const baseInfo = {
               label: dr.DefectName || '未知',
               color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
-              position: displayPosition,  // 算法位置，空则显示空
+              position: dr.Position || '',
               size: dr.Size || '',
               quality: dr.Grade || '',
               remark: dr.Remark || '',
               defectRecordId: dr.DefectRecordId,
+              // 标记该坐标来自 AI（矫正后坐标系），渲染时需逆变换
+              _isCorrectedCoord: true,
             };
 
             if (geometry?.type === 'circle') {
@@ -1317,7 +1331,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 ...baseInfo,
               });
             } else {
-              // 默认为矩形或无法解析时作为矩形处理
               loadedRects.push({
                 x: geometry?.x ?? 0,
                 y: geometry?.y ?? 0,
@@ -1327,6 +1340,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               });
             }
           });
+
 
           setDefectRects(loadedRects);
           setDefectCircles(loadedCircles);
@@ -1364,8 +1378,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       resetWindow();
       setScale(1);
-      setRotation(0);
-      setFlipH(1);
+      // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
+      setRotation(selectedFile.CorrectionRotation ?? 0);
+      setFlipH(selectedFile.CorrectionFlip ? -1 : 1);
       setFlipV(1);
       setPosition({ x: 0, y: 0 });
       setCalibrateLine(null);
@@ -2225,7 +2240,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
 
                   {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
-                  {/* 从后端加载的数据是原始像素坐标,需要转换为 CSS 坐标 */}
+                  {/* 从后端加载的数据是矫正后像素坐标,需要先逆变换回原图坐标再转为 CSS 坐标 */}
                   {/*只在图片加载完成后且当前文件ID匹配时才显示缺陷信息 */}
                   {(() => {
                     // 防止切换文件瞬间闪烁：只有当 imageReady 为 true 且当前渲染的文件 ID 与已处理的 ID 一致，且不处于重置过程中时才显示
@@ -2234,12 +2249,46 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
                     if (!shouldShowDefects) return null;
 
+                    // 渲染时逆变换：使用已加载的图像尺寸（此时 rawImageWidth/Height 已有值）
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    // 矫正后图像的像素尺寸（90/270°时宽高互换）
+                    const rimgW = (normR === 90 || normR === 270)
+                      ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270)
+                      ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                    // 文字反变换：抵消 CSS 旋转和翻转，使标注文字固定正向显示
+                    // SVG transform 应用顺序：先右边再左边，所以写为 rotate 然后 scale
+                    const makeTextTransform = (tx: number, ty: number) => {
+                      let t = '';
+                      // 先抖消旋转（相对于文字中心）
+                      if (corrRotation !== 0) {
+                        t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                      }
+                      // 再抖消水平翻转（如果有）
+                      if (corrFlipH === -1) {
+                        t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                      }
+                      return t || undefined;
+                    };
+
                     return defectRects.map((rect, idx) => {
-                      // 统一：defectRects 中存储的是原始像素坐标，渲染时转为 CSS 坐标
-                      const displayX = widthRatio > 0 ? rect.x / widthRatio : rect.x;
-                      const displayY = widthRatio > 0 ? rect.y / widthRatio : rect.y; // Changed from heightRatio
-                      const displayW = widthRatio > 0 ? rect.w / widthRatio : rect.w;
-                      const displayH = widthRatio > 0 ? rect.h / widthRatio : rect.h; // Changed from heightRatio
+                      let rx = rect.x, ry = rect.y, rw = rect.w, rh = rect.h;
+                      if (needsInverse && rimgW > 0 && rimgH > 0) {
+                        const p1 = inverseTransformPoint(rx, ry, rimgW, rimgH, corrRotation, corrFlipH);
+                        const p2 = inverseTransformPoint(rx + rw, ry + rh, rimgW, rimgH, corrRotation, corrFlipH);
+                        rx = Math.min(p1.x, p2.x); ry = Math.min(p1.y, p2.y);
+                        rw = Math.abs(p2.x - p1.x); rh = Math.abs(p2.y - p1.y);
+                      }
+                      const displayX = widthRatio > 0 ? rx / widthRatio : rx;
+                      const displayY = widthRatio > 0 ? ry / widthRatio : ry;
+                      const displayW = widthRatio > 0 ? rw / widthRatio : rw;
+                      const displayH = widthRatio > 0 ? rh / widthRatio : rh;
+                      // 标签附着在矩形左上角上方
+                      const labelX = displayX, labelY = displayY - 5;
 
                       return (
                         <g key={`rect-${idx}`}>
@@ -2247,15 +2296,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                             x={displayX} y={displayY} width={displayW} height={displayH}
                             stroke={rect.color}
                             strokeWidth={(hoveredDefectKey === `rect-${idx}` ? 4 : 2) / scale}
-                            fill={hoveredDefectKey === `rect-${idx}` ? `${rect.color}4D` : "none"} // 4D is approx 30% opacity
+                            fill={hoveredDefectKey === `rect-${idx}` ? `${rect.color}4D` : "none"}
                           />
-                          {/* 缺陷名字标签 */}
                           <text
-                            x={displayX} y={displayY - 5}
+                            x={labelX} y={labelY}
                             fill={rect.color}
                             fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
+                            transform={makeTextTransform(labelX, labelY)}
                           >
                             {rect.label}
                           </text>
@@ -2270,18 +2319,31 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
                     if (!shouldShowDefects) return null;
 
-                    return defectPolygons.map((poly, idx) => {
-                      // 统一：转换坐标
-                      const pointsStr = poly.points.map(p => {
-                        const px = widthRatio > 0 ? p.x / widthRatio : p.x;
-                        const py = heightRatio > 0 ? p.y / heightRatio : p.y;
-                        return `${px},${py}`;
-                      }).join(' ');
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
 
-                      // 第一个点作为标签位置
-                      const labelP = poly.points[0];
-                      const lx = widthRatio > 0 ? labelP.x / widthRatio : labelP.x;
-                      const ly = heightRatio > 0 ? labelP.y / heightRatio : labelP.y;
+                    const makeTextTransform = (tx: number, ty: number) => {
+                      let t = '';
+                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                      return t || undefined;
+                    };
+
+                    return defectPolygons.map((poly, idx) => {
+                      const transformedPoints = poly.points.map(p => {
+                        let { x, y } = p;
+                        if (needsInverse && rimgW > 0 && rimgH > 0) {
+                          ({ x, y } = inverseTransformPoint(x, y, rimgW, rimgH, corrRotation, corrFlipH));
+                        }
+                        return { x: widthRatio > 0 ? x / widthRatio : x, y: heightRatio > 0 ? y / heightRatio : y };
+                      });
+                      const pointsStr = transformedPoints.map(p => `${p.x},${p.y}`).join(' ');
+                      const labelP = transformedPoints[0] || { x: 0, y: 0 };
+                      const lx = labelP.x, ly = labelP.y - 5;
 
                       return (
                         <g key={`poly-${idx}`}>
@@ -2291,13 +2353,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                             strokeWidth={(hoveredDefectKey === `polygon-${idx}` ? 4 : 2) / scale}
                             fill={hoveredDefectKey === `polygon-${idx}` ? `${poly.color}4D` : "none"}
                           />
-                          {/* 缺陷名字标签 - 取第一个点上方 */}
                           <text
-                            x={lx} y={ly - 5}
+                            x={lx} y={ly}
                             fill={poly.color}
                             fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
+                            transform={makeTextTransform(lx, ly)}
                           >
                             {poly.label}
                           </text>
@@ -2312,11 +2374,29 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
                     if (!shouldShowDefects) return null;
 
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                    const makeTextTransform = (tx: number, ty: number) => {
+                      let t = '';
+                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                      return t || undefined;
+                    };
+
                     return defectCircles.map((circle, idx) => {
-                      // 统一：转换坐标
-                      const cx = widthRatio > 0 ? circle.x / widthRatio : circle.x;
-                      const cy = heightRatio > 0 ? circle.y / heightRatio : circle.y;
+                      let { x: cirX, y: cirY } = circle;
+                      if (needsInverse && rimgW > 0 && rimgH > 0) {
+                        ({ x: cirX, y: cirY } = inverseTransformPoint(cirX, cirY, rimgW, rimgH, corrRotation, corrFlipH));
+                      }
+                      const cx = widthRatio > 0 ? cirX / widthRatio : cirX;
+                      const cy = widthRatio > 0 ? cirY / widthRatio : cirY;
                       const r = widthRatio > 0 ? circle.r / widthRatio : circle.r;
+                      const labelX = cx, labelY = cy - r - 5;
 
                       return (
                         <g key={`circle-${idx}`}>
@@ -2328,13 +2408,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                             strokeWidth={(hoveredDefectKey === `circle-${idx}` ? 4 : 2) / scale}
                             fill={hoveredDefectKey === `circle-${idx}` ? `${circle.color}4D` : "none"}
                           />
-                          {/* 缺陷名字标签 - 圆顶上方 */}
                           <text
-                            x={cx} y={cy - r - 5}
+                            x={labelX} y={labelY}
                             fill={circle.color}
                             fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
+                            transform={makeTextTransform(labelX, labelY)}
                           >
                             {circle.label}
                           </text>

@@ -209,6 +209,12 @@ public class TaskProcessService {
                             String qLevel = root.get("metadata").get("suggested_quality_level").asText();
                             tf.setPlateQuality(qLevel);
                         }
+                        // 解析矫正信息（由 AiServiceClient.transformToAIVisionFormat() 嵌入到 metadata）
+                        JsonNode corrMeta = root.path("metadata");
+                        if (!corrMeta.isMissingNode()) {
+                            tf.setCorrectionRotation(corrMeta.path("correction_rotation").asInt(0));
+                            tf.setCorrectionFlip(corrMeta.path("correction_flip").asBoolean(false));
+                        }
                     } catch (Exception e) {
                         logger.warn("解析建议评级失败: {}", e.getMessage());
                     }

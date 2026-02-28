@@ -93,6 +93,15 @@ public class TaskFile {
     @JoinColumn(name = "task_file_id", referencedColumnName = "task_file_id", insertable = false, updatable = false)
     @JsonProperty("DefectRecords")
     private List<DefectRecord> defectRecords = new ArrayList<>();
+
+    // --- 新增：焊缝底片方向矫正信息 ---
+    @Column(name = "correction_rotation")
+    @JsonProperty("CorrectionRotation")
+    private Integer correctionRotation = 0;
+
+    @Column(name = "correction_flip")
+    @JsonProperty("CorrectionFlip")
+    private Boolean correctionFlip = false;
     
     @Column(name = "processing_start_time")
     @JsonProperty("ProcessingStartTime")
@@ -281,6 +290,24 @@ public class TaskFile {
 
     public void setDefectRecords(List<DefectRecord> defectRecords) {
         this.defectRecords = defectRecords;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public Integer getCorrectionRotation() {
+        return correctionRotation;
+    }
+
+    public void setCorrectionRotation(Integer correctionRotation) {
+        this.correctionRotation = correctionRotation;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public Boolean getCorrectionFlip() {
+        return correctionFlip;
+    }
+
+    public void setCorrectionFlip(Boolean correctionFlip) {
+        this.correctionFlip = correctionFlip;
         this.updatedAt = LocalDateTime.now();
     }
     

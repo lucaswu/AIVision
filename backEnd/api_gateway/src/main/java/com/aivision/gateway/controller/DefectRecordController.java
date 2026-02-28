@@ -23,7 +23,7 @@ public class DefectRecordController {
     @Autowired
     private DefectRecordService defectRecordService;
 
-    @GetMapping("/task-file/{taskFileId}")
+    @GetMapping({"/task-file/{taskFileId}", "/by-task-file/{taskFileId}"})
     @Operation(summary = "获取指定文件的所有缺陷记录")
     public ResponseEntity<ApiResponse<List<DefectRecord>>> getByTaskFileId(
             @PathVariable String taskFileId) {
@@ -35,7 +35,7 @@ public class DefectRecordController {
         }
     }
 
-    @PostMapping("/task-file/{taskFileId}/replace")
+    @PostMapping({"/task-file/{taskFileId}/replace", "/by-task-file/{taskFileId}/replace"})
     @Operation(summary = "替换指定文件的所有缺陷记录（先删除旧的，再创建新的）")
     public ResponseEntity<ApiResponse<List<DefectRecord>>> replace(
             @PathVariable String taskFileId,
@@ -48,7 +48,7 @@ public class DefectRecordController {
         }
     }
 
-    @DeleteMapping("/task-file/{taskFileId}")
+    @DeleteMapping({"/task-file/{taskFileId}", "/by-task-file/{taskFileId}"})
     @Operation(summary = "删除指定文件的所有缺陷记录")
     public ResponseEntity<ApiResponse<Void>> deleteByTaskFileId(
             @PathVariable String taskFileId) {

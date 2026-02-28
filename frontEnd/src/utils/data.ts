@@ -131,6 +131,9 @@ export interface TaskFile {
   ProcessingStartTime?: string;
   ProcessingEndTime?: string;
   LogicalPath?: string;
+  // 新增：焊缝底片方向矫正信息（推理时自动计算）
+  CorrectionRotation?: number;  // 前端应用的旋转角度: 0 / 90 / 180 / -90
+  CorrectionFlip?: boolean;     // 前端是否需要水平翻转
 }
 
 // 文件上传响应

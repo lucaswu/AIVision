@@ -360,3 +360,13 @@ CREATE TABLE IF NOT EXISTS defect_record (
 
 -- 3. 创建索引以优化查询性能
 CREATE INDEX IF NOT EXISTS idx_defect_record_task_file_id ON defect_record(task_file_id);
+
+-- -----------------------------------------------------
+-- v5_correction_info.sql
+-- -----------------------------------------------------
+
+-- 为 task_file 表添加焊缝底片方向矫正信息字段
+-- correction_rotation: 前端需要应用的旋转角度 (0 / 90 / 180 / -90)
+-- correction_flip: 前端是否需要水平翻转
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS correction_rotation INTEGER DEFAULT 0;
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS correction_flip BOOLEAN DEFAULT FALSE;
