@@ -2291,21 +2291,47 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                       const rimgH = (normR === 90 || normR === 270)
                         ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
 
+                      // 从关键点拟合椭圆：计算中心和半径（关键点不足时回退到 bbox）
+                      const kps = shape.keypoints;
+                      let cx: number, cy: number, rx: number, ry: number;
+                      if (kps.length >= 2) {
+                        const xs = kps.map(k => k.x);
+                        const ys = kps.map(k => k.y);
+                        cx = (Math.max(...xs) + Math.min(...xs)) / 2;
+                        cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+                        rx = (Math.max(...xs) - Math.min(...xs)) / 2;
+                        ry = (Math.max(...ys) - Math.min(...ys)) / 2;
+                      } else {
+                        cx = (shape.x1 + shape.x2) / 2;
+                        cy = (shape.y1 + shape.y2) / 2;
+                        rx = (shape.x2 - shape.x1) / 2;
+                        ry = (shape.y2 - shape.y1) / 2;
+                      }
+
+                      // 等距生成12个时钟位置：12'在顶部(-π/2)，顺时针依次1'…11'
+                      // 这样 12'/3'/6'/9' 精确落在上/右/下/左四个正方向
+                      const CLOCK_LABELS = ["12'", "1'", "2'", "3'", "4'", "5'", "6'", "7'", "8'", "9'", "10'", "11'"];
+                      const clockPoints = CLOCK_LABELS.map((label, i) => {
+                        const angle = -Math.PI / 2 + (2 * Math.PI * i / 12);
+                        return { label, x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) };
+                      });
+
                       return (
                         <g key={`weld-loc-${idx}`}>
-                          {/* 红色关键点 + 序号标签 */}
-                          {shape.keypoints.map((kp, ki) => {
-                            let kx = kp.x, ky = kp.y;
+                          {/* 时钟位置点：12'/3'/6'/9' 为主方向（较大），其余等距插值 */}
+                          {clockPoints.map((pt, ki) => {
+                            let kx = pt.x, ky = pt.y;
                             if (needsInverse && rimgW > 0 && rimgH > 0) {
                               const transformed = inverseTransformPoint(kx, ky, rimgW, rimgH, corrRotation, corrFlipH);
                               kx = transformed.x; ky = transformed.y;
                             }
                             const dKx = widthRatio > 0 ? kx / widthRatio : kx;
                             const dKy = heightRatio > 0 ? ky / heightRatio : ky;
+                            const isCardinal = ki % 3 === 0; // 12', 3', 6', 9'
                             return (
                               <g key={ki}>
                                 <circle cx={dKx} cy={dKy}
-                                  r={4 / scale}
+                                  r={(isCardinal ? 5 : 3.5) / scale}
                                   fill="#fd0202"
                                   opacity={0.9}
                                 />
@@ -2313,12 +2339,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                                   x={dKx + 6 / scale}
                                   y={dKy - 4 / scale}
                                   fill="#fd0202"
-                                  fontSize={11 / scale}
+                                  fontSize={(isCardinal ? 13 : 11) / scale}
                                   fontWeight="bold"
                                   textAnchor="start"
                                   style={{ filter: 'drop-shadow(0 0 2px #000)' }}
                                 >
-                                  {ki + 1}'
+                                  {pt.label}
                                 </text>
                               </g>
                             );
