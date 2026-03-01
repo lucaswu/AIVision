@@ -16,6 +16,7 @@ import json
 import sys
 import os
 import ssl
+import importlib.util
 
 # Globally disable SSL verification for local dev
 os.environ['CURL_CA_BUNDLE'] = ''
@@ -41,6 +42,8 @@ from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
+from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH  # noqa: E402
+
 
 
 SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
@@ -101,13 +104,26 @@ def parse_args() -> argparse.Namespace:
     # 焊缝底片矫正预处理
     parser.add_argument("--enable-correction", action="store_true",
                         help="启用焊缝底片方向矫正预处理")
-    parser.add_argument("--correction-model", 
+    parser.add_argument("--correction-model",
                         default="weight/weld_orientation_model.pth",
                         help="焊缝方向矫正模型路径")
     parser.add_argument("--correction-verbose", action="store_true",
                         help="显示矫正过程详细信息")
-    parser.add_argument("--save-corrected-dir", 
+    parser.add_argument("--save-corrected-dir",
                         help="可选，将矫正后的图像保存到指定目录")
+
+    # 焊缝位置检测 (B 路径)
+    parser.add_argument("--enable-location", action="store_true",
+                        help="启用焊缝位置检测（YOLO pose 模型）")
+    parser.add_argument("--location-model",
+                        default=DEFAULT_LOCATION_MODEL_PATH,
+                        help="焊缝位置检测模型路径（默认: weight/location_0.pt）")
+    parser.add_argument("--location-conf", type=float, default=0.6,
+                        help="焊缝位置检测置信度阈值（默认: 0.6）")
+    parser.add_argument("--location-verbose", action="store_true",
+                        help="显示位置检测过程详细信息")
+    parser.add_argument("--save-location-dir",
+                        help="可选，将带关键点标注的可视化图像保存到指定目录")
 
     return parser.parse_args()
 
@@ -177,7 +193,8 @@ class InferencePipelineRunner:
                  roi_detector: WeldROIDetector,
                  font_renderer: FontRenderer,
                  debug_root: Optional[Path],
-                 corrector: Optional[WeldOrientationCorrector] = None):
+                 corrector: Optional[WeldOrientationCorrector] = None,
+                 locator: Optional[WeldSeamLocator] = None):
         self.args = args
         self.mode = args.mode
         self.roi_detector = roi_detector
@@ -185,6 +202,7 @@ class InferencePipelineRunner:
         self.debug_root = debug_root
         self.output_dir = Path(args.output_dir) if args.output_dir else None
         self.corrector = corrector
+        self.locator = locator
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -205,7 +223,7 @@ class InferencePipelineRunner:
         
         for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
             try:
-                rois, width, height, correction_info = self._process_image(image_path)
+                rois, weld_location, width, height, correction_info = self._process_image(image_path)
                 label = correction_info.get('label', 0)
                 transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
                 results.append({
@@ -219,7 +237,8 @@ class InferencePipelineRunner:
                         "rotation": transform["rotation"],
                         "flip": transform["flip"],
                     },
-                    "rois": rois
+                    "rois": rois,
+                    "weld_location": weld_location,
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
@@ -261,13 +280,13 @@ class InferencePipelineRunner:
             return None
         return self.debug_root / image_path.stem
 
-    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], int, int, dict]:
+    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int, int, dict]:
         image = load_image(image_path)
         
         # 默认矫正信息（未进行矫正时使用）
         correction_info: dict = {'label': 0, 'corrected': False}
 
-        # Apply weld orientation correction preprocessing if enabled
+        # A: Apply weld orientation correction preprocessing if enabled
         if self.corrector is not None:
             image, correction_info = self.corrector.correct_image(
                 image, 
@@ -296,6 +315,38 @@ class InferencePipelineRunner:
         h, w = image.shape[:2]
         debug_dir = self._image_debug_dir(image_path)
 
+        # B: 焊缝位置检测（基于负片+窗口化预处理图，与C路径并行，互不影响）
+        weld_location: List[Dict[str, Any]] = []
+        if self.locator is not None:
+            try:
+                weld_location = self.locator.predict(image)
+                if getattr(self.args, 'location_verbose', False) and weld_location:
+                    print(f"  [位置检测] {image_path.name}: 检测到 {len(weld_location)} 个目标")
+                # 保存带关键点可视化的图像
+                save_loc_dir = getattr(self.args, 'save_location_dir', None)
+                if save_loc_dir and weld_location:
+                    import cv2
+                    vis = image.copy()
+                    for det in weld_location:
+                        x1, y1, x2, y2 = det['bbox']
+                        label = f"{det['class']} {det['confidence']:.2f}"
+                        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(vis, label, (x1, max(y1 - 6, 0)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        for kp in det['keypoints']:
+                            cx, cy = int(kp['x']), int(kp['y'])
+                            cv2.circle(vis, (cx, cy), 4, (0, 0, 255), -1)
+                            cv2.putText(vis, str(kp['id']), (cx + 5, cy - 5),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
+                    save_loc_path = Path(save_loc_dir)
+                    save_loc_path.mkdir(parents=True, exist_ok=True)
+                    ext = image_path.suffix if image_path.suffix else '.jpg'
+                    out_name = save_loc_path / f"loc_{image_path.stem}{ext}"
+                    cv2.imencode(ext, vis)[1].tofile(str(out_name))
+            except Exception as loc_exc:
+                print(f"[警告] 焊缝位置检测失败 ({image_path.name}): {loc_exc}")
+
+        # C: 缺陷类型检测（使用矫正后原始图）
         wide_slice_cfg = rfdet_pipeline.WideSliceConfig(enabled=True) if self.enable_wide_slice else None
         if self.mode == "det":
             config = self.detection_config_cls(
@@ -322,7 +373,7 @@ class InferencePipelineRunner:
                 fusion_iou=self.fusion_iou
             )
 
-        return rois, w, h, correction_info
+        return rois, weld_location, w, h, correction_info
 
 
 def main():
@@ -355,12 +406,33 @@ def main():
             model_type='resnet50'
         )
 
+    # Initialize weld seam locator (B path) if --enable-location is set
+    locator = None
+    if args.enable_location:
+        location_model_path = Path(args.location_model)
+        print(f"启用焊缝位置检测，模型路径: {location_model_path}")
+        if not location_model_path.exists():
+            raise FileNotFoundError(
+                f"焊缝位置检测模型未找到: {location_model_path}\n"
+                "请确认路径正确，或通过 --location-model 指定正确路径"
+            )
+        try:
+            locator = WeldSeamLocator(
+                model_path=str(location_model_path),
+                conf_threshold=args.location_conf,
+            )
+        except Exception as e:
+            print(f"[警告] 焊缝位置检测器初始化失败: {e}")
+    else:
+        print("[信息] 未启用焊缝位置检测（使用 --enable-location 开启）")
+
     runner = InferencePipelineRunner(
         args=args,
         roi_detector=roi_detector,
         font_renderer=font_renderer,
         debug_root=debug_root,
-        corrector=corrector
+        corrector=corrector,
+        locator=locator,
     )
     results = runner.run(image_paths)
 

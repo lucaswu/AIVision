@@ -214,6 +214,11 @@ public class TaskProcessService {
                         if (!corrMeta.isMissingNode()) {
                             tf.setCorrectionRotation(corrMeta.path("correction_rotation").asInt(0));
                             tf.setCorrectionFlip(corrMeta.path("correction_flip").asBoolean(false));
+                            // 解析焊缝位置检测结果（B 路径）
+                            JsonNode weldLocNode = corrMeta.path("weld_location");
+                            if (!weldLocNode.isMissingNode() && weldLocNode.isArray()) {
+                                tf.setWeldLocation(weldLocNode.toString());
+                            }
                         }
                     } catch (Exception e) {
                         logger.warn("解析建议评级失败: {}", e.getMessage());

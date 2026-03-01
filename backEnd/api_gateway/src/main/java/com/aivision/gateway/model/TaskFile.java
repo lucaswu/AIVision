@@ -102,6 +102,11 @@ public class TaskFile {
     @Column(name = "correction_flip")
     @JsonProperty("CorrectionFlip")
     private Boolean correctionFlip = false;
+
+    // --- 新增：焊缝位置检测结果 (B 路径) ---
+    @Column(name = "weld_location", columnDefinition = "TEXT")
+    @JsonProperty("WeldLocation")
+    private String weldLocation;
     
     @Column(name = "processing_start_time")
     @JsonProperty("ProcessingStartTime")
@@ -308,6 +313,15 @@ public class TaskFile {
 
     public void setCorrectionFlip(Boolean correctionFlip) {
         this.correctionFlip = correctionFlip;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getWeldLocation() {
+        return weldLocation;
+    }
+
+    public void setWeldLocation(String weldLocation) {
+        this.weldLocation = weldLocation;
         this.updatedAt = LocalDateTime.now();
     }
     

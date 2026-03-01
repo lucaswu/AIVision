@@ -119,6 +119,15 @@ interface SavedRect extends DefectBase { x: number; y: number; w: number; h: num
 interface SavedCircle extends DefectBase { x: number; y: number; r: number; }
 interface SavedPolygon extends DefectBase { points: { x: number, y: number }[]; }
 
+// --- 焊缝位置矩形（来自 location_0.pt B路径，直接使用模型 bbox）---
+interface WeldLocationRect {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  keypoints: { x: number; y: number }[];
+}
+
 // --- 椭圆工具相关接口 ---
 interface EllipseShape {
   cx: number;
@@ -366,6 +375,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // --- 6. 定位标记成像状态（复用设置坐标原点的状态，共享同一个原点数据） ---
   const [isSettingPositioning, setIsSettingPositioning] = useState(false);
+
+  // --- 7. 焊缝位置矩形（来自 location_0.pt B路径检测结果，每张图片加载时解析） ---
+  // 每个元素: { x1, y1, x2, y2, keypoints } (像素坐标, 矫正后坐标系)
+  const [weldLocationShapes, setWeldLocationShapes] = useState<WeldLocationRect[]>([]);
 
   // 暂存刚画完但未分类的形状数据
   const [pendingShape, setPendingShape] = useState<any>(null);
@@ -628,6 +641,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     });
     // 重置定位标记成像状态（复用 originPoint 和 tempOrigin，不需要单独清除）
     setIsSettingPositioning(false);
+    // 重置焊缝位置形状（新文件加载时重新解析）
+    setWeldLocationShapes([]);
   }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -1372,6 +1387,31 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       // 切换文件时标记为初始加载状态
       isInitialLoadRef.current = true;
+
+      // 解析焊缝位置检测结果（B路径，来自 location_0.pt，12个关键点拟合椭圆）
+      const parseWeldLocationShapes = (): WeldLocationRect[] => {
+        if (!selectedFile?.WeldLocation) return [];
+        try {
+          const detections: Array<{
+            class: string;
+            bbox: number[];
+            keypoints: Array<{ id: number; x: number; y: number }>;
+          }> = JSON.parse(selectedFile.WeldLocation);
+          if (!Array.isArray(detections) || detections.length === 0) return [];
+
+          return detections.map(det => {
+            const [x1, y1, x2, y2] = det.bbox;
+            const kps = (det.keypoints || [])
+              .filter(k => k.x > 1 && k.y > 1)
+              .map(k => ({ x: k.x, y: k.y }));
+            return { x1, y1, x2, y2, keypoints: kps };
+          });
+        } catch (e) {
+          console.warn('Failed to parse WeldLocation:', e);
+          return [];
+        }
+      };
+      setWeldLocationShapes(parseWeldLocationShapes());
 
       // 立即重置图片就绪状态，确保缺陷信息隐藏，直到新图片渲染完成
       resetImageReady();
@@ -2238,6 +2278,55 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
                 {/* --- 2. 缺陷标注层 (SVG) --- */}
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
+
+                  {/* 0. 焊缝位置层（关键点标注，来自 location_0.pt）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && (
+                    weldLocationShapes.map((shape, idx) => {
+                      const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                      const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                      const normR = ((corrRotation % 360) + 360) % 360;
+                      const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                      const rimgW = (normR === 90 || normR === 270)
+                        ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                      const rimgH = (normR === 90 || normR === 270)
+                        ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                      return (
+                        <g key={`weld-loc-${idx}`}>
+                          {/* 红色关键点 + 序号标签 */}
+                          {shape.keypoints.map((kp, ki) => {
+                            let kx = kp.x, ky = kp.y;
+                            if (needsInverse && rimgW > 0 && rimgH > 0) {
+                              const transformed = inverseTransformPoint(kx, ky, rimgW, rimgH, corrRotation, corrFlipH);
+                              kx = transformed.x; ky = transformed.y;
+                            }
+                            const dKx = widthRatio > 0 ? kx / widthRatio : kx;
+                            const dKy = heightRatio > 0 ? ky / heightRatio : ky;
+                            return (
+                              <g key={ki}>
+                                <circle cx={dKx} cy={dKy}
+                                  r={4 / scale}
+                                  fill="#fd0202"
+                                  opacity={0.9}
+                                />
+                                <text
+                                  x={dKx + 6 / scale}
+                                  y={dKy - 4 / scale}
+                                  fill="#fd0202"
+                                  fontSize={11 / scale}
+                                  fontWeight="bold"
+                                  textAnchor="start"
+                                  style={{ filter: 'drop-shadow(0 0 2px #000)' }}
+                                >
+                                  {ki + 1}'
+                                </text>
+                              </g>
+                            );
+                          })}
+                        </g>
+                      );
+                    })
+                  )}
 
                   {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
                   {/* 从后端加载的数据是矫正后像素坐标,需要先逆变换回原图坐标再转为 CSS 坐标 */}

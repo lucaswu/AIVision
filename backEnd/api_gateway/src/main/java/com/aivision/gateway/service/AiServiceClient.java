@@ -357,6 +357,12 @@ public class AiServiceClient {
                 metadata.put("correction_rotation", 0);
                 metadata.put("correction_flip", false);
             }
+
+            // 提取焊缝位置检测结果（B 路径，由 WeldSeamLocator 生成）
+            JsonNode weldLocation = pythonResult.path("weld_location");
+            if (weldLocation.isArray() && weldLocation.size() > 0) {
+                metadata.put("weld_location", weldLocation);
+            }
             
             finalResult.put("metadata", metadata);
             finalResult.put("results", defectResults);

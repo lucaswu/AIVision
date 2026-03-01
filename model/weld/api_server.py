@@ -78,6 +78,8 @@ class InferenceRequest(BaseModel):
     primary_weights: Optional[str] = Field(default=None, description="主模型权重路径")
     primary_conf: float = Field(default=0.25, description="主模型置信度阈值")
     wide_slice: bool = Field(default=True, description="是否启用横切纵拼推理")
+    enable_location: bool = Field(default=True, description="是否启用焊缝位置检测")
+    location_conf: float = Field(default=0.6, description="焊缝位置检测置信度阈值")
 
 
 class InferenceResponse(BaseModel):
@@ -316,6 +318,8 @@ def _sync_run_inference_via_script(request: InferenceRequest):
         "--roi-weights", roi_weights,
         "--primary-weights", primary_weights,
         "--primary-conf", str(request.primary_conf),
+        "--device", device,
+        "--det-device", device,
     ]
     
     # 添加 --wide-slice 参数
@@ -331,6 +335,21 @@ def _sync_run_inference_via_script(request: InferenceRequest):
         print(f"[Task {task_id}] 矫正模型已预设，启用方向矫正: {correction_model}")
     else:
         print(f"[Task {task_id}] 矫正模型未找到，跳过方向矫正: {correction_model}")
+
+    # 焊缝位置检测逻辑
+    if request.enable_location:
+        location_model = os.environ.get(
+            "LOCATION_MODEL", "/app/model/weights/location_0.pt"
+        )
+        if os.path.exists(location_model):
+            cmd += [
+                "--enable-location",
+                "--location-model", location_model,
+                "--location-conf", str(request.location_conf)
+            ]
+            print(f"[Task {task_id}] 位置检测模型已预设，启用位置检测: {location_model}")
+        else:
+            print(f"[Task {task_id}] 位置检测模型未找到，跳过位置检测: {location_model}")
     
     print(f"[Task {task_id}] Executing command: {' '.join(cmd)}")
     
