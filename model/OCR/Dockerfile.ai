@@ -3,7 +3,7 @@
 # 支持 CUDA 12.6 + Python 3.10 + PaddlePaddle
 # ==============================================================================
 
-ARG BASE_IMAGE=hub.rat.dev/nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 FROM ${BASE_IMAGE}
 
@@ -15,6 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# 将系统 cuDNN 路径加入 LD_LIBRARY_PATH，确保 PaddlePaddle 的 dlopen 能找到 libcudnn
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
 ARG SETUP_PYTHON=true
 
@@ -62,6 +64,17 @@ RUN if [ "$INSTALL_PADDLE" = "true" ]; then \
     else \
     pip install --no-cache-dir paddlepaddle==2.6.2 -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com; \
     fi \
+    fi
+
+# 将系统 cuDNN 库软链接到 paddle/libs 目录
+# PaddlePaddle 的 C++ dynload 会优先搜索该目录，确保 libcudnn 能被找到
+RUN if [ "$USE_GPU" = "true" ]; then \
+    PADDLE_LIBS=$(python3 -c "import paddle; import os; print(os.path.join(os.path.dirname(paddle.__file__), 'libs'))") && \
+    echo "Paddle libs dir: $PADDLE_LIBS" && \
+    for lib in /usr/lib/x86_64-linux-gnu/libcudnn*.so.8*; do \
+    ln -svf "$lib" "$PADDLE_LIBS/$(basename $lib)"; \
+    done && \
+    ls -la $PADDLE_LIBS | grep cudnn; \
     fi
 
 # 复制依赖文件并安装

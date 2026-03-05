@@ -54,7 +54,7 @@ services:
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
       - SERVER_PORT=8080
-      
+
       # 存储配置 (使用本地文件系统)
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_BASE_DIR=/app/data/files
@@ -87,13 +87,20 @@ services:
     image: aivision-ai-inference:latest
     container_name: ai-detection-inference
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
       - USE_GPU=${USE_GPU:-true}
       # 模型权重路径（使用绑定挂载的本地目录）
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
-      - PRIMARY_WEIGHTS=/app/model/weights/primary-weights.pth
+      - PRIMARY_WEIGHTS=/app/model/weights/0208primary.pth
     ports:
       - "8000:8000"
     networks:
@@ -114,10 +121,17 @@ services:
   # OCR 推理服务 (Python + CUDA + PaddlePaddle)
   # ================================
   ai-inference-ocr:
-    # 使用本地构建好的镜像 (Mac 本地环境使用 packed 版本，它是 arm64 架构)
-    image: aivision-ai-inference-ocr:packed
+    # 使用本地构建好的镜像
+    image: aivision-ai-inference-ocr:latest
     container_name: ai-detection-inference-ocr
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0

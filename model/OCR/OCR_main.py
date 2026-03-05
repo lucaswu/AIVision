@@ -55,6 +55,16 @@ class BatchOCRProcessor:
         # 初始化PaddleOCR
         print("初始化PaddleOCR...")
         use_gpu = os.environ.get('USE_GPU', 'true').lower() == 'true'
+        if use_gpu:
+            try:
+                import paddle
+                gpu_count = paddle.device.cuda.device_count()
+                if not paddle.device.is_compiled_with_cuda() or gpu_count == 0:
+                    print(f"警告: PaddlePaddle GPU不可用 (GPU数量={gpu_count})，回退到CPU")
+                    use_gpu = False
+            except Exception as e:
+                print(f"警告: GPU检测失败 ({e})，回退到CPU")
+                use_gpu = False
         print(f"PaddleOCR使用设备: {'GPU' if use_gpu else 'CPU'}")
         
         # Check if local weights exist

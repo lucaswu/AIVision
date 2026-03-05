@@ -1,6 +1,6 @@
 # 多阶段构建 - 构建阶段
 # 使用内置 Maven 和 JDK 的镜像，避免下载安装问题
-FROM hub.rat.dev/library/maven:3.9-eclipse-temurin-17 AS builder
+FROM maven:3.9-eclipse-temurin-17 AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -8,17 +8,17 @@ WORKDIR /app
 # 配置 Maven 使用阿里云镜像 (使用 HTTP 协议绕过 SSL 验证)
 RUN mkdir -p ~/.m2 && \
     echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" \
-          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" \
-          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd"> \
-  <mirrors> \
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" \
+    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd"> \
+    <mirrors> \
     <mirror> \
-      <id>aliyunmaven</id> \
-      <mirrorOf>*</mirrorOf> \
-      <name>阿里云公共仓库</name> \
-      <url>https://maven.aliyun.com/repository/public</url> \
+    <id>aliyunmaven</id> \
+    <mirrorOf>*</mirrorOf> \
+    <name>阿里云公共仓库</name> \
+    <url>https://maven.aliyun.com/repository/public</url> \
     </mirror> \
-  </mirrors> \
-</settings>' > ~/.m2/settings.xml
+    </mirrors> \
+    </settings>' > ~/.m2/settings.xml
 
 # 导入阿里云证书到 Java 信任库 (以防 HTTP 重定向到 HTTPS)
 RUN echo -n | openssl s_client -connect maven.aliyun.com:443 -showcerts | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > /tmp/aliyun.crt && \
@@ -42,7 +42,7 @@ RUN mvn clean package -DskipTests -B -Dmaven.wagon.http.ssl.insecure=true -Dmave
 
 # 运行阶段 - 最小化运行时镜像
 # 注意：Python 推理已移至独立容器，这里只需要 Java 运行时
-FROM hub.rat.dev/library/eclipse-temurin:17-jre-jammy AS runtime
+FROM eclipse-temurin:17-jre-jammy AS runtime
 
 # 设置环境变量避免交互式安装
 ENV DEBIAN_FRONTEND=noninteractive
