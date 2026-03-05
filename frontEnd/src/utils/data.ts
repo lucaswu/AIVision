@@ -136,6 +136,8 @@ export interface TaskFile {
   CorrectionFlip?: boolean;     // 前端是否需要水平翻转
   // 新增：焊缝位置检测结果（B路径，location_0.pt模型检测）
   WeldLocation?: string;        // JSON数组字符串，每条含class/confidence/bbox/keypoints(12个关键点)
+  // 新增：缺陷位置检测2结果（D路径，location_1.pt，仅存center_mark原点）
+  DefectPosition?: string;      // JSON字符串，含origin_x/origin_y/positioning_type
 }
 
 // 文件上传响应

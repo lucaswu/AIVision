@@ -107,6 +107,11 @@ public class TaskFile {
     @Column(name = "weld_location", columnDefinition = "TEXT")
     @JsonProperty("WeldLocation")
     private String weldLocation;
+
+    // --- 新增：缺陷位置检测2结果 (D 路径，location_1.pt，仅存center_mark原点) ---
+    @Column(name = "defect_position", columnDefinition = "TEXT")
+    @JsonProperty("DefectPosition")
+    private String defectPosition;
     
     @Column(name = "processing_start_time")
     @JsonProperty("ProcessingStartTime")
@@ -322,6 +327,15 @@ public class TaskFile {
 
     public void setWeldLocation(String weldLocation) {
         this.weldLocation = weldLocation;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getDefectPosition() {
+        return defectPosition;
+    }
+
+    public void setDefectPosition(String defectPosition) {
+        this.defectPosition = defectPosition;
         this.updatedAt = LocalDateTime.now();
     }
     

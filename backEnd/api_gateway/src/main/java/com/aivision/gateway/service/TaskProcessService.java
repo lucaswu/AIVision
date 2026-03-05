@@ -219,6 +219,11 @@ public class TaskProcessService {
                             if (!weldLocNode.isMissingNode() && weldLocNode.isArray()) {
                                 tf.setWeldLocation(weldLocNode.toString());
                             }
+                            // 解析缺陷位置检测2结果（D 路径，仅 center_mark 原点）
+                            JsonNode defectPosNode = corrMeta.path("defect_position");
+                            if (!defectPosNode.isMissingNode() && defectPosNode.isObject()) {
+                                tf.setDefectPosition(defectPosNode.toString());
+                            }
                         }
                     } catch (Exception e) {
                         logger.warn("解析建议评级失败: {}", e.getMessage());

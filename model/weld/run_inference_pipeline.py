@@ -43,6 +43,7 @@ from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
 from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH  # noqa: E402
+from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH  # noqa: E402
 
 
 
@@ -125,6 +126,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-location-dir",
                         help="可选，将带关键点标注的可视化图像保存到指定目录")
 
+    # 缺陷位置检测2 (D 路径)
+    parser.add_argument("--enable-location2", action="store_true",
+                        help="启用缺陷位置检测2（YOLO detection + OCR，使用 location_1.pt）")
+    parser.add_argument("--location2-model",
+                        default=DEFAULT_LOCATION1_MODEL_PATH,
+                        help="缺陷位置检测2模型路径（默认: weight/location_1.pt）")
+    parser.add_argument("--location2-conf", type=float, default=0.25,
+                        help="缺陷位置检测2置信度阈值（默认: 0.25）")
+    parser.add_argument("--location2-verbose", action="store_true",
+                        help="显示缺陷位置检测2过程详细信息")
+    parser.add_argument("--save-location2-dir",
+                        help="可选，将缺陷位置检测2可视化图像保存到指定目录")
+
     return parser.parse_args()
 
 
@@ -194,7 +208,8 @@ class InferencePipelineRunner:
                  font_renderer: FontRenderer,
                  debug_root: Optional[Path],
                  corrector: Optional[WeldOrientationCorrector] = None,
-                 locator: Optional[WeldSeamLocator] = None):
+                 locator: Optional[WeldSeamLocator] = None,
+                 detector: Optional[WeldDefectPositionDetector] = None):
         self.args = args
         self.mode = args.mode
         self.roi_detector = roi_detector
@@ -203,6 +218,7 @@ class InferencePipelineRunner:
         self.output_dir = Path(args.output_dir) if args.output_dir else None
         self.corrector = corrector
         self.locator = locator
+        self.detector = detector
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -223,7 +239,7 @@ class InferencePipelineRunner:
         
         for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
             try:
-                rois, weld_location, width, height, correction_info = self._process_image(image_path)
+                rois, weld_location, defect_position, width, height, correction_info = self._process_image(image_path)
                 label = correction_info.get('label', 0)
                 transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
                 results.append({
@@ -239,6 +255,7 @@ class InferencePipelineRunner:
                     },
                     "rois": rois,
                     "weld_location": weld_location,
+                    "defect_position": defect_position,
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
@@ -280,7 +297,7 @@ class InferencePipelineRunner:
             return None
         return self.debug_root / image_path.stem
 
-    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int, int, dict]:
+    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]], int, int, dict]:
         image = load_image(image_path)
         
         # 默认矫正信息（未进行矫正时使用）
@@ -346,6 +363,44 @@ class InferencePipelineRunner:
             except Exception as loc_exc:
                 print(f"[警告] 焊缝位置检测失败 ({image_path.name}): {loc_exc}")
 
+        # D: 缺陷位置检测2（YOLO detection + OCR，与B/C路径并行，互不影响）
+        defect_position: Optional[Dict[str, Any]] = None
+        if self.detector is not None:
+            try:
+                defect_position = self.detector.predict(image)
+                if getattr(self.args, 'location2_verbose', False) and defect_position:
+                    detected = defect_position.get('detected', False)
+                    origin_x = defect_position.get('origin_x')
+                    origin_y = defect_position.get('origin_y')
+                    print(f"  [缺陷位置检测2] {image_path.name}: "
+                          f"{'检测到原点 ({:.1f}, {:.1f})'.format(origin_x, origin_y) if detected else '未检测到原点'}")
+                # 保存带标注的可视化图像
+                save_loc2_dir = getattr(self.args, 'save_location2_dir', None)
+                if save_loc2_dir and defect_position and defect_position.get('detected'):
+                    import cv2
+                    vis2 = image.copy()
+                    for det in defect_position.get('detections', []):
+                        x1, y1, x2, y2 = det['bbox']
+                        color = (0, 255, 0) if det['class_id'] == 0 else (255, 100, 0)
+                        cv2.rectangle(vis2, (x1, y1), (x2, y2), color, 2)
+                        label2 = det['class_name']
+                        if det.get('text'):
+                            label2 += f" '{det['text']}'"
+                        label2 += f" {det['confidence']:.2f}"
+                        cv2.putText(vis2, label2, (x1, max(y1 - 6, 0)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    ox = int(defect_position['origin_x'])
+                    oy = int(defect_position['origin_y'])
+                    cv2.drawMarker(vis2, (ox, oy), (0, 0, 255), cv2.MARKER_CROSS, 50, 3)
+                    cv2.circle(vis2, (ox, oy), 30, (0, 255, 0), 2)
+                    save_loc2_path = Path(save_loc2_dir)
+                    save_loc2_path.mkdir(parents=True, exist_ok=True)
+                    ext = image_path.suffix if image_path.suffix else '.jpg'
+                    out_name2 = save_loc2_path / f"loc2_{image_path.stem}{ext}"
+                    cv2.imencode(ext, vis2)[1].tofile(str(out_name2))
+            except Exception as det_exc:
+                print(f"[警告] 缺陷位置检测2失败 ({image_path.name}): {det_exc}")
+
         # C: 缺陷类型检测（使用矫正后原始图）
         wide_slice_cfg = rfdet_pipeline.WideSliceConfig(enabled=True) if self.enable_wide_slice else None
         if self.mode == "det":
@@ -373,7 +428,7 @@ class InferencePipelineRunner:
                 fusion_iou=self.fusion_iou
             )
 
-        return rois, weld_location, w, h, correction_info
+        return rois, weld_location, defect_position, w, h, correction_info
 
 
 def main():
@@ -426,6 +481,26 @@ def main():
     else:
         print("[信息] 未启用焊缝位置检测（使用 --enable-location 开启）")
 
+    # Initialize weld defect position detector (D path) if --enable-location2 is set
+    detector = None
+    if args.enable_location2:
+        location2_model_path = Path(args.location2_model)
+        print(f"启用缺陷位置检测2，模型路径: {location2_model_path}")
+        if not location2_model_path.exists():
+            raise FileNotFoundError(
+                f"缺陷位置检测2模型未找到: {location2_model_path}\n"
+                "请确认路径正确，或通过 --location2-model 指定正确路径"
+            )
+        try:
+            detector = WeldDefectPositionDetector(
+                model_path=str(location2_model_path),
+                conf_threshold=args.location2_conf,
+            )
+        except Exception as e:
+            print(f"[警告] 缺陷位置检测2初始化失败: {e}")
+    else:
+        print("[信息] 未启用缺陷位置检测2（使用 --enable-location2 开启）")
+
     runner = InferencePipelineRunner(
         args=args,
         roi_detector=roi_detector,
@@ -433,6 +508,7 @@ def main():
         debug_root=debug_root,
         corrector=corrector,
         locator=locator,
+        detector=detector,
     )
     results = runner.run(image_paths)
 

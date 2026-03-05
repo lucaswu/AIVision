@@ -370,3 +370,20 @@ CREATE INDEX IF NOT EXISTS idx_defect_record_task_file_id ON defect_record(task_
 -- correction_flip: 前端是否需要水平翻转
 ALTER TABLE task_file ADD COLUMN IF NOT EXISTS correction_rotation INTEGER DEFAULT 0;
 ALTER TABLE task_file ADD COLUMN IF NOT EXISTS correction_flip BOOLEAN DEFAULT FALSE;
+
+-- -----------------------------------------------------
+-- v6_weld_location.sql
+-- -----------------------------------------------------
+
+-- 为 task_file 表添加焊缝位置检测结果字段
+-- weld_location: JSON 数组，每条记录含 class/confidence/bbox/keypoints（12个关键点形成椭圆）
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS weld_location TEXT;
+
+-- -----------------------------------------------------
+-- v7_defect_position.sql
+-- -----------------------------------------------------
+
+-- 为 task_file 表添加缺陷位置检测2结果字段（D路径，location_1.pt）
+-- defect_position: JSON 对象，仅存 positioning_type==0 (center_mark) 的原点坐标
+-- 格式: {"origin_x": float, "origin_y": float, "positioning_type": 0}
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS defect_position TEXT;

@@ -363,6 +363,21 @@ public class AiServiceClient {
             if (weldLocation.isArray() && weldLocation.size() > 0) {
                 metadata.put("weld_location", weldLocation);
             }
+
+            // 提取缺陷位置检测2结果（D 路径，由 WeldDefectPositionDetector 生成）
+            // 仅保留 detected=true 且 positioning_type==0（center_mark 十字架）的原点
+            JsonNode defectPos = pythonResult.path("defect_position");
+            if (!defectPos.isMissingNode() && !defectPos.isNull()) {
+                boolean detected = defectPos.path("detected").asBoolean(false);
+                int posType = defectPos.path("positioning_type").asInt(-1);
+                if (detected && posType == 0) {
+                    Map<String, Object> dpMap = new HashMap<>();
+                    dpMap.put("origin_x", defectPos.path("origin_x").asDouble());
+                    dpMap.put("origin_y", defectPos.path("origin_y").asDouble());
+                    dpMap.put("positioning_type", posType);
+                    metadata.put("defect_position", dpMap);
+                }
+            }
             
             finalResult.put("metadata", metadata);
             finalResult.put("results", defectResults);

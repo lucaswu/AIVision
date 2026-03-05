@@ -380,6 +380,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // 每个元素: { x1, y1, x2, y2, keypoints } (像素坐标, 矫正后坐标系)
   const [weldLocationShapes, setWeldLocationShapes] = useState<WeldLocationRect[]>([]);
 
+  // --- 8. 缺陷位置检测2原点（来自 location_1.pt D路径，仅 center_mark 十字架原点） ---
+  const [defectOriginPoint, setDefectOriginPoint] = useState<{ x: number; y: number } | null>(null);
+
   // 暂存刚画完但未分类的形状数据
   const [pendingShape, setPendingShape] = useState<any>(null);
   const [pendingShapeType, setPendingShapeType] = useState<DrawingType>('rect');
@@ -643,6 +646,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setIsSettingPositioning(false);
     // 重置焊缝位置形状（新文件加载时重新解析）
     setWeldLocationShapes([]);
+    // 重置缺陷位置检测2原点
+    setDefectOriginPoint(null);
   }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -1412,6 +1417,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         }
       };
       setWeldLocationShapes(parseWeldLocationShapes());
+
+      // 解析缺陷位置检测2结果（D路径，来自 location_1.pt，仅 center_mark 十字架原点）
+      const parseDefectOrigin = (): { x: number; y: number } | null => {
+        if (!selectedFile?.DefectPosition) return null;
+        try {
+          const dp = JSON.parse(selectedFile.DefectPosition);
+          if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
+            return { x: dp.origin_x, y: dp.origin_y };
+          }
+        } catch (e) {
+          console.warn('Failed to parse DefectPosition:', e);
+        }
+        return null;
+      };
+      setDefectOriginPoint(parseDefectOrigin());
 
       // 立即重置图片就绪状态，确保缺陷信息隐藏，直到新图片渲染完成
       resetImageReady();
@@ -2353,6 +2373,76 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                       );
                     })
                   )}
+
+                  {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && (() => {
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    const rimgW = (normR === 90 || normR === 270)
+                      ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270)
+                      ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                    let ox = defectOriginPoint.x;
+                    let oy = defectOriginPoint.y;
+                    if (needsInverse && rimgW > 0 && rimgH > 0) {
+                      const t = inverseTransformPoint(ox, oy, rimgW, rimgH, corrRotation, corrFlipH);
+                      ox = t.x; oy = t.y;
+                    }
+                    const dox = widthRatio > 0 ? ox / widthRatio : ox;
+                    const doy = heightRatio > 0 ? oy / heightRatio : oy;
+                    const crossSize = 24 / scale;
+                    const circleR = 18 / scale;
+                    const strokeW = 2.5 / scale;
+
+                    return (
+                      <g key="defect-origin">
+                        {/* 外圆 */}
+                        <circle
+                          cx={dox} cy={doy} r={circleR}
+                          fill="none"
+                          stroke="#00e5ff"
+                          strokeWidth={strokeW}
+                          opacity={0.9}
+                        />
+                        {/* 十字横线 */}
+                        <line
+                          x1={dox - crossSize} y1={doy}
+                          x2={dox + crossSize} y2={doy}
+                          stroke="#00e5ff" strokeWidth={strokeW}
+                          opacity={0.9}
+                          style={{ filter: 'drop-shadow(0 0 3px #005577)' }}
+                        />
+                        {/* 十字竖线 */}
+                        <line
+                          x1={dox} y1={doy - crossSize}
+                          x2={dox} y2={doy + crossSize}
+                          stroke="#00e5ff" strokeWidth={strokeW}
+                          opacity={0.9}
+                          style={{ filter: 'drop-shadow(0 0 3px #005577)' }}
+                        />
+                        {/* 中心小实心圆 */}
+                        <circle
+                          cx={dox} cy={doy} r={3 / scale}
+                          fill="#00e5ff"
+                          opacity={0.95}
+                        />
+                        {/* 标签 */}
+                        <text
+                          x={dox + circleR + 4 / scale}
+                          y={doy - 4 / scale}
+                          fill="#00e5ff"
+                          fontSize={12 / scale}
+                          fontWeight="bold"
+                          style={{ filter: 'drop-shadow(0 0 2px #000)' }}
+                        >
+                          0点
+                        </text>
+                      </g>
+                    );
+                  })()}
 
                   {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
                   {/* 从后端加载的数据是矫正后像素坐标,需要先逆变换回原图坐标再转为 CSS 坐标 */}
