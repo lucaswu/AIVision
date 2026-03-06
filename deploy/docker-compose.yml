@@ -46,10 +46,8 @@ services:
       - SPRING_DATASOURCE_PASSWORD=aipass123
       - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
 
-      # AI 推理服务配置 (指向独立的 Python 服务)
+      # AI 推理服务配置 (指向独立的 Python 服务，OCR已合并到同一服务)
       - AI_SERVICES_INFERENCE_URL=http://ai-inference:8000
-      # OCR 推理服务配置
-      - AI_SERVICES_OCR_INFERENCE_URL=http://ai-inference-ocr:8000
 
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
@@ -93,14 +91,17 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
       - USE_GPU=${USE_GPU:-true}
+      - LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
       # 模型权重路径（使用绑定挂载的本地目录）
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
       - PRIMARY_WEIGHTS=/app/model/weights/0208primary.pth
+      - LOCATION_MODEL=/app/model/weights/location_0.pt
+      - LOCATION2_MODEL=/app/model/weights/location_1.pt
     ports:
       - "8000:8000"
     networks:
@@ -110,39 +111,6 @@ services:
       - results_data:/app/data/results
       # 绑定挂载本地权重目录
       - ../model/weld/weight:/app/model/weights:ro
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
-  # ================================
-  # OCR 推理服务 (Python + CUDA + PaddlePaddle)
-  # ================================
-  ai-inference-ocr:
-    # 使用本地构建好的镜像
-    image: aivision-ai-inference-ocr:latest
-    container_name: ai-detection-inference-ocr
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_VISIBLE_DEVICES=0
-      - USE_GPU=${USE_GPU:-true}
-    ports:
-      - "8001:8000"
-    networks:
-      - ai-services
-    volumes:
-      - files_data:/app/data/files
-      - results_data:/app/data/results
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s

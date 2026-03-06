@@ -82,6 +82,8 @@ class InferenceRequest(BaseModel):
     location_conf: float = Field(default=0.6, description="焊缝位置检测置信度阈值")
     enable_location2: bool = Field(default=True, description="是否启用缺陷位置检测2（location_1.pt）")
     location2_conf: float = Field(default=0.25, description="缺陷位置检测2置信度阈值")
+    enable_ocr: bool = Field(default=True, description="是否启用OCR识别（在矫正后图像C上运行）")
+    ocr_max_size: int = Field(default=1920, description="OCR处理时的最大图像边长")
 
 
 class InferenceResponse(BaseModel):
@@ -367,7 +369,14 @@ def _sync_run_inference_via_script(request: InferenceRequest):
             print(f"[Task {task_id}] 缺陷位置检测2模型已预设，启用检测: {location2_model}")
         else:
             print(f"[Task {task_id}] 缺陷位置检测2模型未找到，跳过检测: {location2_model}")
-    
+
+    # OCR集成（在矫正后图像C上运行，与缺陷检测独立）
+    if request.enable_ocr:
+        cmd += ["--enable-ocr", "--ocr-max-size", str(request.ocr_max_size)]
+        print(f"[Task {task_id}] 启用OCR识别")
+    else:
+        print(f"[Task {task_id}] OCR识别未启用")
+
     print(f"[Task {task_id}] Executing command: {' '.join(cmd)}")
     
     # 执行脚本

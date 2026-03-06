@@ -16,7 +16,6 @@ import json
 import sys
 import os
 import ssl
-import importlib.util
 
 # Globally disable SSL verification for local dev
 os.environ['CURL_CA_BUNDLE'] = ''
@@ -44,7 +43,7 @@ from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
 from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH  # noqa: E402
 from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH  # noqa: E402
-
+from utils.weld_OCR import OCRRunner, _OCR_UTILS_AVAILABLE  # noqa: E402
 
 
 SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
@@ -139,6 +138,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-location2-dir",
                         help="可选，将缺陷位置检测2可视化图像保存到指定目录")
 
+    # OCR集成参数
+    parser.add_argument("--enable-ocr", action="store_true",
+                        help="启用OCR识别（与缺陷检测并行，输入为矫正后的原始图C）")
+    parser.add_argument("--ocr-max-size", type=int, default=1920,
+                        help="OCR处理时的最大图像边长（默认1920）")
+    parser.add_argument("--no-ocr-annotation", action="store_true",
+                        help="不保存OCR标注图片")
+    parser.add_argument("--ocr-results-json", default="ocr_results.json",
+                        help="OCR结果JSON文件名（相对output_dir，默认ocr_results.json）")
+
     return parser.parse_args()
 
 
@@ -209,7 +218,8 @@ class InferencePipelineRunner:
                  debug_root: Optional[Path],
                  corrector: Optional[WeldOrientationCorrector] = None,
                  locator: Optional[WeldSeamLocator] = None,
-                 detector: Optional[WeldDefectPositionDetector] = None):
+                 detector: Optional[WeldDefectPositionDetector] = None,
+                 ocr_runner: Optional[OCRRunner] = None):
         self.args = args
         self.mode = args.mode
         self.roi_detector = roi_detector
@@ -219,6 +229,7 @@ class InferencePipelineRunner:
         self.corrector = corrector
         self.locator = locator
         self.detector = detector
+        self.ocr_runner = ocr_runner
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -236,12 +247,39 @@ class InferencePipelineRunner:
     def run(self, image_paths: List[Path]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         total = len(image_paths)
-        
+
+        # Pre-create OCR annotated-images directory once (avoids repeated mkdir calls)
+        ocr_annotated_dir: Optional[Path] = None
+        if self.ocr_runner is not None and self.ocr_runner.save_annotations and self.output_dir:
+            ocr_annotated_dir = self.output_dir / "annotated_images"
+            ocr_annotated_dir.mkdir(parents=True, exist_ok=True)
+
         for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
             try:
-                rois, weld_location, defect_position, width, height, correction_info = self._process_image(image_path)
+                # A→B/D: weld seam / defect-position detection; A→correction→C: defect type detection
+                rois, weld_location, defect_position, width, height, correction_info, corrected_img = \
+                    self._process_image(image_path)
                 label = correction_info.get('label', 0)
                 transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
+
+                # OCR on corrected image C (independent of defect detection)
+                ocr_result: Optional[Dict[str, Any]] = None
+                if self.ocr_runner is not None and corrected_img is not None:
+                    try:
+                        ocr_save_path: Optional[str] = None
+                        if ocr_annotated_dir is not None:
+                            ocr_save_path = str(ocr_annotated_dir / f"{image_path.stem}_annotated.jpg")
+                        ocr_result = self.ocr_runner.process_image_array(
+                            corrected_img, image_path.name, ocr_save_path
+                        )
+                        if ocr_result:
+                            self.ocr_runner.results.append(ocr_result)
+                            self.ocr_runner.statistics.append(
+                                self.ocr_runner._extract_statistics(ocr_result)
+                            )
+                    except Exception as ocr_exc:
+                        print(f"[警告] OCR失败 ({image_path.name}): {ocr_exc}")
+
                 results.append({
                     "mode": self.mode,
                     "image_path": str(image_path),
@@ -256,14 +294,15 @@ class InferencePipelineRunner:
                     "rois": rois,
                     "weld_location": weld_location,
                     "defect_position": defect_position,
+                    "ocr": ocr_result,
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
-            
-            # Update progress
+
+            # Update progress after both detection and OCR are done for this image
             if self.output_dir:
                 self._update_progress_file(self.output_dir, idx + 1, total, image_path.name)
-                
+
         return results
 
     def _update_progress_file(self, output_dir: Path, current: int, total: int, last_file: str):
@@ -297,7 +336,7 @@ class InferencePipelineRunner:
             return None
         return self.debug_root / image_path.stem
 
-    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]], int, int, dict]:
+    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]], int, int, dict, Any]:
         image = load_image(image_path)
         
         # 默认矫正信息（未进行矫正时使用）
@@ -428,10 +467,26 @@ class InferencePipelineRunner:
                 fusion_iou=self.fusion_iou
             )
 
-        return rois, weld_location, defect_position, w, h, correction_info
+        return rois, weld_location, defect_position, w, h, correction_info, image
 
 
 def main():
+    # Fix for PaddlePaddle dynamic library loading (cuDNN, cuBLAS)
+    try:
+        import os
+        os.makedirs("/usr/local/cuda/lib64", exist_ok=True)
+        cudnn_src = "/usr/lib/x86_64-linux-gnu/libcudnn.so.8"
+        cublas_src = "/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib/libcublas.so.12"
+        cudnn_dst = "/usr/local/cuda/lib64/libcudnn.so"
+        cublas_dst = "/usr/local/cuda/lib64/libcublas.so"
+        
+        if os.path.exists(cudnn_src) and not os.path.exists(cudnn_dst):
+            os.symlink(cudnn_src, cudnn_dst)
+        if os.path.exists(cublas_src) and not os.path.exists(cublas_dst):
+            os.symlink(cublas_src, cublas_dst)
+    except Exception:
+        pass
+
     args = parse_args()
     
     image_dir = Path(args.image_dir) if args.image_dir else None
@@ -501,6 +556,19 @@ def main():
     else:
         print("[信息] 未启用缺陷位置检测2（使用 --enable-location2 开启）")
 
+    # Initialize OCR runner if --enable-ocr is set
+    ocr_runner = None
+    if args.enable_ocr:
+        if _OCR_UTILS_AVAILABLE:
+            print("启用OCR识别（在矫正后图像C上运行，与缺陷检测独立并行）")
+            ocr_runner = OCRRunner(
+                max_image_size=args.ocr_max_size,
+                save_annotations=not args.no_ocr_annotation,
+                verbose=False,
+            )
+        else:
+            print("[警告] --enable-ocr 已指定，但OCR工具未加载，跳过OCR")
+
     runner = InferencePipelineRunner(
         args=args,
         roi_detector=roi_detector,
@@ -509,9 +577,11 @@ def main():
         corrector=corrector,
         locator=locator,
         detector=detector,
+        ocr_runner=ocr_runner,
     )
     results = runner.run(image_paths)
 
+    # Save weld detection results
     results_path = Path(args.results_json)
     if not results_path.is_absolute():
         results_path = output_dir / results_path
@@ -521,6 +591,13 @@ def main():
 
     print(f"\n推理完成: 模式={args.mode}，共处理 {len(results)} 张图像。")
     print(f"结果JSON: {results_path}")
+
+    # Save OCR outputs (mirrors OCR_main.py output files)
+    if ocr_runner is not None:
+        ocr_runner.save_statistics(output_dir)
+        ocr_runner.save_detailed_results(output_dir)
+        ocr_runner.save_results_json(output_dir, filename=args.ocr_results_json)
+        print(f"OCR完成: 共处理 {len(ocr_runner.results)} 张图像。")
 
 
 if __name__ == "__main__":

@@ -383,7 +383,8 @@ public class TaskService {
                 taskFile.getStatus().name().toLowerCase(), taskFile.getVisionResult(),
                 taskFile.getReportPath(), taskFile.getErrorMessage(),
                 taskFile.getProcessingStartTime() != null ? taskFile.getProcessingStartTime().format(DATE_TIME_FORMATTER) : null,
-                taskFile.getProcessingEndTime() != null ? taskFile.getProcessingEndTime().format(DATE_TIME_FORMATTER) : null
+                taskFile.getProcessingEndTime() != null ? taskFile.getProcessingEndTime().format(DATE_TIME_FORMATTER) : null,
+                taskFile.getDefectPosition()
             ));
         }
         

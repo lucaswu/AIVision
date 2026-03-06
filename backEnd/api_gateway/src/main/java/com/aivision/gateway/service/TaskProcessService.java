@@ -23,7 +23,6 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -100,93 +99,53 @@ public class TaskProcessService {
             Map<String, TaskFile> pathToTaskFile = allTaskFiles.stream()
                 .collect(Collectors.toMap(TaskFile::getMinioFilePath, tf -> tf));
             
-            // 3.1 准备进度更新的回调 (综合两个服务的进度)
+            // 3.1 准备进度更新的回调 (OCR已合并到Vision AI流水线，以Vision AI进度为准)
             final int totalFiles = allTaskFiles.size();
             final AtomicInteger visionProgress = new AtomicInteger(0);
-            final AtomicInteger ocrProgress = new AtomicInteger(0);
-            
-            // 综合进度更新回调
+
             Runnable updateCombinedProgress = () -> {
                 try {
                     Task currentTask = taskRepository.findById(taskId).orElse(null);
                     if (currentTask != null) {
-                        // 两个服务各占50%权重，取平均值作为总进度
-                        int combinedProgress = (visionProgress.get() + ocrProgress.get()) / 2;
-                        currentTask.setProcessedFiles(combinedProgress);
-                        currentTask.setSuccessFiles(combinedProgress);
-
+                        int progress = visionProgress.get();
+                        currentTask.setProcessedFiles(progress);
+                        currentTask.setSuccessFiles(progress);
                         // 如果推理全部完成（即达到 100%），强制设置为 99%，
                         // 这样只有在后续写入数据库完成后才会变为 100%
-                        if (combinedProgress == totalFiles && totalFiles > 0) {
-                             currentTask.setProgress(99); 
+                        if (progress == totalFiles && totalFiles > 0) {
+                            currentTask.setProgress(99);
                         }
-                        
                         taskRepository.save(currentTask);
                     }
                 } catch (Exception e) {
                     logger.warn("更新进度失败: taskId={}", taskId);
                 }
             };
-            
-            // 3.2 并行调用 Vision AI 和 OCR 服务
-            String ocrTaskId = taskId + "-ocr"; // OCR 使用不同的任务ID
-            
-            // Vision AI 异步调用
-            CompletableFuture<Map<String, String>> visionFuture = CompletableFuture.supplyAsync(() -> {
-                return aiServiceClient.callBatchVisionAi(paths, taskId, 
-                    (processedCount) -> {
-                        visionProgress.set(processedCount);
-                        updateCombinedProgress.run();
-                    },
-                    (errorLogs) -> {
-                        try {
-                            Task currentTask = taskRepository.findById(taskId).orElse(null);
-                            if (currentTask != null) {
-                                String errorMsg = String.join("\n", errorLogs);
-                                if (errorMsg.length() > 60000) {
-                                    errorMsg = errorMsg.substring(errorMsg.length() - 60000);
-                                }
-                                currentTask.setErrorMessage(errorMsg);
-                                taskRepository.save(currentTask);
+
+            // 3.2 调用 Vision AI 服务 (OCR已合并到推理流水线中，结果通过metadata.ocr返回)
+            Map<String, String> visionResults = aiServiceClient.callBatchVisionAi(paths, taskId,
+                (processedCount) -> {
+                    visionProgress.set(processedCount);
+                    updateCombinedProgress.run();
+                },
+                (errorLogs) -> {
+                    try {
+                        Task currentTask = taskRepository.findById(taskId).orElse(null);
+                        if (currentTask != null) {
+                            String errorMsg = String.join("\n", errorLogs);
+                            if (errorMsg.length() > 60000) {
+                                errorMsg = errorMsg.substring(errorMsg.length() - 60000);
                             }
-                        } catch (Exception e) {
-                            logger.error("保存错误日志失败: taskId={}", taskId);
+                            currentTask.setErrorMessage(errorMsg);
+                            taskRepository.save(currentTask);
                         }
+                    } catch (Exception e) {
+                        logger.error("保存错误日志失败: taskId={}", taskId);
                     }
-                );
-            });
-            
-            // OCR 异步调用
-            CompletableFuture<Map<String, String>> ocrFuture = CompletableFuture.supplyAsync(() -> {
-                return aiServiceClient.callBatchOcrAi(paths, ocrTaskId, 
-                    (processedCount) -> {
-                        ocrProgress.set(processedCount);
-                        updateCombinedProgress.run();
-                    },
-                    (errorLogs) -> {
-                        logger.warn("OCR 错误: {}", String.join("\n", errorLogs));
-                    }
-                );
-            });
-            
-            // 等待两个服务都完成
-            Map<String, String> visionResults;
-            Map<String, String> ocrResults;
-            try {
-                visionResults = visionFuture.get();
-                ocrResults = ocrFuture.get();
-            } catch (Exception e) {
-                logger.error("并行调用 AI 服务失败: taskId={}", taskId, e);
-                // Vision AI 失败是致命的，OCR 失败可以继续
-                if (visionFuture.isCompletedExceptionally()) {
-                    throw new RuntimeException("Vision AI 调用失败", e);
                 }
-                visionResults = new HashMap<>();
-                ocrResults = new HashMap<>();
-            }
-            
-            logger.info("AI 服务调用完成: taskId={}, visionResults={}, ocrResults={}", 
-                        taskId, visionResults.size(), ocrResults.size());
+            );
+
+            logger.info("AI 服务调用完成: taskId={}, visionResults={}", taskId, visionResults.size());
 
 
             // 4. 处理结果并写回
@@ -255,14 +214,14 @@ public class TaskProcessService {
                         logger.warn("保存缺陷记录失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
                     }
                     
-                    // 6. 解析 OCR 结果并更新底片信息
-                    String ocrRes = ocrResults.get(tf.getMinioFilePath());
-                    if (ocrRes != null) {
-                        try {
-                            parseOcrResultAndUpdateTaskFile(tf, ocrRes);
-                        } catch (Exception e) {
-                            logger.warn("解析OCR结果失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
+                    // 6. 从 Vision AI 结果的 metadata.ocr 中提取 OCR 数据（OCR已合并到推理流水线）
+                    try {
+                        JsonNode ocrNode = objectMapper.readTree(res).path("metadata").path("ocr");
+                        if (!ocrNode.isMissingNode() && !ocrNode.isNull()) {
+                            parseOcrResultAndUpdateTaskFile(tf, objectMapper.writeValueAsString(ocrNode));
                         }
+                    } catch (Exception e) {
+                        logger.warn("解析OCR结果失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
                     }
                 } else {
                     failedCount++;

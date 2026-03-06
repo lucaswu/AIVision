@@ -34,3 +34,7 @@ httpx>=0.26.0
 
 # Utilities
 pydantic>=2.5.0
+
+# OCR (integrated PaddleOCR pipeline)
+paddleocr==2.7.3
+pandas>=2.0.0

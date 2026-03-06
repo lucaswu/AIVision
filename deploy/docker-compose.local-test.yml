@@ -57,33 +57,11 @@ services:
       - USE_GPU=${USE_GPU:-false}
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
       - PRIMARY_WEIGHTS=/app/model/weights/primary-weights.pth
+      - LOCATION_MODEL=/app/model/weights/location_0.pt
+      - LOCATION2_MODEL=/app/model/weights/location_1.pt
       - CUDA_VISIBLE_DEVICES=
     ports:
       - "8000:8000"
-    networks:
-      - ai-services
-    volumes:
-      - ../data/files:/app/data/files
-      - ../data/results:/app/data/results
-      # 模型已打包在镜像中，无需挂载
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
-  # OCR 推理服务
-  # 使用 packed 镜像 (包含模型)，架构为 linux/arm64 (本地 Mac 专用)
-  ai-inference-ocr:
-    image: aivision-ai-inference-ocr:packed
-    container_name: ai-detection-inference-ocr
-    restart: unless-stopped
-    environment:
-      - USE_GPU=${USE_GPU:-false}
-      - CUDA_VISIBLE_DEVICES=
-    ports:
-      - "8001:8000"
     networks:
       - ai-services
     volumes:

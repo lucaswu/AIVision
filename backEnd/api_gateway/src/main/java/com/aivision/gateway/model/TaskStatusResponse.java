@@ -103,12 +103,16 @@ public class TaskStatusResponse {
         @JsonProperty("ProcessingEndTime")
         private String processingEndTime;
         
+        @JsonProperty("DefectPosition")
+        private String defectPosition;
+        
         // 构造函数
         public TaskFileResult() {}
         
         public TaskFileResult(String taskFileId, String fileId, String fileName, String logicalPath, 
                              String status, String visionResult, String reportPath, 
-                             String errorMessage, String processingStartTime, String processingEndTime) {
+                             String errorMessage, String processingStartTime, String processingEndTime,
+                             String defectPosition) {
             this.taskFileId = taskFileId;
             this.fileId = fileId;
             this.fileName = fileName;
@@ -119,6 +123,7 @@ public class TaskStatusResponse {
             this.errorMessage = errorMessage;
             this.processingStartTime = processingStartTime;
             this.processingEndTime = processingEndTime;
+            this.defectPosition = defectPosition;
         }
         
         // Getters and Setters
@@ -151,6 +156,9 @@ public class TaskStatusResponse {
         
         public String getProcessingEndTime() { return processingEndTime; }
         public void setProcessingEndTime(String processingEndTime) { this.processingEndTime = processingEndTime; }
+        
+        public String getDefectPosition() { return defectPosition; }
+        public void setDefectPosition(String defectPosition) { this.defectPosition = defectPosition; }
     }
     
     // 构造函数
