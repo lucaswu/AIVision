@@ -270,16 +270,12 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
         if (stats) {
           imageStatsRef.current = stats;
 
-          // 应用自动窗位
-          const autoWW = Math.max(1, Math.min(4 * stats.std, stats.max - stats.min));
-          const autoWL = stats.mean;
-
           console.log(`图像加载完成: ${width}x${height}`);
           console.log(`像素范围: [${stats.min}, ${stats.max}]`);
           console.log(`均值: ${stats.mean.toFixed(2)}, 标准差: ${stats.std.toFixed(2)}`);
-          console.log(`自动窗宽窗位: WW=${autoWW.toFixed(1)}, WL=${autoWL.toFixed(1)}`);
 
-          updateWindowLevel(autoWW, autoWL);
+          // 默认使用全范围显示，与原始图片明暗一致
+          updateWindowLevel(255, 128);
         } else {
           updateWindowLevel(255, 128);
         }
