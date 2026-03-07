@@ -222,19 +222,16 @@ function inverseTransformPoint(
 ): { x: number; y: number } {
   // 归一化旋转角度到 0/90/180/270
   const r = ((rotationDeg % 360) + 360) % 360;
-  // 先逆旋转（顺/逆各自的逆是对方）
-  // corrW/corrH 是矫正后图像的尺寸；原图尺寸在 90/270° 时宽高互换
+  // 正向变换顺序：先旋转，再水平翻转
+  // 逆变换必须反序：先撤销翻转，再撤销旋转
+  if (flipH === -1) {
+    px = corrW - px;
+  }
   let x: number, y: number;
   if (r === 0) { x = px; y = py; }
-  else if (r === 90) { x = py; y = corrW - px; }  // 顺90°的逆是逆90°
+  else if (r === 90) { x = py; y = corrW - px; }
   else if (r === 180) { x = corrW - px; y = corrH - py; }
-  else /* 270 */ { x = corrH - py; y = px; }           // 逆270°（=顺90°）
-  // 再逆翻转（水平翻转是自逆操作）
-  if (flipH === -1) {
-    // 逆变换后，x 轴反转基于原图宽度
-    const origW = (r === 90 || r === 270) ? corrH : corrW;
-    x = origW - x;
-  }
+  else /* 270 */ { x = corrH - py; y = px; }
   return { x, y };
 }
 
@@ -687,6 +684,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // 该 Ref 在切换文件时立即设为 true，只有当 imageReady 真正变回 false 后才设为 false
   const isImageResetingRef = useRef(false);
 
+  // 旋转图片自动适配：记录已完成自动缩放的文件ID，避免重复触发
+  const autoFitFileIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!imageReady) {
       isImageResetingRef.current = false;
@@ -721,6 +721,27 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       }
     }
   }, [canvasRef.current?.width, canvasRef.current?.height, imageFile]);
+
+  // 旋转图片自动适配：当 90°/270° 旋转图片加载完成后，计算并设置初始缩放比例
+  // 使旋转后的视觉宽高能适应容器，避免出现图片过小或溢出的问题
+  useEffect(() => {
+    if (!imageReady || rawImageWidth === 0 || rawImageHeight === 0 || containerSize.w === 0 || containerSize.h === 0) return;
+    if (autoFitFileIdRef.current === selectedFile?.TaskFileId) return; // 当前文件已完成自动适配
+    autoFitFileIdRef.current = selectedFile?.TaskFileId ?? null;
+
+    const normR = ((rotation % 360) + 360) % 360;
+    if (normR !== 90 && normR !== 270) return;
+
+    // CSS 在 scale=1 时将画布约束在容器内的缩放系数
+    const W = rawImageWidth, H = rawImageHeight;
+    const cW = containerSize.w, cH = containerSize.h;
+    const cssScale = Math.min(1, cW / W, cH / H);
+    // 旋转 90° 后：视觉宽 = H*cssScale*s，视觉高 = W*cssScale*s
+    // 令视觉尺寸适应容器：s = min(cW/(H*cssScale), cH/(W*cssScale))
+    const autoScale = Math.min(cW / (H * cssScale), cH / (W * cssScale));
+    setScale(parseFloat(autoScale.toFixed(2)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageReady, rawImageWidth, rawImageHeight, containerSize.w, containerSize.h]);
 
   let cursorStyle = 'default';
   if (isPanning) {
@@ -1436,6 +1457,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       // 立即重置图片就绪状态，确保缺陷信息隐藏，直到新图片渲染完成
       resetImageReady();
 
+      autoFitFileIdRef.current = null; // 重置，允许新图片触发自动适配
       resetWindow();
       setScale(1);
       // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
@@ -1654,6 +1676,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const widthRatio = (trueImageW > 0 && imgSize.w > 0) ? (trueImageW / imgSize.w) : 1;
   const heightRatio = (trueImageH > 0 && imgSize.h > 0) ? (trueImageH / imgSize.h) : 1;
+
+  // 旋转90°/270°后，水平轴对应原图高度、垂直轴对应原图宽度，标尺需交换 ratio 和 maxImageSize
+  const corrNormR = ((rotation % 360) + 360) % 360;
+  const isAxesSwapped = corrNormR === 90 || corrNormR === 270;
+  const rulerHorizRatio = isAxesSwapped ? heightRatio : widthRatio;
+  const rulerVertRatio = isAxesSwapped ? widthRatio : heightRatio;
+  const rulerHorizMax = isAxesSwapped ? trueImageH : trueImageW;
+  const rulerVertMax = isAxesSwapped ? trueImageW : trueImageH;
 
   const displayOrigin = useMemo(() => {
     // 如果是设置原点工具或定位标记成像工具，且有临时原点，显示临时坐标
@@ -2234,12 +2264,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
           {/* 顶部标尺 */}
           <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
-            <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={widthRatio} maxImageSize={originalSize.w} />
+            <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={rulerHorizRatio} maxImageSize={rulerHorizMax} />
           </div>
 
           {/* 左侧标尺 */}
           <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
-            <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={heightRatio} maxImageSize={originalSize.h} />
+            <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={rulerVertRatio} maxImageSize={rulerVertMax} />
           </div>
 
           {/* 图片视口 */}
@@ -2430,16 +2460,26 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                           opacity={0.95}
                         />
                         {/* 标签 */}
-                        <text
-                          x={dox + circleR + 4 / scale}
-                          y={doy - 4 / scale}
-                          fill="#00e5ff"
-                          fontSize={12 / scale}
-                          fontWeight="bold"
-                          style={{ filter: 'drop-shadow(0 0 2px #000)' }}
-                        >
-                          0点
-                        </text>
+                        {(() => {
+                          const tx = dox + circleR + 4 / scale;
+                          const ty = doy - 4 / scale;
+                          let tfm = '';
+                          if (corrRotation !== 0) tfm += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                          if (corrFlipH === -1) tfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                          return (
+                            <text
+                              x={tx}
+                              y={ty}
+                              fill="#00e5ff"
+                              fontSize={12 / scale}
+                              fontWeight="bold"
+                              style={{ filter: 'drop-shadow(0 0 2px #000)' }}
+                              transform={tfm || undefined}
+                            >
+                              0点
+                            </text>
+                          );
+                        })()}
                       </g>
                     );
                   })()}
