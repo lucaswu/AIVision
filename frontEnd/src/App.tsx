@@ -117,7 +117,7 @@ function AppContent() {
                           overflow: "auto",
                         }}
                       >
-                        <Sider width={200} style={{ background: "#fff" }}>
+                        <Sider width={160} style={{ background: "#fff" }}>
                           <Menu
                             mode="inline"
                             selectedKeys={["projects"]}
@@ -155,7 +155,7 @@ function AppContent() {
                           overflow: "auto",
                         }}
                       >
-              <Sider width={200} style={{ background: "#fff" }}>
+              <Sider width={160} style={{ background: "#fff" }}>
                 <Menu
                   mode="inline"
                   selectedKeys={getSelectedKeys()}

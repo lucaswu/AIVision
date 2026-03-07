@@ -245,7 +245,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [selectedFile, setSelectedFile] = useState<TaskFile | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(10);
 
   // 底片信息表单
   const [filmInfoForm] = Form.useForm();
@@ -1287,7 +1287,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const paginatedFiles = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return files.slice(start, start + pageSize);
-  }, [files, currentPage]);
+  }, [files, currentPage, pageSize]);
 
   useEffect(() => {
     if (files.length > 0 && !selectedFile) {
@@ -1958,7 +1958,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
       {/* 左侧文件列表 (保持不变) */}
-      <Sider width={250} theme="light" style={{ borderRight: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column' }}>
+      <Sider width={280} theme="light" style={{ borderRight: "1px solid #f0f0f0", overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
           <Space direction="vertical" style={{ width: "100%" }} size={12}>
             <Button
@@ -2009,7 +2010,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           )}
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <List
             loading={filesLoading}
             dataSource={paginatedFiles}
@@ -2047,14 +2048,27 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           />
         </div>
 
-        <div style={{ padding: '8px', textAlign: 'center', borderTop: '1px solid #f0f0f0' }}>
+        <div style={{ padding: '8px', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <Pagination
             simple
             current={currentPage}
             total={files.length}
             pageSize={pageSize}
             onChange={setCurrentPage}
+            showSizeChanger={false}
             size="small"
+            style={{ whiteSpace: 'nowrap' }}
+          />
+          <Select
+            size="small"
+            value={pageSize}
+            onChange={(size) => { setPageSize(size); setCurrentPage(1); }}
+            placement="topLeft"
+            options={[
+              { label: '10条/页', value: 10 },
+              { label: '20条/页', value: 20 },
+              { label: '50条/页', value: 50 },
+            ]}
           />
         </div>
 
@@ -2069,6 +2083,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           >
             预览报告
           </Button>
+        </div>
         </div>
       </Sider>
 
