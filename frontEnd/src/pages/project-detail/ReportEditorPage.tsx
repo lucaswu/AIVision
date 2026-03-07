@@ -380,6 +380,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 8. 缺陷位置检测2原点（来自 location_1.pt D路径，仅 center_mark 十字架原点） ---
   const [defectOriginPoint, setDefectOriginPoint] = useState<{ x: number; y: number } | null>(null);
 
+  // --- 9. 是否显示定位坐标（焊缝位置矩形 + 缺陷位置检测2原点） ---
+  const [showPositioningCoords, setShowPositioningCoords] = useState(true);
+
   // 暂存刚画完但未分类的形状数据
   const [pendingShape, setPendingShape] = useState<any>(null);
   const [pendingShapeType, setPendingShapeType] = useState<DrawingType>('rect');
@@ -2238,6 +2241,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               尺寸定标
             </Button>
 
+            <Button
+              onClick={() => setShowPositioningCoords(v => !v)}
+              style={{
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px',
+                background: '#303030',
+                borderRadius: '4px', display: 'flex', alignItems: 'center'
+              }}
+            >
+              {showPositioningCoords ? '隐藏定位坐标' : '显示定位坐标'}
+            </Button>
+
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <LinkOutlined style={{ transform: 'rotate(-45deg)', marginRight: 4 }} />
               <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
@@ -2345,7 +2359,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
 
                   {/* 0. 焊缝位置层（关键点标注，来自 location_0.pt）*/}
-                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && (
+                  {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && (
                     weldLocationShapes.map((shape, idx) => {
                       const corrRotation = selectedFile?.CorrectionRotation ?? 0;
                       const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
@@ -2420,7 +2434,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   )}
 
                   {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
-                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && (() => {
+                  {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && (() => {
                     const corrRotation = selectedFile?.CorrectionRotation ?? 0;
                     const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
                     const normR = ((corrRotation % 360) + 360) % 360;
