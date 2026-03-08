@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
@@ -84,6 +85,27 @@ def _load_rfdet_model_kwargs(model_path: Path) -> Dict[str, Any]:
     return extracted
 
 
+def _drop_unknown_rfdet_kwargs(model_kwargs: Dict[str, Any], exc: Exception) -> Optional[Dict[str, Any]]:
+    """Handle RF-DETR version drift by removing kwargs rejected by newer configs."""
+    message = str(exc)
+    match = re.search(r"Unknown parameter\(s\):\s*(.+?)\.\s*Available parameter\(s\):", message)
+    if not match:
+        return None
+
+    unknown_fields = []
+    for raw in match.group(1).split(","):
+        key = raw.strip().strip("'\"")
+        if key:
+            unknown_fields.append(key)
+    if not unknown_fields:
+        return None
+
+    filtered = {k: v for k, v in model_kwargs.items() if k not in unknown_fields}
+    if len(filtered) == len(model_kwargs):
+        return None
+    return filtered
+
+
 def _ensure_single_prediction(detections: Any):
     if detections is None:
         return None
@@ -121,12 +143,15 @@ class RFDetrDetectionModel:
             checkpoint_kwargs.pop("device", None)
             model_kwargs.update(checkpoint_kwargs)
         if device:
-            # rfdetr config specific validation requires exactly 'cpu', 'cuda' or 'mps'
-            safe_device = "cuda" if device.startswith("cuda") else device
-            model_kwargs["device"] = safe_device
-        if self.model_variant == "medium":
-            return RFDETRMedium(**model_kwargs)
-        return RFDETR2XLarge(**model_kwargs)
+            model_kwargs["device"] = device
+        model_cls = RFDETRMedium if self.model_variant == "medium" else RFDETR2XLarge
+        try:
+            return model_cls(**model_kwargs)
+        except Exception as exc:
+            compat_kwargs = _drop_unknown_rfdet_kwargs(model_kwargs, exc)
+            if compat_kwargs is None:
+                raise
+            return model_cls(**compat_kwargs)
 
     def _build_class_map(self) -> Dict[int, str]:
         raw_names = getattr(self.model, "class_names", None)
@@ -174,8 +199,7 @@ class RFDetrSegmentationModel:
         self.confidence = confidence
         kwargs: Dict[str, Any] = {"pretrain_weights": str(self.model_path)}
         if device:
-            safe_device = "cuda" if device.startswith("cuda") else device
-            kwargs["device"] = safe_device
+            kwargs["device"] = device
         self.model = RFDETRSeg2XLarge(**kwargs)
         self.class_map = self._build_class_map()
 
@@ -1064,7 +1088,7 @@ def _apply_classwise_nms(detections: List[Dict[str, Any]], iou_threshold: float)
 def _suppress_contained_boxes(detections: List[Dict[str, Any]],
                               containment_thresh: float = 0.9) -> List[Dict[str, Any]]:
     """
-    同类别包含抑制：若大框包含小框（intersection/area_small >= 阈值），保留大框。
+    包含抑制（不区分类别）：若大框包含小框（intersection/area_small >= 阈值），保留大框。
     """
     if not detections:
         return []
@@ -1082,36 +1106,37 @@ def _suppress_contained_boxes(detections: List[Dict[str, Any]],
         return (x2 - x1) * (y2 - y1)
 
     keep = [True] * len(detections)
-    # 按类别分组
-    class_groups: Dict[int, List[int]] = {}
-    for idx, det in enumerate(detections):
-        cls_id = int(det.get("class_id", -1))
-        class_groups.setdefault(cls_id, []).append(idx)
-
-    for _, indices in class_groups.items():
-        # 按面积从大到小
-        indices_sorted = sorted(
-            indices,
-            key=lambda i: _area(detections[i]["bbox"]),
-            reverse=True
-        )
-        for i, idx_big in enumerate(indices_sorted):
-            if not keep[idx_big]:
+    # 按面积从大到小（不区分类别）
+    indices_sorted = sorted(
+        range(len(detections)),
+        key=lambda i: _area(detections[i]["bbox"]),
+        reverse=True
+    )
+    for i, idx_big in enumerate(indices_sorted):
+        if not keep[idx_big]:
+            continue
+        bbox_big = detections[idx_big]["bbox"]
+        area_big = _area(bbox_big)
+        if area_big <= 0:
+            continue
+        for idx_small in indices_sorted[i + 1:]:
+            if not keep[idx_small]:
                 continue
-            bbox_big = detections[idx_big]["bbox"]
-            area_big = _area(bbox_big)
-            if area_big <= 0:
+            bbox_small = detections[idx_small]["bbox"]
+            area_small = _area(bbox_small)
+            if area_small <= 0:
                 continue
-            for idx_small in indices_sorted[i + 1:]:
-                if not keep[idx_small]:
-                    continue
-                bbox_small = detections[idx_small]["bbox"]
-                area_small = _area(bbox_small)
-                if area_small <= 0:
-                    continue
-                inter = _inter_area(bbox_big, bbox_small)
-                if inter / area_small >= containment_thresh:
-                    keep[idx_small] = False
+            inter = _inter_area(bbox_big, bbox_small)
+            if inter / area_small >= containment_thresh:
+                det_big = detections[idx_big]
+                det_small = detections[idx_small]
+                conf_big = float(det_big.get("confidence", 0.0))
+                conf_small = float(det_small.get("confidence", 0.0))
+                if conf_small > conf_big:
+                    det_big["class_id"] = det_small.get("class_id", det_big.get("class_id"))
+                    det_big["class_name"] = det_small.get("class_name", det_big.get("class_name"))
+                    det_big["confidence"] = conf_small
+                keep[idx_small] = False
 
     return [det for det, flag in zip(detections, keep) if flag]
 

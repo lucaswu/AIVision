@@ -466,6 +466,20 @@ class InferencePipelineRunner:
                 wide_slice=wide_slice_cfg,
                 fusion_iou=self.fusion_iou
             )
+        if debug_dir is not None:
+            final_detections: List[Dict[str, Any]] = []
+            if self.mode == "det":
+                for roi in rois:
+                    final_detections.extend(roi.get("detections", []))
+            else:
+                for roi in rois:
+                    final_detections.extend(roi.get("defects", []))
+            rfdet_pipeline._save_debug_image(
+                image,
+                final_detections,
+                debug_dir / "final_result.jpg",
+                self.font_renderer
+            )
 
         return rois, weld_location, defect_position, w, h, correction_info, image
 
