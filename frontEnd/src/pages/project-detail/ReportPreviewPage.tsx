@@ -50,174 +50,119 @@ interface ReportPreviewPageProps {
   onReview?: () => void;
 }
 
-const DefectImage = ({ file, projectId, userId, style, imgStyle, showLabel = true, defects = null }: { file: TaskFile, projectId: string, userId: string, style?: React.CSSProperties, imgStyle?: React.CSSProperties, showLabel?: boolean, defects?: any[] | null }) => {
+/**
+ * 显示带缺陷标注的图片缩略图/预览。
+ *
+ * 实现思路：
+ *  - 外层容器用 paddingTop 确定矫正后的宽高比（metaHeight/metaWidth），
+ *    使容器在视觉上与矫正后图像尺寸一致。
+ *  - img 绝对居中并施加与 ReportEditorPage 相同的 CSS 变换（先旋转再翻转），
+ *    使原始文件在视觉上以正确方向填满容器。
+ *  - 缺陷标注框坐标已存储在矫正后坐标系中，直接以 metaWidth/metaHeight 为基准
+ *    计算百分比定位，无需逆变换。
+ */
+const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects = null }: {
+  file: TaskFile, projectId: string, userId: string,
+  style?: React.CSSProperties, showLabel?: boolean, defects?: any[] | null
+}) => {
+  const corrRotation = file.CorrectionRotation ?? 0;
+  const flipH = file.CorrectionFlip ? -1 : 1;
+  const normR = ((corrRotation % 360) + 360) % 360;
+  const isAxesSwapped = normR === 90 || normR === 270;
+
+  let metaWidth = 1920, metaHeight = 1080;
+  let visionResult: any = { results: [] };
+  try {
+    visionResult = JSON.parse(file.VisionResult || '{"results":[]}');
+    metaWidth = visionResult.metadata?.width || 1920;
+    metaHeight = visionResult.metadata?.height || 1080;
+  } catch (e) { /* 保持默认值 */ }
+
+  // 构建单个标注框（直接使用矫正坐标系百分比）
+  const makeOverlay = (minX: number, minY: number, maxX: number, maxY: number, label: string, key: string) => (
+    <div key={key} style={{
+      position: "absolute",
+      top: `${(minY / metaHeight) * 100}%`,
+      left: `${(minX / metaWidth) * 100}%`,
+      width: `${((maxX - minX) / metaWidth) * 100}%`,
+      height: `${((maxY - minY) / metaHeight) * 100}%`,
+      border: "1px dashed #ff4d4f",
+      pointerEvents: "none",
+      zIndex: 10,
+    }}>
+      {showLabel && (
+        <span style={{
+          position: "absolute", top: -18, left: -1,
+          background: '#ff4d4f', color: '#fff', fontSize: '10px',
+          padding: '0 4px', borderRadius: '2px', whiteSpace: 'nowrap',
+          transform: 'scale(0.8)', transformOrigin: 'left bottom',
+        }}>{label}</span>
+      )}
+    </div>
+  );
+
+  const overlays: JSX.Element[] = [];
+  try {
+    if (defects && defects.length > 0) {
+      defects.forEach((item: any, i: number) => {
+        let minX = 0, minY = 0, maxX = 0, maxY = 0, isValid = false;
+        if (item.isDefectRecord && item.Geometry) {
+          try {
+            const geo = JSON.parse(item.Geometry);
+            if (geo.type === 'rect') {
+              minX = geo.x; minY = geo.y; maxX = geo.x + geo.w; maxY = geo.y + geo.h; isValid = true;
+            } else if (geo.type === 'circle') {
+              minX = geo.x - geo.r; minY = geo.y - geo.r; maxX = geo.x + geo.r; maxY = geo.y + geo.r; isValid = true;
+            } else if (geo.type === 'polygon' && Array.isArray(geo.points)) {
+              const xs = geo.points.map((p: any) => p.x);
+              const ys = geo.points.map((p: any) => p.y);
+              minX = Math.min(...xs); minY = Math.min(...ys); maxX = Math.max(...xs); maxY = Math.max(...ys); isValid = true;
+            }
+          } catch (e) { }
+        } else if (!item.isDefectRecord && item.vvContour?.length > 0) {
+          const xs = item.vvContour.map((p: any) => p[0]);
+          const ys = item.vvContour.map((p: any) => p[1]);
+          minX = Math.min(...xs); minY = Math.min(...ys); maxX = Math.max(...xs); maxY = Math.max(...ys); isValid = true;
+        }
+        if (isValid) overlays.push(makeOverlay(minX, minY, maxX, maxY, item.strName || item.DefectName, `defect-${i}`));
+      });
+    } else if (!defects && visionResult.results) {
+      visionResult.results.forEach((item: any, i: number) => {
+        if (!item.vvContour?.length) return;
+        const xs = item.vvContour.map((p: any) => p[0]);
+        const ys = item.vvContour.map((p: any) => p[1]);
+        overlays.push(makeOverlay(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys), item.strName, `model-${i}`));
+      });
+    }
+  } catch (e) { /* 解析失败时跳过标注 */ }
+
+  // 旋转90°/270°时，原始图像宽高互换；img 宽度设为 metaH/metaW 使旋转后恰好填满容器
+  const imgWidth = isAxesSwapped ? `${(metaHeight / metaWidth) * 100}%` : '100%';
+
   return (
-    <div style={{ position: 'relative', display: 'inline-block', ...style }}>
+    <div style={{
+      position: 'relative',
+      paddingTop: `${(metaHeight / metaWidth) * 100}%`,  // 锁定矫正后宽高比
+      overflow: 'hidden',
+      background: '#f5f5f5',
+      ...style,
+    }}>
       <img
         src={`/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${userId}`}
         alt="preview"
-        style={{ display: 'block', background: '#f5f5f5', ...imgStyle }}
+        style={{
+          position: 'absolute',
+          display: 'block',
+          width: imgWidth,
+          height: 'auto',
+          top: '50%',
+          left: '50%',
+          // translate(-50%,-50%) 先将 img 居中，再旋转翻转，使其恰好填满容器
+          transform: `translate(-50%, -50%) scale(${flipH}, 1) rotate(${corrRotation}deg)`,
+          transformOrigin: 'center center',
+        }}
       />
-      {(() => {
-        try {
-          // 始终需要元数据来计算百分比位置
-          const visionResult = JSON.parse(file.VisionResult || '{"results":[]}');
-          const metaWidth = visionResult.metadata?.width || 1920;
-          const metaHeight = visionResult.metadata?.height || 1080;
-
-          const elements: JSX.Element[] = [];
-
-          // Source 1: Passed defects (Edited records)
-          if (defects && defects.length > 0) {
-            defects.forEach((item: any, i: number) => {
-              let minX = 0, minY = 0, maxX = 0, maxY = 0;
-              let isValid = false;
-
-              if (item.isDefectRecord) {
-                // Try parsing Geometry first
-                if (item.Geometry) {
-                  try {
-                    const geo = JSON.parse(item.Geometry);
-                    if (geo.type === 'rect') {
-                      minX = geo.x;
-                      minY = geo.y;
-                      maxX = geo.x + geo.w;
-                      maxY = geo.y + geo.h;
-                      isValid = true;
-                    } else if (geo.type === 'circle') {
-                      minX = geo.x - geo.r;
-                      minY = geo.y - geo.r;
-                      maxX = geo.x + geo.r;
-                      maxY = geo.y + geo.r;
-                      isValid = true;
-                    } else if (geo.type === 'polygon' && Array.isArray(geo.points)) {
-                      const xs = geo.points.map((p: any) => p.x);
-                      const ys = geo.points.map((p: any) => p.y);
-                      minX = Math.min(...xs);
-                      minY = Math.min(...ys);
-                      maxX = Math.max(...xs);
-                      maxY = Math.max(...ys);
-                      isValid = true;
-                    }
-                  } catch (e) { }
-                }
-
-                // Fallback to item.Position if geometry parsing failed/missing (unlikely for new records but possible)
-                if (!isValid && item.Position) {
-                  // Logic for parsing string 'x,y,w,h' or similar if acceptable...
-                  // For now, assume Geometry is the source of truth for drawing.
-                }
-              } else {
-                // Legacy or mixed source (VisionResult item passed in list)
-                if (item.vvContour && item.vvContour.length > 0) {
-                  const xs = item.vvContour.map((p: any) => p[0]);
-                  const ys = item.vvContour.map((p: any) => p[1]);
-                  minX = Math.min(...xs);
-                  minY = Math.min(...ys);
-                  maxX = Math.max(...xs);
-                  maxY = Math.max(...ys);
-                  isValid = true;
-                }
-              }
-
-              if (!isValid) return;
-
-              const leftPct = (minX / metaWidth) * 100;
-              const topPct = (minY / metaHeight) * 100;
-              const widthPct = ((maxX - minX) / metaWidth) * 100;
-              const heightPct = ((maxY - minY) / metaHeight) * 100;
-
-              elements.push(
-                <div key={`defect-${i}`} style={{
-                  position: "absolute",
-                  top: `${topPct}%`,
-                  left: `${leftPct}%`,
-                  width: `${widthPct}%`,
-                  height: `${heightPct}%`,
-                  border: "1px dashed #ff4d4f",
-                  pointerEvents: "none",
-                  zIndex: 10
-                }}>
-                  {showLabel && (
-                    <span style={{
-                      position: "absolute",
-                      top: -18,
-                      left: -1,
-                      background: '#ff4d4f',
-                      color: '#fff',
-                      fontSize: '10px',
-                      padding: '0 4px',
-                      borderRadius: '2px',
-                      whiteSpace: 'nowrap',
-                      transform: 'scale(0.8)',
-                      transformOrigin: 'left bottom'
-                    }}>
-                      {item.strName || item.DefectName}
-                    </span>
-                  )}
-                </div>
-              );
-            });
-          }
-          // Source 2: Fallback to VisionResult if no defects prop passed (Legacy behavior)
-          else if (!defects && visionResult.results) {
-            visionResult.results.forEach((item: any, i: number) => {
-              let minX = 0, minY = 0, maxX = 0, maxY = 0;
-
-              if (item.vvContour && item.vvContour.length > 0) {
-                const xs = item.vvContour.map((p: any) => p[0]);
-                const ys = item.vvContour.map((p: any) => p[1]);
-                minX = Math.min(...xs);
-                minY = Math.min(...ys);
-                maxX = Math.max(...xs);
-                maxY = Math.max(...ys);
-              } else {
-                return;
-              }
-
-              const leftPct = (minX / metaWidth) * 100;
-              const topPct = (minY / metaHeight) * 100;
-              const widthPct = ((maxX - minX) / metaWidth) * 100;
-              const heightPct = ((maxY - minY) / metaHeight) * 100;
-
-              elements.push(
-                <div key={`model-${i}`} style={{
-                  position: "absolute",
-                  top: `${topPct}%`,
-                  left: `${leftPct}%`,
-                  width: `${widthPct}%`,
-                  height: `${heightPct}%`,
-                  border: "1px dashed #ff4d4f",
-                  pointerEvents: "none",
-                  zIndex: 10
-                }}>
-                  {showLabel && (
-                    <span style={{
-                      position: "absolute",
-                      top: -18,
-                      left: -1,
-                      background: '#ff4d4f',
-                      color: '#fff',
-                      fontSize: '10px',
-                      padding: '0 4px',
-                      borderRadius: '2px',
-                      whiteSpace: 'nowrap',
-                      transform: 'scale(0.8)',
-                      transformOrigin: 'left bottom'
-                    }}>
-                      {item.strName}
-                    </span>
-                  )}
-                </div>
-              );
-            });
-          }
-
-          return elements;
-        } catch (e) {
-          return null;
-        }
-      })()}
+      {overlays}
     </div>
   );
 };
@@ -345,22 +290,14 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                 transformOrigin: 'top center',
                 transition: 'transform 0.2s',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.1)',
-                background: '#fff',
-                display: 'inline-block' // Ensure wrapper hugs content
+                width: '100%',
               }}>
                 <DefectImage
                   file={previewFile}
                   projectId={projectId}
                   userId={getUserId()}
                   defects={getDefectsForFile(previewFile)}
-                  // Remove fixed width, let image drive size. 
-                  // Use max-height/width to fit screen initially.
-                  imgStyle={{
-                    maxWidth: '100%',
-                    maxHeight: 'calc(85vh - 100px)', // Leave space for header/padding
-                    width: 'auto',
-                    height: 'auto'
-                  }}
+                  style={{ width: '100%' }}
                 />
               </div>
             </div>
@@ -586,8 +523,7 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                       projectId={projectId}
                                       userId={getUserId()}
                                       defects={defects}
-                                      style={{ width: '100%', minHeight: '120px', background: '#f5f5f5', display: 'block' }}
-                                      imgStyle={{ width: '100%', height: 'auto' }}
+                                      style={{ width: '100%' }}
                                       showLabel={true}
                                     />
                                     <div style={{
