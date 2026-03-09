@@ -78,25 +78,17 @@ services:
       - results_data:/app/data/results
 
   # ================================
-  # AI 推理服务 (Python + CUDA)
+  # AI 推理服务 (CPU / GPU 通用)
   # ================================
   ai-inference:
-    # 使用本地构建好的镜像
-    image: aivision-ai-inference:latest
+    # 镜像通过 .env 文件中的 AI_INFERENCE_IMAGE 变量切换
+    # GPU 模式: aivision-ai-inference:latest
+    # CPU 模式: aivision-ai-inference-cpu:latest
+    image: ${AI_INFERENCE_IMAGE:-aivision-ai-inference:latest}
     container_name: ai-detection-inference
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_VISIBLE_DEVICES=0
-      - USE_GPU=${USE_GPU:-true}
-      - LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      - USE_GPU=${USE_GPU:-false}
       # 模型权重路径（使用绑定挂载的本地目录）
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
       - PRIMARY_WEIGHTS=/app/model/weights/0208primary.pth
