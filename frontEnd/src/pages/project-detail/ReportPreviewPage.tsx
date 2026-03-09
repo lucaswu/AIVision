@@ -590,25 +590,8 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                       {defects.map((d: any, idx: number) => {
                                         const isSevere = d.strName.toLowerCase().includes('crack') || d.strName.toLowerCase().includes('unfused') || d.strName.toLowerCase().includes('penetration');
 
-                                        // 辅助函数：从 Geometry 格式化位置
-                                        const formatPositionFromGeometry = (geoStr: string) => {
-                                          try {
-                                            const geo = JSON.parse(geoStr);
-                                            if (geo.type === 'rect' && geo.x !== undefined && geo.y !== undefined) {
-                                              return `X:${Math.round(geo.x)}, Y:${Math.round(geo.y)}`;
-                                            } else if (geo.type === 'polygon' && Array.isArray(geo.points) && geo.points.length > 0) {
-                                              return `X:${Math.round(geo.points[0].x)}, Y:${Math.round(geo.points[0].y)}`;
-                                            } else if (geo.type === 'circle' && geo.x !== undefined && geo.y !== undefined) {
-                                              return `X:${Math.round(geo.x)}, Y:${Math.round(geo.y)}`;
-                                            }
-                                            return "-";
-                                          } catch (e) {
-                                            return "-";
-                                          }
-                                        };
-
-                                        // 优先使用 Position，如果为空则尝试从 Geometry 解析
-                                        const position = d.Position || (d.Geometry ? formatPositionFromGeometry(d.Geometry) : "-");
+                                        // 直接使用 Position 字段（与 ReportEditorPage 中保持一致的用户录入位置信息）
+                                        const position = d.Position || "-";
                                         const size = d.Size || "-";
 
                                         return (
