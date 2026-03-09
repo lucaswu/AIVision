@@ -235,6 +235,34 @@ function inverseTransformPoint(
   return { x, y };
 }
 
+/**
+ * 将原图坐标点正向变换到矫正后坐标系（inverseTransformPoint 的逆操作）。
+ * 用于将用户手动标注的坐标（在原图坐标系中）转换为与 AI 检测结果相同的存储坐标系。
+ * @param px - 原图中的 x 坐标（像素）
+ * @param py - 原图中的 y 坐标（像素）
+ * @param rawW - 原图宽度（像素）
+ * @param rawH - 原图高度（像素）
+ * @param rotationDeg - 矫正旋转角度（0/90/180/270）
+ * @param flipH - 水平翻转系数（1 不翻转, -1 翻转）
+ */
+function forwardTransformPoint(
+  px: number, py: number,
+  rawW: number, rawH: number,
+  rotationDeg: number, flipH: number
+): { x: number; y: number } {
+  const r = ((rotationDeg % 360) + 360) % 360;
+  // 正向变换顺序：先旋转，再水平翻转（与 inverseTransformPoint 逆序一致）
+  let x: number, y: number;
+  if (r === 0) { x = px; y = py; }
+  else if (r === 90) { x = rawH - py; y = px; }
+  else if (r === 180) { x = rawW - px; y = rawH - py; }
+  else /* 270 */ { x = py; y = rawW - px; }
+  // 矫正后图像的宽度（旋转 90/270° 后宽高互换）
+  const corrW = (r === 90 || r === 270) ? rawH : rawW;
+  if (flipH === -1) { x = corrW - x; }
+  return { x, y };
+}
+
 const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   taskId,
   projectId,
@@ -680,7 +708,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   } = useWindowLevelTool({
     activeTool,
     scale,
-    imageFile: imageFile
+    imageFile: imageFile,
+    rotation,
+    flipH,
+    flipV,
   });
 
   // 防止切换文件瞬间闪烁：强制标记状态重置 Ref
@@ -782,18 +813,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     const rect = imageWrapperRef.current.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    const dx = e.clientX - centerX;
-    const dy = e.clientY - centerY;
+    const vx = e.clientX - centerX;
+    const vy = e.clientY - centerY;
+    // 正确的逆变换顺序：先撤销 scale·flip，再撤销 rotation
+    // CSS transform: scale(sx,sy)·rotate(r)，逆变换反序：rotate^-1 · scale^-1
+    const ux = vx * flipH / scale;
+    const uy = vy * flipV / scale;
     const rad = -rotation * (Math.PI / 180);
-    const rotatedX = dx * Math.cos(rad) - dy * Math.sin(rad);
-    const rotatedY = dx * Math.sin(rad) + dy * Math.cos(rad);
-    const flippedX = rotatedX * flipH;
-    const flippedY = rotatedY * flipV;
-    const unscaledX = flippedX / scale;
-    const unscaledY = flippedY / scale;
+    const localX = ux * Math.cos(rad) - uy * Math.sin(rad);
+    const localY = ux * Math.sin(rad) + uy * Math.cos(rad);
     return {
-      x: unscaledX + imgSize.w / 2,
-      y: unscaledY + imgSize.h / 2
+      x: localX + imgSize.w / 2,
+      y: localY + imgSize.h / 2
     };
   };
 
@@ -1240,36 +1271,57 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       remark: ''
     };
 
+    // 用户标注坐标来自 getImageCoordinates()，在原图（Canvas 本地）坐标系中。
+    // 存储需与 AI 检测结果保持一致，即矫正后坐标系（CorrectionRotation/Flip 已应用）。
+    // 当存在矫正变换时，需将原图坐标正向变换到矫正后坐标系。
+    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+    const needsFwdTransform = corrRotation !== 0 || corrFlipH === -1;
+
     if (pendingShapeType === 'rect') {
-      const { w, h, x, y } = pendingShape;
-      // 简单计算一下中心位置和宽高作为默认值
-      // const sizeStr = `${trueW}x${trueH}`;
+      // 先转换到原图像素坐标，再正向变换到矫正后坐标系
+      let rx1 = pendingShape.x * widthRatio;
+      let ry1 = pendingShape.y * heightRatio;
+      let rx2 = (pendingShape.x + pendingShape.w) * widthRatio;
+      let ry2 = (pendingShape.y + pendingShape.h) * heightRatio;
+
+      if (needsFwdTransform) {
+        const p1 = forwardTransformPoint(rx1, ry1, trueImageW, trueImageH, corrRotation, corrFlipH);
+        const p2 = forwardTransformPoint(rx2, ry2, trueImageW, trueImageH, corrRotation, corrFlipH);
+        rx1 = Math.min(p1.x, p2.x); ry1 = Math.min(p1.y, p2.y);
+        rx2 = Math.max(p1.x, p2.x); ry2 = Math.max(p1.y, p2.y);
+      }
 
       const newRect: SavedRect = {
         ...pendingShape,
-        x: pendingShape.x * widthRatio,
-        y: pendingShape.y * heightRatio,
-        w: pendingShape.w * widthRatio,
-        h: pendingShape.h * heightRatio,
+        x: rx1, y: ry1, w: rx2 - rx1, h: ry2 - ry1,
         label, color, ...defaultExtra, size: ''
       };
       updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true);
     } else if (pendingShapeType === 'polygon') {
-      const newPoints = pendingShape.points.map(p => ({
-        x: p.x * widthRatio,
-        y: p.y * heightRatio
-      }));
+      const newPoints = pendingShape.points.map((p: { x: number; y: number }) => {
+        const rawX = p.x * widthRatio;
+        const rawY = p.y * heightRatio;
+        if (needsFwdTransform) {
+          return forwardTransformPoint(rawX, rawY, trueImageW, trueImageH, corrRotation, corrFlipH);
+        }
+        return { x: rawX, y: rawY };
+      });
       const newPoly: SavedPolygon = {
         points: newPoints,
         label, color, ...defaultExtra
       };
       updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true);
     } else if (pendingShapeType === 'circle') {
+      let cx = pendingShape.x * widthRatio;
+      let cy = pendingShape.y * heightRatio;
+      if (needsFwdTransform) {
+        ({ x: cx, y: cy } = forwardTransformPoint(cx, cy, trueImageW, trueImageH, corrRotation, corrFlipH));
+      }
       const newCircle: SavedCircle = {
         ...pendingShape,
-        x: pendingShape.x * widthRatio,
-        y: pendingShape.y * heightRatio,
-        r: (pendingShape.r * widthRatio), // 假设圆按宽比例缩放，或者平均值
+        x: cx, y: cy,
+        r: pendingShape.r * widthRatio,
         label, color, ...defaultExtra
       };
       updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true);

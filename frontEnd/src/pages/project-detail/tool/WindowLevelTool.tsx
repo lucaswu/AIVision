@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { message } from 'antd';
 
 // Hook 入参
@@ -6,6 +6,9 @@ interface UseWindowLevelToolProps {
   activeTool: string;
   scale: number;
   imageFile?: File;
+  rotation?: number; // 当前旋转角度（度），用于坐标逆变换
+  flipH?: number;    // 水平翻转系数（1 不翻转, -1 翻转）
+  flipV?: number;    // 垂直翻转系数（1 不翻转, -1 翻转）
 }
 
 interface ImageStats {
@@ -15,7 +18,7 @@ interface ImageStats {
   max: number;
 }
 
-export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLevelToolProps) => {
+export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0, flipH = 1, flipV = 1 }: UseWindowLevelToolProps) => {
   // 原始灰度数据（真正的原始数据）
   const [rawGrayData, setRawGrayData] = useState<Uint8Array | null>(null);
   const [imageWidth, setImageWidth] = useState(0);
@@ -297,7 +300,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
   }, [updateDisplay]);
 
   // ==========================================================================
-  // 🔧 修复：ROI 计算 - 添加坐标转换
+  // ROI 计算
   // ==========================================================================
   const computeROI = useCallback((
     startX: number,
@@ -309,11 +312,11 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     const canvas = canvasRef.current;
     if (!rawGrayData || imageWidth === 0 || !canvas) return;
 
-    // 🔑 关键修复：获取Canvas的显示尺寸
+    // 获取Canvas的显示尺寸（本地坐标系，对应原始图像坐标系）
     const displayWidth = canvas.clientWidth;
     const displayHeight = canvas.clientHeight;
 
-    // 🔑 关键修复：计算显示尺寸与原始尺寸的比例
+    // 计算显示尺寸与原始尺寸的比例
     const scaleX = imageWidth / displayWidth;
     const scaleY = imageHeight / displayHeight;
 
@@ -325,7 +328,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
 
     if (rawW <= 2 || rawH <= 2) return;
 
-    // 🔑 关键修复：转换到原始图像坐标系
+    // 转换到原始图像坐标系
     const imageX = Math.floor(rawX * scaleX);
     const imageY = Math.floor(rawY * scaleY);
     const imageW = Math.floor(rawW * scaleX);
@@ -336,14 +339,6 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
     const finalY = Math.max(0, Math.min(imageY, imageHeight - 1));
     const finalW = Math.min(imageW, imageWidth - finalX);
     const finalH = Math.min(imageH, imageHeight - finalY);
-
-    console.log('ROI坐标转换:', {
-      显示坐标: { x: rawX, y: rawY, w: rawW, h: rawH },
-      显示尺寸: { w: displayWidth, h: displayHeight },
-      原始尺寸: { w: imageWidth, h: imageHeight },
-      缩放比例: { x: scaleX.toFixed(2), y: scaleY.toFixed(2) },
-      图像坐标: { x: finalX, y: finalY, w: finalW, h: finalH }
-    });
 
     const step = isRealtime ? 3 : 1;
 
@@ -366,36 +361,53 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
 
     if (!isRealtime) {
       message.destroy();
-      // message.success(
-      //   `ROI调整: 窗位 ${calcWL.toFixed(0)} / 窗宽 ${calcWW.toFixed(0)} ` +
-      //   `(范围: [${stats.min}, ${stats.max}])`
-      // );
     }
   }, [rawGrayData, imageWidth, imageHeight, calculateStatsFromGrayData, updateWindowLevel]);
 
   // ==========================================================================
   // 鼠标事件
   // ==========================================================================
+  // 将鼠标视口坐标转换到图像 Canvas 的 CSS 本地坐标系。
+  // CSS transform 顺序：scale(sx,sy) · rotate(r)，逆变换必须反序：先 scale^-1，再 rotate^-1。
+  // 若先 rotate^-1 再 scale^-1（即旧写法），在 flip≠1 且 rotation≠0 时坐标会出错。
+  const getLocalCoordinates = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const vx = e.clientX - centerX;
+    const vy = e.clientY - centerY;
+    // 第一步：撤销 scale·flip（flipH=±1，所以 ÷(scale·flipH) 等价于 ×flipH÷scale）
+    const ux = vx * flipH / scale;
+    const uy = vy * flipV / scale;
+    // 第二步：撤销 rotation
+    const rad = -(rotation * Math.PI / 180);
+    const dx = ux * Math.cos(rad) - uy * Math.sin(rad);
+    const dy = ux * Math.sin(rad) + uy * Math.cos(rad);
+    const canvas = canvasRef.current;
+    const halfW = canvas ? canvas.clientWidth / 2 : 0;
+    const halfH = canvas ? canvas.clientHeight / 2 : 0;
+    return {
+      x: dx + halfW,
+      y: dy + halfH,
+    };
+  }, [rotation, flipH, flipV, scale]);
+
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (activeTool !== 'windowing') return;
 
     e.preventDefault();
     e.stopPropagation();
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    const { x, y } = getLocalCoordinates(e);
 
     setDragStart({ x, y });
     setDragCurrent({ x, y });
-  }, [activeTool, scale]);
+  }, [activeTool, getLocalCoordinates]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (activeTool !== 'windowing' || !dragStart) return;
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    const { x, y } = getLocalCoordinates(e);
 
     setDragCurrent({ x, y });
 
@@ -404,7 +416,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile }: UseWindowLe
       computeROI(dragStart.x, dragStart.y, x, y, true);
       lastCalcTime.current = now;
     }
-  }, [activeTool, dragStart, scale, computeROI]);
+  }, [activeTool, dragStart, getLocalCoordinates, computeROI]);
 
   const handleMouseUp = useCallback(() => {
     if (activeTool !== 'windowing' || !dragStart || !dragCurrent) {
