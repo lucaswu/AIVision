@@ -104,6 +104,14 @@ COPY weld/ /app/model/
 # 复制 OCR 工具模块（供 run_inference_pipeline.py 的 OCRRunner 使用）
 COPY OCR/utils/ /app/OCR/utils/
 
+# 将预下载的 PaddleOCR 模型缓存复制到镜像内
+# 离线构建：先在有网络的机器上运行 model/weld/scripts/download_ocr_models.sh，
+#           生成 model/weld/weight/paddleocr_cache/，再传到离线机器构建。
+# 在线构建：若 paddleocr_cache/ 为空，首次运行时 PaddleOCR 仍会自动下载到
+#           /root/.paddleocr/（由 docker-compose 的 named volume 持久化）。
+RUN mkdir -p /root/.paddleocr
+COPY weld/weight/paddleocr_cache/ /root/.paddleocr/
+
 # 设置工作目录为模型目录
 WORKDIR /app/model
 

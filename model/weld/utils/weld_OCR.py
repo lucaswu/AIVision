@@ -140,31 +140,12 @@ class OCRRunner:
                 use_gpu = False
         print(f"初始化PaddleOCR (设备: {'GPU' if use_gpu else 'CPU'})...")
 
-        weights_dir = '/app/model/weights'
-        det_model_dir = os.path.join(weights_dir, 'ch_PP-OCRv4_det_infer')
-        rec_model_dir = os.path.join(weights_dir, 'ch_PP-OCRv4_rec_infer')
-        cls_model_dir = os.path.join(weights_dir, 'ch_ppocr_mobile_v2.0_cls_infer')
-        use_local = all(os.path.exists(d) for d in [det_model_dir, rec_model_dir, cls_model_dir])
-
-        if use_local:
-            print(f"使用本地OCR模型权重: {weights_dir}")
-            self._ocr = PaddleOCR(
-                use_gpu=use_gpu,
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=True,
-                det_model_dir=det_model_dir,
-                rec_model_dir=rec_model_dir,
-                cls_model_dir=cls_model_dir,
-            )
-        else:
-            print("未找到完整本地OCR模型，尝试自动下载...")
-            self._ocr = PaddleOCR(
-                use_gpu=use_gpu,
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=True,
-            )
+        self._ocr = PaddleOCR(
+            use_gpu=use_gpu,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=True,
+        )
 
     # ------------------------------------------------------------------
     # Public API
