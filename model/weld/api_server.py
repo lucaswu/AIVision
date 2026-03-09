@@ -429,6 +429,8 @@ async def startup_event():
         print(f"CUDA device count: {torch.cuda.device_count()}")
         if torch.cuda.device_count() > 0:
             print(f"CUDA device name: {torch.cuda.get_device_name(0)}")
+    primary_weights = os.environ.get("PRIMARY_WEIGHTS", "/app/model/weights/primary-weights.pth")
+    print(f"Primary weights: {primary_weights}")
     print("=" * 60)
 
 
