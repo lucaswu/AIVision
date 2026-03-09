@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   Row,
   Col,
@@ -693,6 +693,27 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const [imageFile, setImageFile] = useState<File | undefined>(undefined);
 
+  // 图片 Blob 缓存，key = FileId，避免重复 fetch 同一张图
+  const fileBlobCacheRef = useRef<Map<string, File>>(new Map());
+
+  // 预加载单张图片到缓存（不触发渲染）
+  const preloadFile = useCallback((file: { FileId: string; FileName?: string } | null | undefined) => {
+    if (!file) return;
+    if (fileBlobCacheRef.current.has(file.FileId)) return;
+    const url = `/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`;
+    fetch(url)
+      .then(res => res.blob())
+      .then(blob => {
+        if (!fileBlobCacheRef.current.has(file.FileId)) {
+          fileBlobCacheRef.current.set(
+            file.FileId,
+            new File([blob], file.FileName || 'image.png', { type: blob.type || 'image/png' })
+          );
+        }
+      })
+      .catch(() => { /* 预加载失败静默处理 */ });
+  }, [projectId]);
+
   const {
     selectionRect,
     canvasRef,
@@ -732,13 +753,22 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setImageFile(undefined);
       return;
     }
-    // 开始加载新图片时，先清空旧图片，确保WindowLevelTool清除状态
+
+    // 命中缓存：直接使用，无需网络请求
+    const cached = fileBlobCacheRef.current.get(selectedFile.FileId);
+    if (cached) {
+      setImageFile(cached);
+      return;
+    }
+
+    // 未命中缓存：先清空旧图，再 fetch
     setImageFile(undefined);
 
     fetch(previewUrl)
       .then(res => res.blob())
       .then(blob => {
         const file = new File([blob], selectedFile.FileName || 'image.png', { type: blob.type || 'image/png' });
+        fileBlobCacheRef.current.set(selectedFile.FileId, file);
         setImageFile(file);
       })
       .catch(err => {
@@ -746,6 +776,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         message.error('图像加载失败');
       });
   }, [selectedFile, previewUrl]);
+
+  // 预加载相邻图片（前1张 + 后2张），减少切换等待时间
+  useEffect(() => {
+    if (!selectedFile || files.length === 0) return;
+    const idx = files.findIndex((f: TaskFile) => f.FileId === selectedFile.FileId);
+    if (idx === -1) return;
+    [-1, 1, 2].forEach(offset => {
+      const neighbor = files[idx + offset];
+      if (neighbor) preloadFile(neighbor);
+    });
+  }, [selectedFile, files, preloadFile]);
 
   useEffect(() => {
     if (canvasRef.current) {
@@ -2388,7 +2429,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                     display: 'block',
                     userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin') ? 'none' : 'auto',
-                    filter: isNegative ? 'invert(100%)' : 'none'
+                    filter: isNegative ? 'invert(100%)' : 'none',
+                    // 图片未就绪时隐藏 canvas，防止切换期间闪烁显示旧图或其他图
+                    visibility: imageReady ? 'visible' : 'hidden',
                   }}
                 />
 

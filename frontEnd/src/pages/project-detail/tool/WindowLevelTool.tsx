@@ -1,6 +1,16 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { message } from 'antd';
 
+// 模块级灰度数据缓存，key = "filename-filesize"，避免重复解码同一张图
+interface GrayDataCacheEntry {
+  grayData: Uint8Array;
+  width: number;
+  height: number;
+  stats: { mean: number; std: number; min: number; max: number };
+}
+const grayDataCache = new Map<string, GrayDataCacheEntry>();
+const MAX_CACHE_SIZE = 20; // 最多缓存20张图的灰度数据
+
 // Hook 入参
 interface UseWindowLevelToolProps {
   activeTool: string;
@@ -26,6 +36,17 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
   // 图片是否已加载并渲染完成
   const [imageReady, setImageReady] = useState(false);
+
+  // 用 ref 同步跟踪 imageFile，使 updateDisplay 无需将 imageFile 列入 deps，
+  // 避免 imageFile 变化时触发 updateDisplay → 用旧 rawGrayData 渲染出错误图片
+  const imageFileRef = useRef<File | undefined>(undefined);
+  imageFileRef.current = imageFile;
+
+  // 加载版本号：每次开始加载新图片时递增。
+  // rawGrayData 对应的版本号存在 grayDataVersionRef 中。
+  // renderToCanvas 对比两者，不一致说明是过期数据，直接跳过，防止旧图闪烁。
+  const loadVersionRef = useRef(0);
+  const grayDataVersionRef = useRef(0);
 
   // 窗宽窗位参数
   const [windowData, setWindowData] = useState({ ww: 255, wl: 128 });
@@ -128,6 +149,10 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
     const canvas = canvasRef.current;
     if (!canvas || !processedData || imageWidth === 0 || imageHeight === 0) return;
 
+    // 版本号不一致说明 rawGrayData 是过期数据（属于上一张图），直接跳过，防止旧图闪烁
+    if (grayDataVersionRef.current !== loadVersionRef.current) return;
+    if (!imageFileRef.current) return;
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -150,21 +175,18 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
     ctx.putImageData(imageData, 0, 0);
 
-    // 图片已渲染到 canvas，标记为就绪
-    // 使用 requestAnimationFrame 确保 Canvas 绘制指令已提交给浏览器，避免 SVG 抢先显示的闪烁
-    requestAnimationFrame(() => {
-      setImageReady(true);
-    });
+    // 直接同步标记就绪（不用 rAF），canvas 有 visibility:hidden 保护，
+    // 不会在 imageReady=false 期间显示，故无需 rAF 来避免 SVG 提前出现的闪烁
+    setImageReady(true);
   }, [imageWidth, imageHeight]);
 
   // ==========================================================================
   // 更新显示
   // ==========================================================================
   const updateDisplay = useCallback(() => {
-    // 关键修复：如果你没有 imageFile，绝对不要尝试渲染，即使 rawGrayData 还是旧值
-    // 这防止了在切换文件（imageFile=undefined）但状态清理尚未完成的短暂间隙中，
-    // 旧数据被错误地绘制到（刚刚新建的）Canvas 上。
-    if (!imageFile || !rawGrayData) return;
+    // 用 ref 检查 imageFile，避免将 imageFile 列入 deps（否则 imageFile 变化时会
+    // 立即触发此 effect，此时 rawGrayData 还是旧图数据，导致渲染出错误图片/闪屏）
+    if (!imageFileRef.current || !rawGrayData) return;
 
     const processed = applyWindowLevelToGrayData(
       rawGrayData,
@@ -173,7 +195,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
     );
 
     renderToCanvas(processed);
-  }, [imageFile, rawGrayData, windowData, applyWindowLevelToGrayData, renderToCanvas]);
+  }, [rawGrayData, windowData, applyWindowLevelToGrayData, renderToCanvas]);
 
   // ==========================================================================
   // 更新窗宽窗位
@@ -212,11 +234,41 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
       return;
     }
 
-    // 开始加载新图片时，立即标记为未就绪
+    // 切换新图片时，递增加载版本号，使所有过期的 renderToCanvas 调用失效
+    loadVersionRef.current += 1;
+    const myVersion = loadVersionRef.current;
+
+    // 立即清空旧数据和画布，防止 updateDisplay 用旧灰度数据渲染新图
     setImageReady(false);
+    setRawGrayData(null);
+    setImageWidth(0);
+    setImageHeight(0);
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // 取消标志：effect 清理时置 true，阻止过期的异步回调更新状态（竞态保护）
+    let cancelled = false;
 
     const loadImage = async () => {
       try {
+        const cacheKey = `${imageFile.name}-${imageFile.size}`;
+
+        // 优先使用缓存的灰度数据，避免重复解码
+        const cached = grayDataCache.get(cacheKey);
+        if (cached) {
+          if (cancelled) return;
+          grayDataVersionRef.current = myVersion;
+          setRawGrayData(cached.grayData);
+          setImageWidth(cached.width);
+          setImageHeight(cached.height);
+          imageStatsRef.current = cached.stats;
+          updateWindowLevel(255, 128);
+          return;
+        }
+
         // 创建临时Image对象加载
         const img = new Image();
         const url = URL.createObjectURL(imageFile);
@@ -226,6 +278,8 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
           img.onerror = reject;
           img.src = url;
         });
+
+        if (cancelled) { URL.revokeObjectURL(url); return; }
 
         const width = img.naturalWidth;
         const height = img.naturalHeight;
@@ -250,6 +304,8 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
         const imageData = tempCtx.getImageData(0, 0, width, height);
         const rgbaData = imageData.data;
 
+        if (cancelled) { URL.revokeObjectURL(url); return; }
+
         // 转换为单通道灰度数据（这才是真正的"原始数据"）
         const grayData = new Uint8Array(width * height);
         for (let i = 0; i < grayData.length; i++) {
@@ -262,7 +318,10 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
           );
         }
 
-        // 保存原始数据
+        if (cancelled) { URL.revokeObjectURL(url); return; }
+
+        // 保存原始数据（记录版本号，确保 renderToCanvas 能识别这批数据属于当前加载）
+        grayDataVersionRef.current = myVersion;
         setRawGrayData(grayData);
         setImageWidth(width);
         setImageHeight(height);
@@ -273,9 +332,12 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
         if (stats) {
           imageStatsRef.current = stats;
 
-          console.log(`图像加载完成: ${width}x${height}`);
-          console.log(`像素范围: [${stats.min}, ${stats.max}]`);
-          console.log(`均值: ${stats.mean.toFixed(2)}, 标准差: ${stats.std.toFixed(2)}`);
+          // 存入缓存（LRU 简化版：超过上限时删除最旧的条目）
+          if (grayDataCache.size >= MAX_CACHE_SIZE) {
+            const firstKey = grayDataCache.keys().next().value;
+            if (firstKey) grayDataCache.delete(firstKey);
+          }
+          grayDataCache.set(cacheKey, { grayData, width, height, stats });
 
           // 默认使用全范围显示，与原始图片明暗一致
           updateWindowLevel(255, 128);
@@ -286,12 +348,17 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
         URL.revokeObjectURL(url);
 
       } catch (error) {
-        console.error('图像加载失败:', error);
-        message.error('图像加载失败');
+        if (!cancelled) {
+          console.error('图像加载失败:', error);
+          message.error('图像加载失败');
+        }
       }
     };
 
     loadImage();
+
+    // effect 清理：标记取消，防止旧请求的异步回调污染新图片的状态
+    return () => { cancelled = true; };
   }, [imageFile, calculateStatsFromGrayData, updateWindowLevel]);
 
   // 监听窗宽窗位变化，更新显示
