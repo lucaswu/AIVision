@@ -143,6 +143,9 @@ class RFDetrDetectionModel:
             checkpoint_kwargs.pop("device", None)
             model_kwargs.update(checkpoint_kwargs)
         if device:
+            # rfdetr 只接受 'cpu'/'cuda'/'mps'，将 'cuda:0' 等规范化为 'cuda'
+            if device.startswith("cuda"):
+                device = "cuda"
             model_kwargs["device"] = device
         model_cls = RFDETRMedium if self.model_variant == "medium" else RFDETR2XLarge
         try:
@@ -199,6 +202,8 @@ class RFDetrSegmentationModel:
         self.confidence = confidence
         kwargs: Dict[str, Any] = {"pretrain_weights": str(self.model_path)}
         if device:
+            if device.startswith("cuda"):
+                device = "cuda"
             kwargs["device"] = device
         self.model = RFDETRSeg2XLarge(**kwargs)
         self.class_map = self._build_class_map()
