@@ -172,6 +172,7 @@ interface HistorySnapshot {
   rects: SavedRect[];
   polygons: SavedPolygon[];
   circles: SavedCircle[];
+  pixelRatio: number; // 记录当时的标定定标比例
 }
 
 // --- 数学工具函数 ---
@@ -431,7 +432,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 原始数据引用 (用于不可用的Reset状态判断) ---
   const originalFilmInfoRef = useRef<any>({});
   const originalDefectsRef = useRef<HistorySnapshot>({
-    rects: [], polygons: [], circles: []
+    rects: [], polygons: [], circles: [], pixelRatio: 1
   });
 
   // --- 历史记录状态 ---
@@ -453,26 +454,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     newRects: SavedRect[],
     newPolys: SavedPolygon[],
     newCircles: SavedCircle[],
-    recordHistory: boolean = true
+    recordHistory: boolean = true,
+    newPixelRatio: number = pixelRatio
   ) => {
     // 1. 更新 React 状态 (渲染用)
     setDefectRects(newRects);
     setDefectPolygons(newPolys);
     setDefectCircles(newCircles);
+    setPixelRatio(newPixelRatio);
 
     if (recordHistory) {
       // 2. 截断未来分支 (如果当前不在最新)
-      const currentHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+      const nextIndex = historyIndexRef.current + 1;
+      const currentHistory = historyRef.current.slice(0, nextIndex);
 
       // 3. 构造新快照
-      const snapshot: HistorySnapshot = {
+      const newSnapshot: HistorySnapshot = {
         rects: JSON.parse(JSON.stringify(newRects)),
         polygons: JSON.parse(JSON.stringify(newPolys)),
-        circles: JSON.parse(JSON.stringify(newCircles))
+        circles: JSON.parse(JSON.stringify(newCircles)),
+        pixelRatio: newPixelRatio
       };
 
       // 4. 入栈
-      const nextHistory = [...currentHistory, snapshot];
+      const nextHistory = [...currentHistory, newSnapshot];
 
       // 5. 限制历史长度（如50步）
       if (nextHistory.length > 50) nextHistory.shift();
@@ -1223,9 +1228,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
     else if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
       setIsCalibrating(false);
-      const dx = calibrateLine.x2 - calibrateLine.x1;
-      const dy = calibrateLine.y2 - calibrateLine.y1;
+      // 将测量线的起止点转换为图片的真实坐标
+      const p1 = calculateTrueCoordinates(calibrateLine.x1, calibrateLine.y1);
+      const p2 = calculateTrueCoordinates(calibrateLine.x2, calibrateLine.y2);
+      
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      // 当实际距离大于5像素才认为有效，避免误触
       if (dist > 5) {
         setMeasuredPixelDistance(Math.round(dist)); // 四舍五入为整数
         setCalibrateModalVisible(true);
@@ -1277,8 +1288,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const handleCalibrateConfirm = () => {
     if (actualLength && measuredPixelDistance > 0) {
       const ratio = actualLength / measuredPixelDistance;
-      setPixelRatio(parseFloat(ratio.toFixed(4)));
-      message.success(`标定成功：1px ≈ ${ratio.toFixed(4)}mm`);
+      const newPixelRatio = parseFloat(ratio.toFixed(4));
+      
+      // 保存至历史记录，以便能撤销定标操作
+      updateAllDefects(defectRects, defectPolygons, defectCircles, true, newPixelRatio);
+      
+      message.success(`标定成功：1px ≈ ${newPixelRatio}mm`);
       setCalibrateModalVisible(false);
       setCalibrateLine(null);
       // 如果是从测量距离触发的标定，标定完成后进入测量模式
@@ -1333,12 +1348,26 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         rx2 = Math.max(p1.x, p2.x); ry2 = Math.max(p1.y, p2.y);
       }
 
+      const trueW = rx2 - rx1;
+      const trueH = ry2 - ry1;
+      
+      const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+      let sizeStr = '';
+      if (hasScale) {
+        // px面积 * (mm/px)^2 = 真实面积 (mm^2)
+        const areaMm2 = (trueW * trueH * pixelRatio * pixelRatio).toFixed(2);
+        sizeStr = `${areaMm2}mm²`;
+      } else {
+        const areaPx = trueW * trueH;
+        sizeStr = `${areaPx.toFixed(2)}px²`;
+      }
+
       const newRect: SavedRect = {
         ...pendingShape,
-        x: rx1, y: ry1, w: rx2 - rx1, h: ry2 - ry1,
-        label, color, ...defaultExtra, size: ''
+        x: rx1, y: ry1, w: trueW, h: trueH,
+        label, color, ...defaultExtra, size: sizeStr
       };
-      updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true);
+      updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'polygon') {
       const newPoints = pendingShape.points.map((p: { x: number; y: number }) => {
         const rawX = p.x * widthRatio;
@@ -1348,24 +1377,59 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         }
         return { x: rawX, y: rawY };
       });
+
+      let sizeStr = '';
+      if (newPoints.length >= 3) {
+        // 多边形面积计算（鞋带公式）
+        let areaPx = 0;
+        for (let i = 0; i < newPoints.length; i++) {
+          const p1 = newPoints[i];
+          const p2 = newPoints[(i + 1) % newPoints.length];
+          areaPx += (p1.x * p2.y - p2.x * p1.y);
+        }
+        areaPx = Math.abs(areaPx) / 2;
+        
+        const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+        if (hasScale) {
+          const areaMm2 = (areaPx * pixelRatio * pixelRatio).toFixed(2);
+          sizeStr = `${areaMm2}mm²`;
+        } else {
+          sizeStr = `${areaPx.toFixed(2)}px²`;
+        }
+      }
+
       const newPoly: SavedPolygon = {
         points: newPoints,
-        label, color, ...defaultExtra
+        label, color, ...defaultExtra, size: sizeStr
       };
-      updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true);
+      updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'circle') {
       let cx = pendingShape.x * widthRatio;
       let cy = pendingShape.y * heightRatio;
       if (needsFwdTransform) {
         ({ x: cx, y: cy } = forwardTransformPoint(cx, cy, trueImageW, trueImageH, corrRotation, corrFlipH));
       }
+      const trueR = pendingShape.r * widthRatio;
+      
+      let sizeStr = '';
+      const areaPx = Math.PI * trueR * trueR;
+      const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+      
+      if (hasScale) {
+        // 圆形真实面积 (mm^2)
+        const areaMm2 = (areaPx * pixelRatio * pixelRatio).toFixed(2);
+        sizeStr = `${areaMm2}mm²`;
+      } else {
+        sizeStr = `${areaPx.toFixed(2)}px²`;
+      }
+
       const newCircle: SavedCircle = {
         ...pendingShape,
         x: cx, y: cy,
-        r: pendingShape.r * widthRatio,
-        label, color, ...defaultExtra
+        r: trueR,
+        label, color, ...defaultExtra, size: sizeStr
       };
-      updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true);
+      updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true, pixelRatio);
     }
 
     // 关闭弹窗并清理
@@ -1443,17 +1507,56 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               console.warn('Failed to parse defect geometry:', dr.Geometry);
             }
 
-            const baseInfo = {
-              label: dr.DefectName || '未知',
-              color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
-              position: dr.Position || '',
-              size: dr.Size || '',
-              quality: dr.Grade || '',
-              remark: dr.Remark || '',
-              defectRecordId: dr.DefectRecordId,
-              // 标记该坐标来自 AI（矫正后坐标系），渲染时需逆变换
-              _isCorrectedCoord: true,
-            };
+              let sizeStr = dr.Size || '';
+              
+              if (!sizeStr && geometry) {
+                try {
+                  const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+                  if (geometry.type === 'rect' && geometry.w && geometry.h) {
+                    const areaPx = geometry.w * geometry.h;
+                    if (hasScale) {
+                      sizeStr = `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²`;
+                    } else {
+                      sizeStr = `${areaPx.toFixed(2)}px²`;
+                    }
+                  } else if (geometry.type === 'circle' && geometry.r) {
+                    const areaPx = Math.PI * geometry.r * geometry.r;
+                    if (hasScale) {
+                      sizeStr = `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²`;
+                    } else {
+                      sizeStr = `${areaPx.toFixed(2)}px²`;
+                    }
+                  } else if (geometry.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 3) {
+                    let areaPx = 0;
+                    const pts = geometry.points;
+                    for (let i = 0; i < pts.length; i++) {
+                      const p1 = pts[i];
+                      const p2 = pts[(i + 1) % pts.length];
+                      areaPx += (p1.x * p2.y - p2.x * p1.y);
+                    }
+                    areaPx = Math.abs(areaPx) / 2;
+                    if (hasScale) {
+                      sizeStr = `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²`;
+                    } else {
+                      sizeStr = `${areaPx.toFixed(2)}px²`;
+                    }
+                  }
+                } catch (e) {
+                  // If size calc fails, leave empty
+                }
+              }
+
+              const baseInfo = {
+                label: dr.DefectName || '未知',
+                color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
+                position: dr.Position || '',
+                size: sizeStr,
+                quality: dr.Grade || '',
+                remark: dr.Remark || '',
+                defectRecordId: dr.DefectRecordId,
+                // 标记该坐标来自 AI（矫正后坐标系），渲染时需逆变换
+                _isCorrectedCoord: true,
+              };
 
             if (geometry?.type === 'circle') {
               loadedCircles.push({
@@ -1487,7 +1590,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           const initialSnapshot = {
             rects: JSON.parse(JSON.stringify(loadedRects)),
             polygons: JSON.parse(JSON.stringify(loadedPolygons)),
-            circles: JSON.parse(JSON.stringify(loadedCircles))
+            circles: JSON.parse(JSON.stringify(loadedCircles)),
+            pixelRatio: 1
           };
           originalDefectsRef.current = initialSnapshot;
 
@@ -1556,6 +1660,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       autoFitFileIdRef.current = null; // 重置，允许新图片触发自动适配
       resetWindow();
       setScale(1);
+      setPixelRatio(1); // 每次切换图片，重置物理尺寸定标比例
       // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
       setRotation(selectedFile.CorrectionRotation ?? 0);
       setFlipH(selectedFile.CorrectionFlip ? -1 : 1);
@@ -1576,7 +1681,55 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     if (isInitialLoadRef.current || !selectedFile) return;
     autoSaveDefects();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defectRects, defectPolygons, defectCircles]);
+  }, [defectRects, defectPolygons, defectCircles, pixelRatio]);
+
+  // --- 监听 pixelRatio 变化，为尚未计算尺寸或者只有像素尺寸的 AI 缺陷补充真实物理尺寸 ---
+  useEffect(() => {
+    if (pixelRatio && pixelRatio > 0 && pixelRatio !== 1) {
+      let changed = false;
+
+      const newRects = defectRects.map(dr => {
+        if ((!dr.size || dr.size.endsWith('px²')) && dr.w && dr.h) {
+          changed = true;
+          const areaPx = dr.w * dr.h;
+          return { ...dr, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        }
+        return dr;
+      });
+
+      const newCircles = defectCircles.map(dc => {
+        if ((!dc.size || dc.size.endsWith('px²')) && dc.r) {
+          changed = true;
+          const areaPx = Math.PI * dc.r * dc.r;
+          return { ...dc, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        }
+        return dc;
+      });
+
+      const newPolys = defectPolygons.map(dp => {
+        if ((!dp.size || dp.size.endsWith('px²')) && dp.points && dp.points.length >= 3) {
+          changed = true;
+          let areaPx = 0;
+          const pts = dp.points;
+          for (let i = 0; i < pts.length; i++) {
+            const p1 = pts[i];
+            const p2 = pts[(i + 1) % pts.length];
+            areaPx += (p1.x * p2.y - p2.x * p1.y);
+          }
+          areaPx = Math.abs(areaPx) / 2;
+          return { ...dp, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        }
+        return dp;
+      });
+
+      if (changed) {
+        setDefectRects(newRects);
+        setDefectCircles(newCircles);
+        setDefectPolygons(newPolys);
+        // 不触发 updateHistoryState，因为这只是补充显示信息，不算用户编辑
+      }
+    }
+  }, [pixelRatio]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -1863,7 +2016,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       const prevIndex = historyIndexRef.current - 1;
       const snapshot = historyRef.current[prevIndex];
       // 恢复快照，但不记录历史（recordHistory=false）
-      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false);
+      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false, snapshot.pixelRatio);
       // 单独更新索引
       setHistoryIndex(prevIndex);
       historyIndexRef.current = prevIndex;
@@ -1876,7 +2029,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       const nextIndex = historyIndexRef.current + 1;
       const snapshot = historyRef.current[nextIndex];
       // 恢复快照，不记录历史
-      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false);
+      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false, snapshot.pixelRatio);
       setHistoryIndex(nextIndex);
       historyIndexRef.current = nextIndex;
       message.success("已重做");
@@ -1894,21 +2047,19 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       JSON.parse(JSON.stringify(original.rects)),
       JSON.parse(JSON.stringify(original.polygons)),
       JSON.parse(JSON.stringify(original.circles)),
-      true
+      true,
+      original.pixelRatio
     );
     message.success("缺陷信息已恢复初始状态");
   };
 
   // 计算重置按钮是否可用：如果当前状态与原始状态完全一致（深比较），则不可用
   const isResetDisabled = useMemo(() => {
-    // 简单比较 JSON 字符串
-    // 注意：顺序可能会影响，但在严格控制下一般没问题。更严谨可以用 lodash.isEqual
-    // 这里为了性能和简单，假设顺序一致性。由于我们总是整体替换，顺序应该是一致的。
     if (!selectedFile) return true;
-    const current = { rects: defectRects, polygons: defectPolygons, circles: defectCircles };
-    // 忽略 undefined 差异（JSON.stringify 会把 undefined 字段去掉）
+    const current = { rects: defectRects, polygons: defectPolygons, circles: defectCircles, pixelRatio };
+    // 忽略 undefined 差异
     return JSON.stringify(current) === JSON.stringify(originalDefectsRef.current);
-  }, [defectRects, defectPolygons, defectCircles, selectedFile]);
+  }, [defectRects, defectPolygons, defectCircles, pixelRatio, selectedFile]);
 
   // 切换单个缺陷项的展开/收起状态
   const toggleDefectExpand = (key: string) => {
@@ -3144,6 +3295,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   flipH={flipH}
                   flipV={flipV}
                   container={canvasContainer}
+                  imageRatioX={(originalSize.w > 0 && imgSize.w > 0) ? originalSize.w / imgSize.w : 1}
+                  imageRatioY={(originalSize.h > 0 && imgSize.h > 0) ? originalSize.h / imgSize.h : 1}
                 />
               </div>
             ) : (

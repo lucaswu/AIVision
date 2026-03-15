@@ -12,6 +12,8 @@ interface GeometricMeasureToolProps {
   flipH?: number;    
   flipV?: number;    
   container?: HTMLDivElement | null;
+  imageRatioX?: number;
+  imageRatioY?: number;
 }
 
 const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
@@ -21,10 +23,12 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
   height,
   pixelRatio = 1,
   scale = 1,
-  rotation = 0, 
+  rotation = 0,
   flipH = 1,    
   flipV = 1,    
   container, 
+  imageRatioX,
+  imageRatioY
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
@@ -100,19 +104,25 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
 
   const measureData = useMemo(() => {
     if (!startPoint || !currPoint) return null;
-    const dx = currPoint.x - startPoint.x;
-    const dy = currPoint.y - startPoint.y;
+    let dx = currPoint.x - startPoint.x;
+    let dy = currPoint.y - startPoint.y;
+
+    if (imageRatioX !== undefined) dx *= imageRatioX;
+    if (imageRatioY !== undefined) dy *= imageRatioY;
 
     const distPx = Math.sqrt(dx * dx + dy * dy);
     const lengthMm = (distPx * pixelRatio).toFixed(2);
-    let angleVal = Math.abs((Math.atan(dy / dx) * 180) / Math.PI);
+    // 角度计算使用原始的 dx dy 以反映屏幕上的角度
+    const screenDx = currPoint.x - startPoint.x;
+    const screenDy = currPoint.y - startPoint.y;
+    let angleVal = Math.abs((Math.atan(screenDy / screenDx) * 180) / Math.PI);
     if (isNaN(angleVal)) angleVal = 0;
 
     return {
       length: lengthMm,
       angle: angleVal.toFixed(2),
     };
-  }, [startPoint, currPoint, pixelRatio]);
+  }, [startPoint, currPoint, pixelRatio, imageRatioX, imageRatioY]);
 
   // 文字位置计算
   const textLayout = useMemo(() => {
