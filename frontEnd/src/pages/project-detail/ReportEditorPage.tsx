@@ -295,6 +295,71 @@ function isAutoPosition(pos: string): boolean {
   return /^[^~\s]+->.+~/.test(pos);
 }
 
+/**
+ * 根据缺陷中心点和椭圆参数，计算缺陷在时钟位置系统中所处的区间。
+ * 时钟定义：12'在顶部（-π/2），顺时针方向，共12个等分区间。
+ * 通过将椭圆归一化到单位圆求参数角，避免长短轴不等带来的偏差。
+ * @returns 如 "2'-3'" 的字符串，无法计算时返回空字符串
+ */
+function getClockPositionLabel(
+  ax: number, ay: number,
+  cx: number, cy: number,
+  rx: number, ry: number
+): string {
+  if (rx <= 0 || ry <= 0) return '';
+  const CLOCK_LABELS = ["12'", "1'", "2'", "3'", "4'", "5'", "6'", "7'", "8'", "9'", "10'", "11'"];
+  // 归一化到单位圆后求参数角 φ（椭圆参数方程 x=cx+rx·cosφ, y=cy+ry·sinφ）
+  const phi = Math.atan2((ay - cy) / ry, (ax - cx) / rx);
+  // 12' 位于 φ=-π/2，平移使 12' 对应 0，顺时针增大
+  const shifted = ((phi + Math.PI / 2) + 2 * Math.PI) % (2 * Math.PI);
+  // 12 等分，每扇区 2π/12
+  const sectorIdx = Math.floor(shifted / (2 * Math.PI / 12)) % 12;
+  const nextIdx = (sectorIdx + 1) % 12;
+  return `${CLOCK_LABELS[sectorIdx]}-${CLOCK_LABELS[nextIdx]}`;
+}
+
+/**
+ * 从 WeldLocationRect 列表中找到离给定点最近的椭圆，返回其 cx/cy/rx/ry。
+ */
+function getNearestEllipseParams(
+  shapes: WeldLocationRect[],
+  ax: number, ay: number
+): { cx: number; cy: number; rx: number; ry: number } | null {
+  if (shapes.length === 0) return null;
+  let bestShape = shapes[0];
+  if (shapes.length > 1) {
+    let minDist = Infinity;
+    for (const s of shapes) {
+      const kps = s.keypoints;
+      const ecx = kps.length >= 2
+        ? (Math.max(...kps.map(k => k.x)) + Math.min(...kps.map(k => k.x))) / 2
+        : (s.x1 + s.x2) / 2;
+      const ecy = kps.length >= 2
+        ? (Math.max(...kps.map(k => k.y)) + Math.min(...kps.map(k => k.y))) / 2
+        : (s.y1 + s.y2) / 2;
+      const d = Math.hypot(ax - ecx, ay - ecy);
+      if (d < minDist) { minDist = d; bestShape = s; }
+    }
+  }
+  const kps = bestShape.keypoints;
+  if (kps.length >= 2) {
+    const xs = kps.map(k => k.x);
+    const ys = kps.map(k => k.y);
+    return {
+      cx: (Math.max(...xs) + Math.min(...xs)) / 2,
+      cy: (Math.max(...ys) + Math.min(...ys)) / 2,
+      rx: (Math.max(...xs) - Math.min(...xs)) / 2,
+      ry: (Math.max(...ys) - Math.min(...ys)) / 2,
+    };
+  }
+  return {
+    cx: (bestShape.x1 + bestShape.x2) / 2,
+    cy: (bestShape.y1 + bestShape.y2) / 2,
+    rx: (bestShape.x2 - bestShape.x1) / 2,
+    ry: (bestShape.y2 - bestShape.y1) / 2,
+  };
+}
+
 const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   taskId,
   projectId,
@@ -1409,10 +1474,19 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         ? formatDefectPosition(rx1, rx2, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
         : '';
 
+      // 椭圆时钟位置（大口径管，存在焊缝椭圆时追加）
+      const rectCenterX = (rx1 + rx2) / 2;
+      const rectCenterY = (ry1 + ry2) / 2;
+      const rectEllipse = getNearestEllipseParams(weldLocationShapes, rectCenterX, rectCenterY);
+      const rectClockPos = rectEllipse
+        ? getClockPositionLabel(rectCenterX, rectCenterY, rectEllipse.cx, rectEllipse.cy, rectEllipse.rx, rectEllipse.ry)
+        : '';
+      const rectFinalPos = [posStr, rectClockPos].filter(Boolean).join(' ');
+
       const newRect: SavedRect = {
         ...pendingShape,
         x: rx1, y: ry1, w: trueW, h: trueH,
-        label, color, ...defaultExtra, size: sizeStr, position: posStr
+        label, color, ...defaultExtra, size: sizeStr, position: rectFinalPos
       };
       updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'polygon') {
@@ -1447,15 +1521,25 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       // 自动计算位置（多边形：取变换后点的 X 极值）
       const polyXs = newPoints.map((p: { x: number; y: number }) => p.x);
+      const polyYs = newPoints.map((p: { x: number; y: number }) => p.y);
       const polyMinX = Math.min(...polyXs);
       const polyMaxX = Math.max(...polyXs);
       const polyPosStr = effectiveOrigin
         ? formatDefectPosition(polyMinX, polyMaxX, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
         : '';
 
+      // 椭圆时钟位置（大口径管）
+      const polyCenterX = (polyMinX + polyMaxX) / 2;
+      const polyCenterY = (Math.min(...polyYs) + Math.max(...polyYs)) / 2;
+      const polyEllipse = getNearestEllipseParams(weldLocationShapes, polyCenterX, polyCenterY);
+      const polyClockPos = polyEllipse
+        ? getClockPositionLabel(polyCenterX, polyCenterY, polyEllipse.cx, polyEllipse.cy, polyEllipse.rx, polyEllipse.ry)
+        : '';
+      const polyFinalPos = [polyPosStr, polyClockPos].filter(Boolean).join(' ');
+
       const newPoly: SavedPolygon = {
         points: newPoints,
-        label, color, ...defaultExtra, size: sizeStr, position: polyPosStr
+        label, color, ...defaultExtra, size: sizeStr, position: polyFinalPos
       };
       updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'circle') {
@@ -1483,11 +1567,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         ? formatDefectPosition(cx - trueR, cx + trueR, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
         : '';
 
+      // 椭圆时钟位置（大口径管）
+      const circleEllipse = getNearestEllipseParams(weldLocationShapes, cx, cy);
+      const circleClockPos = circleEllipse
+        ? getClockPositionLabel(cx, cy, circleEllipse.cx, circleEllipse.cy, circleEllipse.rx, circleEllipse.ry)
+        : '';
+      const circleFinalPos = [circlePosStr, circleClockPos].filter(Boolean).join(' ');
+
       const newCircle: SavedCircle = {
         ...pendingShape,
         x: cx, y: cy,
         r: trueR,
-        label, color, ...defaultExtra, size: sizeStr, position: circlePosStr
+        label, color, ...defaultExtra, size: sizeStr, position: circleFinalPos
       };
       updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true, pixelRatio);
     }
@@ -1554,6 +1645,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       defectRecordAPI.getByTaskFileId(selectedFile.TaskFileId).then(resp => {
         // 在加载回调中同步解析本张图片的0点（优先 originPoint state，降级读取 selectedFile.DefectPosition）
         // 不能依赖 defectOriginPoint state（它在 setDefectOriginPoint 之后才更新，异步竞争）
+        // 同理，直接解析 WeldLocation，不能依赖 weldLocationShapes state（异步竞争）
+        const loadTimeWeldShapes: WeldLocationRect[] = (() => {
+          if (!selectedFile?.WeldLocation) return [];
+          try {
+            const dets: Array<{ bbox: number[]; keypoints: Array<{ id: number; x: number; y: number }> }> =
+              JSON.parse(selectedFile.WeldLocation);
+            if (!Array.isArray(dets) || dets.length === 0) return [];
+            return dets.map(det => {
+              const [x1, y1, x2, y2] = det.bbox;
+              const kps = (det.keypoints || []).filter(k => k.x > 1 && k.y > 1).map(k => ({ x: k.x, y: k.y }));
+              return { x1, y1, x2, y2, keypoints: kps };
+            });
+          } catch { return []; }
+        })();
+
         let loadTimeOrigin: { x: number; y: number } | null = originPoint;
         let loadTimeOriginLabel = '+';
         if (!loadTimeOrigin && selectedFile?.DefectPosition) {
@@ -1642,6 +1748,29 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 1) {
                   const xs = geometry.points.map((p: { x: number }) => p.x);
                   posStr = formatDefectPosition(Math.min(...xs), Math.max(...xs), loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                }
+              }
+
+              // 追加椭圆时钟位置（大口径管，仅当 posStr 为空或自动格式时才计算）
+              if (loadTimeWeldShapes.length > 0 && (!posStr || isAutoPosition(posStr))) {
+                let defCx: number | null = null, defCy: number | null = null;
+                if (geometry?.type === 'rect' && geometry.w != null) {
+                  defCx = geometry.x + geometry.w / 2;
+                  defCy = geometry.y + geometry.h / 2;
+                } else if (geometry?.type === 'circle' && geometry.r != null) {
+                  defCx = geometry.x; defCy = geometry.y;
+                } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 1) {
+                  const xs = geometry.points.map((p: { x: number }) => p.x);
+                  const ys = geometry.points.map((p: { y: number }) => p.y);
+                  defCx = (Math.min(...xs) + Math.max(...xs)) / 2;
+                  defCy = (Math.min(...ys) + Math.max(...ys)) / 2;
+                }
+                if (defCx !== null && defCy !== null) {
+                  const ellipse = getNearestEllipseParams(loadTimeWeldShapes, defCx, defCy);
+                  if (ellipse) {
+                    const clockPos = getClockPositionLabel(defCx, defCy, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
+                    if (clockPos) posStr = [posStr, clockPos].filter(Boolean).join(' ');
+                  }
                 }
               }
 
@@ -2264,10 +2393,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             </Select>
           ) : (
             // 收起时只显示类型标签
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ color: item.color, fontSize: 14 }}>●</span>
-              <span style={{ color: '#262626', fontSize: 13 }}>{item.label}</span>
-              {item.position && <span style={{ color: '#8c8c8c', fontSize: 12 }}>({item.position})</span>}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: item.color, fontSize: 14 }}>●</span>
+                <span style={{ color: '#262626', fontSize: 13 }}>{item.label}</span>
+              </div>
+              {item.position && <span style={{ color: '#8c8c8c', fontSize: 12, paddingLeft: 20 }}>({item.position})</span>}
             </div>
           )}
 
