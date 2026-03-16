@@ -108,7 +108,7 @@ public class TaskFile {
     @JsonProperty("WeldLocation")
     private String weldLocation;
 
-    // --- 新增：缺陷位置检测2结果 (D 路径，location_1.pt，仅存center_mark原点) ---
+    // --- 新增：缺陷位置检测2结果 (D 路径，location_1.pt，完整JSON含origin_text/detections) ---
     @Column(name = "defect_position", columnDefinition = "TEXT")
     @JsonProperty("DefectPosition")
     private String defectPosition;

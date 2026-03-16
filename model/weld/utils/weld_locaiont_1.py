@@ -69,6 +69,7 @@ class WeldDefectPositionDetector:
             "positioning_type":  int | None,   # 0=center, 1=edge, None=not detected
             "origin_x":          float | None,
             "origin_y":          float | None,
+            "origin_text":       str | None,   # OCR text of chosen edge mark; None for center_mark
             "detections": [
                 {
                     "class_id":   int,
@@ -302,15 +303,16 @@ class WeldDefectPositionDetector:
 
     def _calculate_origin(self, detections: List[Dict]):
         """
-        Calculate origin (x, y) and positioning_type from raw detections.
+        Calculate origin (x, y), positioning_type, and origin_text from raw detections.
 
         Returns:
-            (origin_x, origin_y, positioning_type)  — each may be None.
+            (origin_x, origin_y, positioning_type, origin_text)  — each may be None.
+            origin_text is the OCR text of the chosen edge mark, or None for center_mark.
         """
         center_marks = [d for d in detections if d['class_id'] == 0]
         if center_marks:
             best = max(center_marks, key=lambda x: x['confidence'])
-            return best['center_x'], best['center_y'], 0
+            return best['center_x'], best['center_y'], 0, None
 
         left_marks  = [d for d in detections if d['class_id'] in [1, 3]]
         right_marks = [d for d in detections if d['class_id'] in [2, 4]]
@@ -323,17 +325,17 @@ class WeldDefectPositionDetector:
             origin_side = self._compare_marks(
                 best_left['text'], best_right['text'], left_type, right_type)
             chosen = best_left if origin_side == 'left' else best_right
-            return chosen['center_x'], chosen['center_y'], 1
+            return chosen['center_x'], chosen['center_y'], 1, chosen.get('text')
 
         if left_marks:
             best = max(left_marks, key=lambda x: x['confidence'])
-            return best['center_x'], best['center_y'], 1
+            return best['center_x'], best['center_y'], 1, best.get('text')
 
         if right_marks:
             best = max(right_marks, key=lambda x: x['confidence'])
-            return best['center_x'], best['center_y'], 1
+            return best['center_x'], best['center_y'], 1, best.get('text')
 
-        return None, None, None
+        return None, None, None, None
 
     # ------------------------------------------------------------------
     # Public API
@@ -395,13 +397,14 @@ class WeldDefectPositionDetector:
                 'text':       text,
             })
 
-        origin_x, origin_y, positioning_type = self._calculate_origin(detections)
+        origin_x, origin_y, positioning_type, origin_text = self._calculate_origin(detections)
 
         return {
             'detected':         origin_x is not None,
             'positioning_type': positioning_type,
             'origin_x':         origin_x,
             'origin_y':         origin_y,
+            'origin_text':      origin_text,
             'detections':       detections,
         }
 

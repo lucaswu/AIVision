@@ -178,7 +178,7 @@ public class TaskProcessService {
                             if (!weldLocNode.isMissingNode() && weldLocNode.isArray()) {
                                 tf.setWeldLocation(weldLocNode.toString());
                             }
-                            // 解析缺陷位置检测2结果（D 路径，仅 center_mark 原点）
+                            // 解析缺陷位置检测2结果（D 路径，含 origin_text、detections 完整数据）
                             JsonNode defectPosNode = corrMeta.path("defect_position");
                             if (!defectPosNode.isMissingNode() && defectPosNode.isObject()) {
                                 tf.setDefectPosition(defectPosNode.toString());

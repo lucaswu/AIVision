@@ -264,6 +264,37 @@ function forwardTransformPoint(
   return { x, y };
 }
 
+/**
+ * 根据缺陷框X轴范围和原点位置，生成位置描述字符串。
+ * 格式: +->左边距离~右边距离{px|mm}
+ * 左右距离 = 边到原点的像素差，向右为正，向左为负。
+ * 若 pixelRatio > 0 且 !== 1，则乘以 pixelRatio 并以 mm 为单位；否则以 px 为单位。
+ * @param minX   缺陷框最小 X 像素坐标（矫正后坐标系）
+ * @param maxX   缺陷框最大 X 像素坐标（矫正后坐标系）
+ * @param originX 0点的 X 像素坐标（矫正后坐标系）
+ * @param pixelRatio 物理标定比例（mm/px），未标定时传 1
+ * @param originLabel 0点来源标签：十字准心传 '+'，边缘标记传识别到的字母/数字（如 'C'、'1'）
+ */
+function formatDefectPosition(minX: number, maxX: number, originX: number, pixelRatio: number, originLabel = '+'): string {
+  const rawLeft = minX - originX;
+  const rawRight = maxX - originX;
+  const calibrated = pixelRatio > 0 && pixelRatio !== 1;
+  if (calibrated) {
+    const leftMm = (rawLeft * pixelRatio).toFixed(2);
+    const rightMm = (rawRight * pixelRatio).toFixed(2);
+    return `${originLabel}->${leftMm}~${rightMm}mm`;
+  } else {
+    const leftPx = Math.round(rawLeft);
+    const rightPx = Math.round(rawRight);
+    return `${originLabel}->${leftPx}~${rightPx}px`;
+  }
+}
+
+/** 判断位置字符串是否为自动计算格式（形如 "X->...~..."），用于决定是否覆盖重算 */
+function isAutoPosition(pos: string): boolean {
+  return /^[^~\s]+->.+~/.test(pos);
+}
+
 const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   taskId,
   projectId,
@@ -406,8 +437,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // 每个元素: { x1, y1, x2, y2, keypoints } (像素坐标, 矫正后坐标系)
   const [weldLocationShapes, setWeldLocationShapes] = useState<WeldLocationRect[]>([]);
 
-  // --- 8. 缺陷位置检测2原点（来自 location_1.pt D路径，仅 center_mark 十字架原点） ---
+  // --- 8. 缺陷位置检测2原点（来自 location_1.pt D路径，center_mark 十字架或边缘标记） ---
   const [defectOriginPoint, setDefectOriginPoint] = useState<{ x: number; y: number } | null>(null);
+  // 0点来源元信息：positioningType=0 表示十字准心，=1 表示左右数字/字母标记；originText 为标记识别值
+  const [defectOriginMeta, setDefectOriginMeta] = useState<{ positioningType: number | null; originText: string | null } | null>(null);
 
   // --- 9. 是否显示定位坐标（焊缝位置矩形 + 缺陷位置检测2原点） ---
   const [showPositioningCoords, setShowPositioningCoords] = useState(true);
@@ -679,8 +712,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setIsSettingPositioning(false);
     // 重置焊缝位置形状（新文件加载时重新解析）
     setWeldLocationShapes([]);
-    // 重置缺陷位置检测2原点
+    // 重置缺陷位置检测2原点及来源元信息
     setDefectOriginPoint(null);
+    setDefectOriginMeta(null);
   }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -1327,6 +1361,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       remark: ''
     };
 
+    // 确定当前有效的0点（原点）：优先使用手动设置的 originPoint，其次使用 AI 检测的 defectOriginPoint
+    // 原点坐标存储在矫正后坐标系中（与缺陷框坐标系一致）
+    const effectiveOrigin = originPoint || defectOriginPoint;
+    // 0点来源标签：手动设置用'+'，AI边缘标记用识别文本，其余用'+'
+    const effectiveOriginLabel = originPoint
+      ? '+'
+      : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
+
     // 用户标注坐标来自 getImageCoordinates()，在原图（Canvas 本地）坐标系中。
     // 存储需与 AI 检测结果保持一致，即矫正后坐标系（CorrectionRotation/Flip 已应用）。
     // 当存在矫正变换时，需将原图坐标正向变换到矫正后坐标系。
@@ -1362,10 +1404,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         sizeStr = `${areaPx.toFixed(2)}px²`;
       }
 
+      // 自动计算位置（基于0点的X轴距离）
+      const posStr = effectiveOrigin
+        ? formatDefectPosition(rx1, rx2, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+        : '';
+
       const newRect: SavedRect = {
         ...pendingShape,
         x: rx1, y: ry1, w: trueW, h: trueH,
-        label, color, ...defaultExtra, size: sizeStr
+        label, color, ...defaultExtra, size: sizeStr, position: posStr
       };
       updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'polygon') {
@@ -1398,9 +1445,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         }
       }
 
+      // 自动计算位置（多边形：取变换后点的 X 极值）
+      const polyXs = newPoints.map((p: { x: number; y: number }) => p.x);
+      const polyMinX = Math.min(...polyXs);
+      const polyMaxX = Math.max(...polyXs);
+      const polyPosStr = effectiveOrigin
+        ? formatDefectPosition(polyMinX, polyMaxX, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+        : '';
+
       const newPoly: SavedPolygon = {
         points: newPoints,
-        label, color, ...defaultExtra, size: sizeStr
+        label, color, ...defaultExtra, size: sizeStr, position: polyPosStr
       };
       updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'circle') {
@@ -1423,11 +1478,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         sizeStr = `${areaPx.toFixed(2)}px²`;
       }
 
+      // 自动计算位置（圆形：左边 = cx - r，右边 = cx + r）
+      const circlePosStr = effectiveOrigin
+        ? formatDefectPosition(cx - trueR, cx + trueR, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+        : '';
+
       const newCircle: SavedCircle = {
         ...pendingShape,
         x: cx, y: cy,
         r: trueR,
-        label, color, ...defaultExtra, size: sizeStr
+        label, color, ...defaultExtra, size: sizeStr, position: circlePosStr
       };
       updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true, pixelRatio);
     }
@@ -1492,6 +1552,31 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       // 从后端加载缺陷记录
       defectRecordAPI.getByTaskFileId(selectedFile.TaskFileId).then(resp => {
+        // 在加载回调中同步解析本张图片的0点（优先 originPoint state，降级读取 selectedFile.DefectPosition）
+        // 不能依赖 defectOriginPoint state（它在 setDefectOriginPoint 之后才更新，异步竞争）
+        let loadTimeOrigin: { x: number; y: number } | null = originPoint;
+        let loadTimeOriginLabel = '+';
+        if (!loadTimeOrigin && selectedFile?.DefectPosition) {
+          try {
+            const dp = JSON.parse(selectedFile.DefectPosition);
+            if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
+              loadTimeOrigin = { x: dp.origin_x, y: dp.origin_y };
+              if (dp.positioning_type === 1) {
+                // 优先取新字段 origin_text，旧数据则从 detections 中找匹配项
+                let label: string | null = typeof dp.origin_text === 'string' ? dp.origin_text : null;
+                if (!label && Array.isArray(dp.detections)) {
+                  const EPS = 1;
+                  const matched = dp.detections.find((d: any) =>
+                    Math.abs(d.center_x - dp.origin_x) < EPS && Math.abs(d.center_y - dp.origin_y) < EPS
+                  );
+                  if (matched && typeof matched.text === 'string') label = matched.text;
+                }
+                if (label) loadTimeOriginLabel = label;
+              }
+            }
+          } catch { /* ignore */ }
+        }
+
         if (resp.Data && resp.Data.length > 0) {
           // 将后端 DefectRecord 转换为前端格式，根据几何类型分类
           const loadedRects: SavedRect[] = [];
@@ -1546,10 +1631,24 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 }
               }
 
+              // 计算位置字符串（基于0点的X轴有符号距离）
+              // 只有当现有 position 为空或已是自动格式（+->...）时才覆盖，手动填写的位置保留
+              let posStr = dr.Position || '';
+              if (loadTimeOrigin && (!posStr || isAutoPosition(posStr))) {
+                if (geometry?.type === 'rect' && geometry.w != null) {
+                  posStr = formatDefectPosition(geometry.x, geometry.x + geometry.w, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                } else if (geometry?.type === 'circle' && geometry.r != null) {
+                  posStr = formatDefectPosition(geometry.x - geometry.r, geometry.x + geometry.r, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 1) {
+                  const xs = geometry.points.map((p: { x: number }) => p.x);
+                  posStr = formatDefectPosition(Math.min(...xs), Math.max(...xs), loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                }
+              }
+
               const baseInfo = {
                 label: dr.DefectName || '未知',
                 color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
-                position: dr.Position || '',
+                position: posStr,
                 size: sizeStr,
                 quality: dr.Grade || '',
                 remark: dr.Remark || '',
@@ -1639,20 +1738,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       };
       setWeldLocationShapes(parseWeldLocationShapes());
 
-      // 解析缺陷位置检测2结果（D路径，来自 location_1.pt，仅 center_mark 十字架原点）
-      const parseDefectOrigin = (): { x: number; y: number } | null => {
-        if (!selectedFile?.DefectPosition) return null;
+      // 解析缺陷位置检测2结果（D路径，来自 location_1.pt，center_mark 十字架或边缘标记）
+      if (selectedFile?.DefectPosition) {
         try {
           const dp = JSON.parse(selectedFile.DefectPosition);
           if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
-            return { x: dp.origin_x, y: dp.origin_y };
+            setDefectOriginPoint({ x: dp.origin_x, y: dp.origin_y });
+            const posType: number | null = typeof dp.positioning_type === 'number' ? dp.positioning_type : null;
+            // origin_text 优先取顶层字段（新数据），旧数据则从 detections 中找与原点坐标匹配的项读取 text
+            let originText: string | null = typeof dp.origin_text === 'string' ? dp.origin_text : null;
+            if (originText === null && posType === 1 && Array.isArray(dp.detections)) {
+              const EPS = 1;
+              const matched = dp.detections.find((d: any) =>
+                Math.abs(d.center_x - dp.origin_x) < EPS && Math.abs(d.center_y - dp.origin_y) < EPS
+              );
+              if (matched && typeof matched.text === 'string') {
+                originText = matched.text;
+              }
+            }
+            setDefectOriginMeta({ positioningType: posType, originText });
+          } else {
+            setDefectOriginPoint(null);
+            setDefectOriginMeta(null);
           }
         } catch (e) {
           console.warn('Failed to parse DefectPosition:', e);
+          setDefectOriginPoint(null);
+          setDefectOriginMeta(null);
         }
-        return null;
-      };
-      setDefectOriginPoint(parseDefectOrigin());
+      } else {
+        setDefectOriginPoint(null);
+        setDefectOriginMeta(null);
+      }
 
       // 立即重置图片就绪状态，确保缺陷信息隐藏，直到新图片渲染完成
       resetImageReady();
@@ -1683,53 +1800,76 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defectRects, defectPolygons, defectCircles, pixelRatio]);
 
-  // --- 监听 pixelRatio 变化，为尚未计算尺寸或者只有像素尺寸的 AI 缺陷补充真实物理尺寸 ---
+  // --- 监听 pixelRatio / originPoint / defectOriginPoint 变化，
+  //     重新计算所有缺陷的尺寸（mm/px²）和位置（+->X~Ypx/mm）---
   useEffect(() => {
-    if (pixelRatio && pixelRatio > 0 && pixelRatio !== 1) {
-      let changed = false;
+    const effectiveOrigin = originPoint || defectOriginPoint;
+    const effectiveOriginLabel = originPoint
+      ? '+'
+      : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
+    const calibrated = pixelRatio > 0 && pixelRatio !== 1;
+    let changed = false;
 
-      const newRects = defectRects.map(dr => {
-        if ((!dr.size || dr.size.endsWith('px²')) && dr.w && dr.h) {
-          changed = true;
-          const areaPx = dr.w * dr.h;
-          return { ...dr, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
-        }
-        return dr;
-      });
-
-      const newCircles = defectCircles.map(dc => {
-        if ((!dc.size || dc.size.endsWith('px²')) && dc.r) {
-          changed = true;
-          const areaPx = Math.PI * dc.r * dc.r;
-          return { ...dc, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
-        }
-        return dc;
-      });
-
-      const newPolys = defectPolygons.map(dp => {
-        if ((!dp.size || dp.size.endsWith('px²')) && dp.points && dp.points.length >= 3) {
-          changed = true;
-          let areaPx = 0;
-          const pts = dp.points;
-          for (let i = 0; i < pts.length; i++) {
-            const p1 = pts[i];
-            const p2 = pts[(i + 1) % pts.length];
-            areaPx += (p1.x * p2.y - p2.x * p1.y);
-          }
-          areaPx = Math.abs(areaPx) / 2;
-          return { ...dp, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
-        }
-        return dp;
-      });
-
-      if (changed) {
-        setDefectRects(newRects);
-        setDefectCircles(newCircles);
-        setDefectPolygons(newPolys);
-        // 不触发 updateHistoryState，因为这只是补充显示信息，不算用户编辑
+    const newRects = defectRects.map(dr => {
+      let updated: SavedRect = { ...dr };
+      // 重新计算尺寸
+      if (calibrated && (!dr.size || dr.size.endsWith('px²')) && dr.w && dr.h) {
+        const areaPx = dr.w * dr.h;
+        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        changed = true;
       }
+      // 重新计算位置（仅当存在有效原点，且当前位置字符串包含 px 或为空时）
+      if (effectiveOrigin && (!dr.position || isAutoPosition(dr.position))) {
+        const newPos = formatDefectPosition(dr.x, dr.x + dr.w, effectiveOrigin.x, pixelRatio, effectiveOriginLabel);
+        if (newPos !== dr.position) { updated = { ...updated, position: newPos }; changed = true; }
+      }
+      return updated;
+    });
+
+    const newCircles = defectCircles.map(dc => {
+      let updated: SavedCircle = { ...dc };
+      if (calibrated && (!dc.size || dc.size.endsWith('px²')) && dc.r) {
+        const areaPx = Math.PI * dc.r * dc.r;
+        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        changed = true;
+      }
+      if (effectiveOrigin && (!dc.position || isAutoPosition(dc.position))) {
+        const newPos = formatDefectPosition(dc.x - dc.r, dc.x + dc.r, effectiveOrigin.x, pixelRatio, effectiveOriginLabel);
+        if (newPos !== dc.position) { updated = { ...updated, position: newPos }; changed = true; }
+      }
+      return updated;
+    });
+
+    const newPolys = defectPolygons.map(dp => {
+      let updated: SavedPolygon = { ...dp };
+      if (calibrated && (!dp.size || dp.size.endsWith('px²')) && dp.points && dp.points.length >= 3) {
+        let areaPx = 0;
+        const pts = dp.points;
+        for (let i = 0; i < pts.length; i++) {
+          const p1 = pts[i];
+          const p2 = pts[(i + 1) % pts.length];
+          areaPx += (p1.x * p2.y - p2.x * p1.y);
+        }
+        areaPx = Math.abs(areaPx) / 2;
+        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        changed = true;
+      }
+      if (effectiveOrigin && dp.points && dp.points.length >= 1 && (!dp.position || isAutoPosition(dp.position))) {
+        const xs = dp.points.map((p: { x: number; y: number }) => p.x);
+        const newPos = formatDefectPosition(Math.min(...xs), Math.max(...xs), effectiveOrigin.x, pixelRatio, effectiveOriginLabel);
+        if (newPos !== dp.position) { updated = { ...updated, position: newPos }; changed = true; }
+      }
+      return updated;
+    });
+
+    if (changed) {
+      setDefectRects(newRects);
+      setDefectCircles(newCircles);
+      setDefectPolygons(newPolys);
+      // 不触发 updateHistoryState，因为这只是补充显示信息，不算用户编辑
     }
-  }, [pixelRatio]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pixelRatio, originPoint, defectOriginPoint]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -2741,6 +2881,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                           let tfm = '';
                           if (corrRotation !== 0) tfm += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
                           if (corrFlipH === -1) tfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                          // 来源说明：positioningType=0 为十字准心，=1 为边缘数字/字母标记
+                          const originSrc = defectOriginMeta
+                            ? (defectOriginMeta.positioningType === 0
+                                ? '(准心)'
+                                : defectOriginMeta.originText
+                                  ? `(${defectOriginMeta.originText})`
+                                  : '(标记)')
+                            : '';
                           return (
                             <text
                               x={tx}
@@ -2751,7 +2899,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                               style={{ filter: 'drop-shadow(0 0 2px #000)' }}
                               transform={tfm || undefined}
                             >
-                              0点
+                              0点{originSrc}
                             </text>
                           );
                         })()}

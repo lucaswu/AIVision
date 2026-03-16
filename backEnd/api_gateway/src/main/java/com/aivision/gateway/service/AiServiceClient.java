@@ -366,16 +366,12 @@ public class AiServiceClient {
 
             // 提取缺陷位置检测2结果（D 路径，由 WeldDefectPositionDetector 生成）
             // positioning_type=0: center_mark 十字架; positioning_type=1: 字母/数字边缘标记（B/C 等）
+            // 保留完整的 defect_position 对象（含 origin_text、detections），供前端使用
             JsonNode defectPos = pythonResult.path("defect_position");
             if (!defectPos.isMissingNode() && !defectPos.isNull()) {
                 boolean detected = defectPos.path("detected").asBoolean(false);
-                int posType = defectPos.path("positioning_type").asInt(-1);
-                if (detected && posType >= 0) {
-                    Map<String, Object> dpMap = new HashMap<>();
-                    dpMap.put("origin_x", defectPos.path("origin_x").asDouble());
-                    dpMap.put("origin_y", defectPos.path("origin_y").asDouble());
-                    dpMap.put("positioning_type", posType);
-                    metadata.put("defect_position", dpMap);
+                if (detected) {
+                    metadata.put("defect_position", defectPos);
                 }
             }
 
