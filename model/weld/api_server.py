@@ -250,6 +250,88 @@ async def cancel_task(task_id: str):
 
 
 # ==============================================================================
+# OCR 区域识别（同步，供前端框选功能使用）
+# ==============================================================================
+
+class RecognizeRequest(BaseModel):
+    """单图区域识别请求"""
+    image_base64: str = Field(..., description="Base64编码图片（含或不含data URI前缀）")
+
+
+class RecognizeResponse(BaseModel):
+    """单图区域识别响应"""
+    text: str
+    confidence: float
+    raw_results: list
+
+
+_ocr_instance = None
+
+
+def _get_ocr_instance():
+    """获取 PaddleOCR 单例，首次调用时初始化（区域识别用CPU，避免cuDNN兼容问题）"""
+    global _ocr_instance
+    if _ocr_instance is None:
+        from paddleocr import PaddleOCR
+        print("初始化OCR区域识别引擎 (CPU模式)...")
+        _ocr_instance = PaddleOCR(
+            use_gpu=False,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=True,
+        )
+    return _ocr_instance
+
+
+def _sync_ocr_recognize(img):
+    """在线程池中同步执行 OCR"""
+    ocr = _get_ocr_instance()
+    results = ocr.ocr(img, cls=True)
+    texts, confs, raw = [], [], []
+    if results and results[0]:
+        for line in results[0]:
+            t, c = line[1][0], float(line[1][1])
+            texts.append(t)
+            confs.append(c)
+            raw.append({"text": t, "confidence": c})
+    avg_conf = sum(confs) / len(confs) if confs else 0.0
+    return {"text": ' '.join(texts), "confidence": avg_conf, "raw_results": raw}
+
+
+@app.post("/inference/recognize", response_model=RecognizeResponse)
+async def recognize_region(request: RecognizeRequest):
+    """
+    同步识别单张图片区域（base64输入）
+    用于前端实时OCR框选功能
+    """
+    import base64
+    import numpy as np
+    import cv2
+
+    b64_data = request.image_base64
+    if ',' in b64_data:
+        b64_data = b64_data.split(',', 1)[1]
+
+    try:
+        img_bytes = base64.b64decode(b64_data)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="无法解码图片")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"图片解码失败: {str(e)}")
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(executor, _sync_ocr_recognize, img)
+        return RecognizeResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OCR识别失败: {str(e)}")
+
+
+# ==============================================================================
 # 推理执行逻辑 - 调用 run_inference_pipeline.py 脚本
 # ==============================================================================
 

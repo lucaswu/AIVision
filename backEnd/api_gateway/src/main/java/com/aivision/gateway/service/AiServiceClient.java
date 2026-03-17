@@ -655,6 +655,32 @@ public class AiServiceClient {
     }
 
     /**
+     * 同步识别单张图片区域（base64输入），用于前端实时OCR框选功能
+     */
+    public Map<String, Object> recognizeImageRegion(String base64Image) {
+        String url = ocrInferenceServiceUrl + "/inference/recognize";
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("image_base64", base64Image);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+
+        logger.info("调用OCR区域识别接口");
+        try {
+            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("OCR识别失败: " + response.getStatusCode());
+            }
+            return objectMapper.readValue(response.getBody(), Map.class);
+        } catch (Exception e) {
+            logger.error("OCR区域识别失败: {}", e.getMessage());
+            throw new RuntimeException("OCR识别失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * 健康检查 - OCR AI 服务
      */
     public boolean checkOcrAiHealth() {

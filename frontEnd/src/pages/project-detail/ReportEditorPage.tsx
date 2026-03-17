@@ -67,9 +67,10 @@ import {
   ReloadOutlined,
   FullscreenExitOutlined,
   RightOutlined as CollapseRightOutlined, // 为了区分普通向右箭头
+  ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI } from "../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI } from "../../utils/api";
 
 // 移除本地 Mock defectRecordAPI
 // const defectRecordAPI = { ... };
@@ -518,6 +519,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [showDefectList, setShowDefectList] = useState(true);
   const [showFilmInfo, setShowFilmInfo] = useState(true); // 底片信息折叠状态
 
+  // --- OCR 框选识别状态 ---
+  const [ocrTargetField, setOcrTargetField] = useState<'weldId' | 'filmNumber' | 'filmDensity' | 'sensitivity' | null>(null);
+  const [ocrLoadingField, setOcrLoadingField] = useState<string | null>(null);
+  const [ocrDrawRect, setOcrDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [ocrDrawStart, setOcrDrawStart] = useState<{ x: number; y: number } | null>(null);
+
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
 
@@ -937,6 +944,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     cursorStyle = 'crosshair';
   } else if (activeTool === 'defect') {
     cursorStyle = 'crosshair';
+  } else if (ocrTargetField !== null) {
+    cursorStyle = 'crosshair';
   }
 
   const handleMouseMoveTracker = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -995,6 +1004,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 鼠标按下 ---
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
+
+    if (ocrTargetField !== null) {
+      e.stopPropagation();
+      e.preventDefault();
+      const { x, y } = getImageCoordinates(e);
+      setOcrDrawStart({ x, y });
+      setOcrDrawRect({ x, y, w: 0, h: 0 });
+      return;
+    }
 
     if (activeTool === 'defect') {
       e.stopPropagation();
@@ -1144,6 +1162,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const handleMouseMoveWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     handleMouseMoveTracker(e);
 
+    if (ocrTargetField !== null && ocrDrawStart) {
+      const { x: cx, y: cy } = getImageCoordinates(e);
+      setOcrDrawRect({
+        x: Math.min(ocrDrawStart.x, cx),
+        y: Math.min(ocrDrawStart.y, cy),
+        w: Math.abs(cx - ocrDrawStart.x),
+        h: Math.abs(cy - ocrDrawStart.y),
+      });
+      return;
+    }
+
     if (activeTool === 'defect') {
       if (drawingType === 'rect' && isDrawingDefect && defectStartPoint) {
         const { x: currX, y: currY } = getImageCoordinates(e);
@@ -1266,6 +1295,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // --- 鼠标松开 ---
   const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (ocrTargetField !== null) {
+      const field = ocrTargetField;
+      setOcrTargetField(null);
+      const rect = ocrDrawRect;
+      setOcrDrawRect(null);
+      setOcrDrawStart(null);
+      if (rect && rect.w > 5 && rect.h > 5) {
+        handleOcrRegionSelected(rect, field);
+      }
+      return;
+    }
+
     if (activeTool === 'defect') {
       // --- 1. 矩形结束，触发弹窗 ---
       if (drawingType === 'rect' && isDrawingDefect && currentDefectRect) {
@@ -1918,6 +1959,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setCurrentPolygonPoints([]);
       setShowDefectList(true); // 每次切换文件，默认展开缺陷列表
       setShowFilmInfo(true);   // 每次切换文件，默认展开底片信息
+      setOcrTargetField(null); // 切换文件时退出OCR模式
+      setOcrDrawRect(null);
+      setOcrDrawStart(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFile?.TaskFileId]);
@@ -2266,6 +2310,58 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       const newArr = [...defectCircles];
       newArr.splice(index, 1);
       updateAllDefects(defectRects, defectPolygons, newArr, true);
+    }
+  };
+
+  // --- OCR 框选识别 ---
+  const handleOcrButtonClick = (field: typeof ocrTargetField) => {
+    if (ocrTargetField === field) {
+      setOcrTargetField(null);
+    } else {
+      setOcrTargetField(field);
+      message.info('请在图像上框选要识别的区域');
+    }
+  };
+
+  const handleOcrRegionSelected = async (
+    rect: { x: number; y: number; w: number; h: number },
+    field: 'weldId' | 'filmNumber' | 'filmDensity' | 'sensitivity'
+  ) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const { x: px, y: py } = calculateTrueCoordinates(rect.x, rect.y);
+    const { x: px2, y: py2 } = calculateTrueCoordinates(rect.x + rect.w, rect.y + rect.h);
+    const sx = Math.max(0, Math.round(Math.min(px, px2)));
+    const sy = Math.max(0, Math.round(Math.min(py, py2)));
+    const sw = Math.min(Math.round(Math.abs(px2 - px)), canvas.width - sx);
+    const sh = Math.min(Math.round(Math.abs(py2 - py)), canvas.height - sy);
+
+    if (sw <= 0 || sh <= 0) {
+      message.warning('选区无效，请重新框选');
+      return;
+    }
+
+    const tmp = document.createElement('canvas');
+    tmp.width = sw;
+    tmp.height = sh;
+    tmp.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    const base64 = tmp.toDataURL('image/png');
+
+    setOcrLoadingField(field);
+    try {
+      const result = await ocrAPI.recognizeRegion(base64);
+      if (result?.text?.trim()) {
+        filmInfoForm.setFieldValue(field, result.text.trim());
+        autoSaveFilmInfo();
+        message.success('OCR识别成功');
+      } else {
+        message.warning('未识别到文字');
+      }
+    } catch {
+      message.error('OCR识别失败');
+    } finally {
+      setOcrLoadingField(null);
     }
   };
 
@@ -3234,6 +3330,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     />
                   )}
 
+                  {/* D2. OCR框选区域（橙色虚线） */}
+                  {ocrDrawRect && (
+                    <rect
+                      x={ocrDrawRect.x}
+                      y={ocrDrawRect.y}
+                      width={ocrDrawRect.w}
+                      height={ocrDrawRect.h}
+                      stroke="#fa8c16" strokeWidth={2 / scale} strokeDasharray="4 2" fill="rgba(250, 140, 22, 0.1)"
+                    />
+                  )}
+
                   {/* E. 绘制当前正在绘制的多边形 (蓝色折线 + 橡皮筋线) */}
                   {activeTool === 'defect' && drawingType === 'polygon' && currentPolygonPoints.length > 0 && (
                     <>
@@ -3734,17 +3841,69 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   style={{ padding: '0 8px' }} // 稍微缩进一点内容
                   onValuesChange={autoSaveFilmInfo}
                 >
-                  <Form.Item name="weldId" label="焊口编号" style={{ marginBottom: 12 }}>
-                    <Input placeholder="输入焊口编号" />
+                  <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={ocrLoadingField === 'weldId'} />}
+                          type={ocrTargetField === 'weldId' ? 'primary' : 'default'}
+                          onClick={() => handleOcrButtonClick('weldId')}
+                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'weldId')}
+                        />
+                      </Tooltip>
+                      <Form.Item name="weldId" noStyle>
+                        <Input placeholder="输入焊口编号" />
+                      </Form.Item>
+                    </Space.Compact>
                   </Form.Item>
-                  <Form.Item name="filmNumber" label="片号" style={{ marginBottom: 12 }}>
-                    <Input placeholder="输入片号" />
+                  <Form.Item label="片号" style={{ marginBottom: 12 }}>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Tooltip title={ocrTargetField === 'filmNumber' ? '点击取消OCR' : 'OCR框选识别'}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={ocrLoadingField === 'filmNumber'} />}
+                          type={ocrTargetField === 'filmNumber' ? 'primary' : 'default'}
+                          onClick={() => handleOcrButtonClick('filmNumber')}
+                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'filmNumber')}
+                        />
+                      </Tooltip>
+                      <Form.Item name="filmNumber" noStyle>
+                        <Input placeholder="输入片号" />
+                      </Form.Item>
+                    </Space.Compact>
                   </Form.Item>
-                  <Form.Item name="filmDensity" label="底片黑度" style={{ marginBottom: 12 }}>
-                    <Input placeholder="输入底片黑度" />
+                  <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Tooltip title={ocrTargetField === 'filmDensity' ? '点击取消OCR' : 'OCR框选识别'}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={ocrLoadingField === 'filmDensity'} />}
+                          type={ocrTargetField === 'filmDensity' ? 'primary' : 'default'}
+                          onClick={() => handleOcrButtonClick('filmDensity')}
+                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'filmDensity')}
+                        />
+                      </Tooltip>
+                      <Form.Item name="filmDensity" noStyle>
+                        <Input placeholder="输入底片黑度" />
+                      </Form.Item>
+                    </Space.Compact>
                   </Form.Item>
-                  <Form.Item name="sensitivity" label="像质计灵敏度" style={{ marginBottom: 0 }}>
-                    <Input placeholder="输入像质计灵敏度" />
+                  <Form.Item label="像质计灵敏度" style={{ marginBottom: 0 }}>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Tooltip title={ocrTargetField === 'sensitivity' ? '点击取消OCR' : 'OCR框选识别'}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={ocrLoadingField === 'sensitivity'} />}
+                          type={ocrTargetField === 'sensitivity' ? 'primary' : 'default'}
+                          onClick={() => handleOcrButtonClick('sensitivity')}
+                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'sensitivity')}
+                        />
+                      </Tooltip>
+                      <Form.Item name="sensitivity" noStyle>
+                        <Input placeholder="输入像质计灵敏度" />
+                      </Form.Item>
+                    </Space.Compact>
                   </Form.Item>
                 </Form>
               )}

@@ -100,6 +100,76 @@ class HealthResponse(BaseModel):
     cuda_available: bool
 
 
+class RecognizeRequest(BaseModel):
+    """单图区域识别请求"""
+    image_base64: str = Field(..., description="Base64编码图片（含或不含data URI前缀）")
+
+
+class RecognizeResponse(BaseModel):
+    """单图区域识别响应"""
+    text: str
+    confidence: float
+    raw_results: list
+
+
+# ==============================================================================
+# OCR 处理器单例（懒加载）
+# ==============================================================================
+
+_ocr_processor = None
+
+
+def get_ocr_processor():
+    """获取 OCR 处理器单例，首次调用时初始化"""
+    global _ocr_processor
+    if _ocr_processor is None:
+        from OCR_main import BatchOCRProcessor
+        _ocr_processor = BatchOCRProcessor(save_annotations=False, verbose=False)
+    return _ocr_processor
+
+
+def _preprocess_for_ocr(img):
+    """
+    对框选区域图像做预处理：
+    确保最小尺寸，避免识别模型因图像太小失效。
+    注意：不做反色处理，PaddleOCR 的 rec_image_inverse=True 已自动处理
+    X光底片（暗底亮字）的反色，手动反色会导致双重反色。
+    """
+    import cv2
+    h, w = img.shape[:2]
+    if h < 64 or w < 64:
+        scale = max(64 / h, 64 / w)
+        img = cv2.resize(img, (max(64, int(w * scale)), max(64, int(h * scale))),
+                         interpolation=cv2.INTER_LINEAR)
+    return img
+
+
+def _sync_recognize(img) -> dict:
+    """在线程池中同步执行 OCR 识别（跳过检测步骤，直接对整个框选区域识别）"""
+    import numpy as np
+    img = _preprocess_for_ocr(img)
+    ocr = get_ocr_processor().ocr
+    # det=False：跳过文字检测，直接对整个框选区域做识别
+    # 用户已通过框选完成了"检测"步骤
+    results = ocr.ocr(img, cls=True, det=False)
+    texts, confs, raw = [], [], []
+    if results and results[0]:
+        for item in results[0]:
+            # det=False 时结果格式为 (text, confidence)，而非 (box, (text, conf))
+            if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str):
+                t, c = item[0], float(item[1])
+            elif isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[1], (list, tuple)):
+                t, c = item[1][0], float(item[1][1])
+            else:
+                continue
+            if t.strip():
+                texts.append(t)
+                confs.append(c)
+                raw.append({"text": t, "confidence": c})
+    avg_conf = sum(confs) / len(confs) if confs else 0.0
+    return {"text": ' '.join(texts), "confidence": avg_conf, "raw_results": raw}
+
+
 # ==============================================================================
 # API 端点
 # ==============================================================================
@@ -225,6 +295,40 @@ async def cancel_task(task_id: str):
     return {"message": f"Task {task_id} cleaned up"}
 
 
+@app.post("/inference/recognize", response_model=RecognizeResponse)
+async def recognize_region(request: RecognizeRequest):
+    """
+    同步识别单张图片区域（base64输入）
+    用于前端实时OCR框选功能，直接返回识别文本
+    """
+    import base64
+    import numpy as np
+    import cv2
+
+    # 去掉 data URI 前缀（如 "data:image/png;base64,"）
+    b64_data = request.image_base64
+    if ',' in b64_data:
+        b64_data = b64_data.split(',', 1)[1]
+
+    try:
+        img_bytes = base64.b64decode(b64_data)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(status_code=400, detail="无法解码图片")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"图片解码失败: {str(e)}")
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(executor, _sync_recognize, img)
+        return RecognizeResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OCR识别失败: {str(e)}")
+
+
 # ==============================================================================
 # 推理执行逻辑 - 调用 OCR_main.py 脚本
 # ==============================================================================
@@ -339,6 +443,14 @@ async def startup_event():
     print(f"PaddlePaddle available: {_paddle_available}")
     print(f"CUDA available: {_cuda_available}")
     print("=" * 60)
+    # 预热 OCR 处理器，避免首次请求延迟
+    if _paddle_available:
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(executor, get_ocr_processor)
+            print("OCR处理器初始化完成")
+        except Exception as e:
+            print(f"OCR处理器预热失败（将在首次请求时初始化）: {e}")
 
 
 if __name__ == "__main__":

@@ -144,7 +144,8 @@ class OCRRunner:
             use_gpu=use_gpu,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
-            use_textline_orientation=True,
+            use_textline_orientation=False,
+            ir_optim=False,
         )
 
     # ------------------------------------------------------------------

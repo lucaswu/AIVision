@@ -332,3 +332,17 @@ export const trainingDataAPI = {
       method: "DELETE",
     }),
 };
+
+// OCR 识别API
+export const ocrAPI = {
+  recognizeRegion: async (base64WithPrefix: string): Promise<{ text: string; confidence: number; raw_results: any[] }> => {
+    const base64 = base64WithPrefix.startsWith('data:')
+      ? base64WithPrefix.split(',')[1]
+      : base64WithPrefix;
+    const result = await request<{ text: string; confidence: number; raw_results: any[] }>(
+      '/api/v1/ocr/recognize',
+      { method: 'POST', body: JSON.stringify({ base64 }) }
+    );
+    return result.Data;
+  },
+};

@@ -67,21 +67,23 @@ class BatchOCRProcessor:
                 use_gpu = False
         print(f"PaddleOCR使用设备: {'GPU' if use_gpu else 'CPU'}")
         
-        # Check if local weights exist
+        # 使用 PP-OCRv4 det (DBNet, 无自注意力) + mobile v2.0 rec (CRNN, 无自注意力)
+        # PP-OCRv4 rec 使用 SVTR Transformer，在某些 CPU 上因 SelfAttentionFusePass 触发 SIGILL
         weights_dir = '/app/model/weights'
         det_model_dir = os.path.join(weights_dir, 'ch_PP-OCRv4_det_infer')
-        rec_model_dir = os.path.join(weights_dir, 'ch_PP-OCRv4_rec_infer')
+        rec_model_dir = os.path.join(weights_dir, 'ch_ppocr_mobile_v2.0_rec_infer')
         cls_model_dir = os.path.join(weights_dir, 'ch_ppocr_mobile_v2.0_cls_infer')
-        
+
         use_local_weights = os.path.exists(det_model_dir) and os.path.exists(rec_model_dir) and os.path.exists(cls_model_dir)
-        
+
         if use_local_weights:
             print(f"使用本地模型权重: {weights_dir}")
             self.ocr = PaddleOCR(
                 use_gpu=use_gpu,
+                use_angle_cls=True,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
-                use_textline_orientation=True,
+                use_textline_orientation=False,
                 det_model_dir=det_model_dir,
                 rec_model_dir=rec_model_dir,
                 cls_model_dir=cls_model_dir
@@ -89,10 +91,12 @@ class BatchOCRProcessor:
         else:
             print("未找到完整本地模型，尝试自动下载...")
             self.ocr = PaddleOCR(
+                use_angle_cls=True,
+                lang='ch',
                 use_gpu=use_gpu,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
-                use_textline_orientation=True
+                use_textline_orientation=False,
             )
 
         # 统计信息
