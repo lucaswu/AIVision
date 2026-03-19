@@ -41,8 +41,8 @@ from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
-from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH  # noqa: E402
-from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH  # noqa: E402
+from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc0  # noqa: E402
+from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc1  # noqa: E402
 from utils.weld_OCR import OCRRunner, _OCR_UTILS_AVAILABLE  # noqa: E402
 
 
@@ -280,6 +280,20 @@ class InferencePipelineRunner:
                     except Exception as ocr_exc:
                         print(f"[警告] OCR失败 ({image_path.name}): {ocr_exc}")
 
+                # Compute grayscale density (film blackness) from the inference results
+                # corrected_img is orientation-corrected image matching weld_location keypoints
+                grayscale_density: Optional[str] = None
+                if corrected_img is not None:
+                    try:
+                        if weld_location:
+                            # B path detected: use ellipse/vertical clock positions
+                            grayscale_density = compute_grayscale_loc0(corrected_img, weld_location)
+                        if grayscale_density is None:
+                            # Fallback to linear sampling (D path or no location detection)
+                            grayscale_density = compute_grayscale_loc1(corrected_img)
+                    except Exception as gs_exc:
+                        print(f"[警告] 灰度值计算失败 ({image_path.name}): {gs_exc}")
+
                 results.append({
                     "mode": self.mode,
                     "image_path": str(image_path),
@@ -295,6 +309,7 @@ class InferencePipelineRunner:
                     "weld_location": weld_location,
                     "defect_position": defect_position,
                     "ocr": ocr_result,
+                    "grayscale_density": grayscale_density,
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")

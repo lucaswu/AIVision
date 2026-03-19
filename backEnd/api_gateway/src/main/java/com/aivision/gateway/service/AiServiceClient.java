@@ -381,6 +381,15 @@ public class AiServiceClient {
                 metadata.put("ocr", ocrData);
             }
 
+            // 提取灰度密度值（底片黑度，由推理流水线计算得出）
+            JsonNode grayscaleDensityNode = pythonResult.path("grayscale_density");
+            if (!grayscaleDensityNode.isMissingNode() && !grayscaleDensityNode.isNull()) {
+                String grayscaleDensity = grayscaleDensityNode.asText(null);
+                if (grayscaleDensity != null && !grayscaleDensity.isBlank()) {
+                    metadata.put("grayscale_density", grayscaleDensity);
+                }
+            }
+
             finalResult.put("metadata", metadata);
             finalResult.put("results", defectResults);
             

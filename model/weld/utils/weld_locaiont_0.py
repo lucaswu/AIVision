@@ -258,3 +258,101 @@ def locate_weld_seam(image_bgr: np.ndarray,
     """
     locator = create_locator(model_path=model_path, conf_threshold=conf_threshold)
     return locator.predict(image_bgr)
+
+
+def compute_grayscale_density(image_bgr: np.ndarray,
+                              detections: List[Dict],
+                              region_w: int = 20,
+                              region_h: int = 50) -> Optional[str]:
+    """
+    Compute grayscale density (film density) from weld location detections.
+
+    For 'ellipse' class detections:
+        Samples 20x50 px regions at 12 o'clock (id=1), 6 o'clock (id=7),
+        3 o'clock (id=4), and 9 o'clock (id=10) keypoint positions.
+        - 12 & 6 o'clock: base material / heat-affected zone
+        - 3 & 9 o'clock: weld seam zone
+
+    For 'vertical' class (or no detections), falls back to horizontal
+    sampling at x*20%, x/2, x*80% along the image mid-height.
+
+    Args:
+        image_bgr: Input BGR image (corrected original).
+        detections: List of detection dicts from WeldSeamLocator.predict().
+        region_w: Width of the sampling region in pixels (default 20).
+        region_h: Height of the sampling region in pixels (default 50).
+
+    Returns:
+        A string formatted as "min-max" (e.g. "42-196"), or None if
+        sampling fails or no valid regions are found.
+    """
+    if image_bgr is None or image_bgr.size == 0:
+        return None
+
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if len(image_bgr.shape) == 3 else image_bgr
+    h, w = gray.shape[:2]
+
+    half_w = region_w // 2
+    half_h = region_h // 2
+
+    def _sample(cx: float, cy: float) -> Optional[np.ndarray]:
+        """Extract a region_w x region_h patch centred at (cx, cy)."""
+        x1 = max(0, int(cx) - half_w)
+        y1 = max(0, int(cy) - half_h)
+        x2 = min(w, x1 + region_w)
+        y2 = min(h, y1 + region_h)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return gray[y1:y2, x1:x2]
+
+    patches = []
+
+    # Determine the best detection to use (highest confidence)
+    ellipse_det = None
+    vertical_det = None
+    for det in detections:
+        cls = det.get('class', '')
+        if cls == 'ellipse' and ellipse_det is None:
+            ellipse_det = det
+        elif cls == 'vertical' and vertical_det is None:
+            vertical_det = det
+
+    if ellipse_det is not None:
+        # Map clock position IDs to keyword: 12'=id1, 3'=id4, 6'=id7, 9'=id10
+        target_ids = {1, 4, 7, 10}
+        kp_map = {kp['id']: kp for kp in ellipse_det.get('keypoints', [])}
+
+        for kid in sorted(target_ids):
+            kp = kp_map.get(kid)
+            if kp is not None:
+                patch = _sample(kp['x'], kp['y'])
+                if patch is not None:
+                    patches.append(patch)
+
+        # Fallback: if fewer than 2 keypoints found, supplement with bbox corners
+        if len(patches) < 2:
+            bbox = ellipse_det.get('bbox', [])
+            if len(bbox) == 4:
+                x1b, y1b, x2b, y2b = bbox
+                cx_e = (x1b + x2b) / 2
+                cy_e = (y1b + y2b) / 2
+                for px, py in [(cx_e, y1b), (cx_e, y2b), (x1b, cy_e), (x2b, cy_e)]:
+                    patch = _sample(px, py)
+                    if patch is not None:
+                        patches.append(patch)
+
+    else:
+        # Vertical weld or no detections: sample at 20%, 50%, 80% of width along mid-height
+        cy = h / 2.0
+        for frac in (0.2, 0.5, 0.8):
+            patch = _sample(w * frac, cy)
+            if patch is not None:
+                patches.append(patch)
+
+    if not patches:
+        return None
+
+    all_vals = np.concatenate([p.flatten() for p in patches])
+    g_min = int(np.min(all_vals))
+    g_max = int(np.max(all_vals))
+    return f"{g_min}-{g_max}"

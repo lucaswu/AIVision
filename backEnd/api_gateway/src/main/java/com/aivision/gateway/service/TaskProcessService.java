@@ -183,6 +183,12 @@ public class TaskProcessService {
                             if (!defectPosNode.isMissingNode() && defectPosNode.isObject()) {
                                 tf.setDefectPosition(defectPosNode.toString());
                             }
+                            // 解析灰度密度值（底片黑度），仅在字段为空时自动填写（避免覆盖用户修改）
+                            String grayscaleDensity = corrMeta.path("grayscale_density").asText(null);
+                            if (grayscaleDensity != null && !grayscaleDensity.isBlank()
+                                    && (tf.getFilmDensity() == null || tf.getFilmDensity().isBlank())) {
+                                tf.setFilmDensity(grayscaleDensity);
+                            }
                         }
                     } catch (Exception e) {
                         logger.warn("解析建议评级失败: {}", e.getMessage());

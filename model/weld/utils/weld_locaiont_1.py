@@ -449,3 +449,50 @@ def detect_defect_position(image_bgr: np.ndarray,
     """
     detector = create_detector(model_path=model_path, conf_threshold=conf_threshold)
     return detector.predict(image_bgr)
+
+
+def compute_grayscale_density(image_bgr: np.ndarray,
+                              region_w: int = 20,
+                              region_h: int = 50) -> Optional[str]:
+    """
+    Compute grayscale density (film density) for a linear weld image.
+
+    Samples three 20x50 px regions at horizontal positions:
+        (x*20%, y/2),  (x/2, y/2),  (x*80%, y/2)
+
+    Args:
+        image_bgr: Input BGR image (corrected original).
+        region_w: Width of the sampling region in pixels (default 20).
+        region_h: Height of the sampling region in pixels (default 50).
+
+    Returns:
+        A string formatted as "min-max" (e.g. "38-210"), or None if
+        the image is invalid or regions cannot be sampled.
+    """
+    if image_bgr is None or image_bgr.size == 0:
+        return None
+
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if len(image_bgr.shape) == 3 else image_bgr
+    h, w = gray.shape[:2]
+
+    half_w = region_w // 2
+    half_h = region_h // 2
+
+    patches = []
+    cy = h / 2.0
+    for frac in (0.2, 0.5, 0.8):
+        cx = w * frac
+        x1 = max(0, int(cx) - half_w)
+        y1 = max(0, int(cy) - half_h)
+        x2 = min(w, x1 + region_w)
+        y2 = min(h, y1 + region_h)
+        if x2 > x1 and y2 > y1:
+            patches.append(gray[y1:y2, x1:x2])
+
+    if not patches:
+        return None
+
+    all_vals = np.concatenate([p.flatten() for p in patches])
+    g_min = int(np.min(all_vals))
+    g_max = int(np.max(all_vals))
+    return f"{g_min}-{g_max}"
