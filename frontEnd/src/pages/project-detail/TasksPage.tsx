@@ -219,8 +219,8 @@ const TasksPage: React.FC<TasksPageProps> = ({
 
   // 渲染主列表视图
   const renderListView = () => (
-    <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
         <div>
           <Title level={2} style={{ margin: 0 }}>任务管理</Title>
           <Text type="secondary">创建和管理图像处理任务</Text>
@@ -230,27 +230,29 @@ const TasksPage: React.FC<TasksPageProps> = ({
         )}
       </div>
 
-      <Card title={
-        <Space>
-          <FileTextOutlined />
-          <span>任务列表</span>
-          <Button type="text" icon={<ReloadOutlined />} onClick={refreshTasks} />
-        </Space>
-      }>
-        <Table
-          columns={columns}
-          dataSource={tasks}
-          loading={tasksLoading}
-          rowKey="Id"
-          pagination={{
-            current: currentPage,
-            pageSize: pageSize,
-            total: totalTasks,
-            onChange: (p, s) => { setCurrentPage(p); setPageSize(s); },
-            showTotal: (t) => `共 ${t} 条`,
-          }}
-        />
-      </Card>
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+        <Card title={
+          <Space>
+            <FileTextOutlined />
+            <span>任务列表</span>
+            <Button type="text" icon={<ReloadOutlined />} onClick={refreshTasks} />
+          </Space>
+        }>
+          <Table
+            columns={columns}
+            dataSource={tasks}
+            loading={tasksLoading}
+            rowKey="Id"
+            pagination={{
+              current: currentPage,
+              pageSize: pageSize,
+              total: totalTasks,
+              onChange: (p, s) => { setCurrentPage(p); setPageSize(s); },
+              showTotal: (t) => `共 ${t} 条`,
+            }}
+          />
+        </Card>
+      </div>
 
       {/* 重新执行确认框 */}
       <Modal
@@ -319,16 +321,16 @@ const TasksPage: React.FC<TasksPageProps> = ({
           </Row>
         </div>
       </Modal>
-    </>
+    </div>
   );
 
   // 渲染创建任务视图
   const renderCreateView = () => <CreateTaskView onBack={() => setView("list")} projectId={projectId} onCreated={() => { setView("list"); refreshTasks(); }} />;
 
   return (
-    <div style={{ padding: 24, minHeight: "100%" }}>
+    <div style={{ padding: 24, height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
       <Breadcrumb 
-        style={{ marginBottom: "24px" }}
+        style={{ marginBottom: "24px", flexShrink: 0 }}
         items={[
           { title: '项目' },
           { title: projectName },
@@ -340,7 +342,9 @@ const TasksPage: React.FC<TasksPageProps> = ({
           ...(view === "create" ? [{ title: '创建新任务' }] : []),
         ]}
       />
-      {view === "list" ? renderListView() : renderCreateView()}
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        {view === "list" ? renderListView() : renderCreateView()}
+      </div>
     </div>
   );
 };
@@ -389,14 +393,15 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
   const totalSelectedCount = selectedItems.files.size + selectedItems.directories.size + selectedItems.projects.size;
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-      <div style={{ marginBottom: 24 }}>
+    <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ flexShrink: 0, marginBottom: 24 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={onBack} type="text">返回</Button>
         <Title level={2} style={{ marginTop: 16 }}>创建新任务</Title>
         <Text type="secondary">配置检测任务的文件和参数</Text>
       </div>
 
-      <Card title="任务设置" style={{ marginBottom: 24 }}>
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, paddingRight: 8 }}>
+        <Card title="任务设置" style={{ marginBottom: 16 }}>
         <Form form={form} layout="vertical" initialValues={{ Name: `检测任务_${new Date().getTime().toString().slice(-6)}` }}>
           <Form.Item name="Name" label="任务名称" rules={[{ required: true, message: "请输入任务名称" }]}>
             <Input placeholder="请输入任务名称" size="large" />
@@ -461,9 +466,10 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
             </div>
           )}
         </Form>
-      </Card>
+        </Card>
+      </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginBottom: 40 }}>
+      <div style={{ flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: 12, paddingTop: 16, paddingBottom: 16 }}>
         <Button size="large" onClick={onBack}>取消</Button>
         <Button 
           type="primary" 
