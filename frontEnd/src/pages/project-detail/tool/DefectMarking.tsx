@@ -1,12 +1,7 @@
 import React from 'react';
 import { Button, Tooltip } from 'antd';
 import {
-  DragOutlined,
-  BorderOutlined,
   GatewayOutlined,
-  StopOutlined,
-  HighlightOutlined,
-  SaveOutlined,
   CloseOutlined // 新增关闭按钮
 } from "@ant-design/icons";
 
@@ -53,21 +48,9 @@ const DefectMarking: React.FC<DefectMarkingProps> = ({
     }}>
         
         {/* 工具按钮组 */}
-        <Tooltip title="矩形框选(左键拖动)" placement="right">
-          <Button type="text" shape="circle" icon={<BorderOutlined />} style={getButtonStyle('rect')} onClick={() => onTypeChange('rect')} />
-        </Tooltip>
-
         <Tooltip title="多边形(单击左键设置点,双击结束)" placement="right">
           <Button type="text" shape="circle" icon={<GatewayOutlined rotate={180}/>} style={getButtonStyle('polygon')} onClick={() => onTypeChange('polygon')} />
         </Tooltip>
-
-        <Tooltip title="圆形(左键拖动)" placement="right">
-          <Button type="text" shape="circle" icon={<StopOutlined />} style={getButtonStyle('circle')} onClick={() => onTypeChange('circle')} />
-        </Tooltip>
-
-        {/* <Tooltip title="自由画笔" placement="right">
-          <Button type="text" shape="circle" icon={<HighlightOutlined />} style={getButtonStyle('brush')} onClick={() => onTypeChange('brush')} />
-        </Tooltip> */}
 
         {/* 分割线 */}
         <div style={{ width: '80%', height: 1, background: '#434343', margin: '4px 0' }} />
