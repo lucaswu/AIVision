@@ -84,7 +84,7 @@ export default function ProjectDetail() {
   return (
     <Layout style={{ height: "calc(100vh - 64px)", overflow: "hidden" }}>
       <Sider
-        width={200}
+        width="max-content"
         style={{ background: "#fff", borderRight: "1px solid #f0f0f0" }}
       >
         <Menu

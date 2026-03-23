@@ -117,7 +117,7 @@ export default function TrainingProjectLayout() {
 
   return (
     <Layout style={{ height: "calc(100vh - 64px)", overflow: "hidden" }}>
-      <Sider width={240} style={{ background: "#fff", borderRight: "1px solid #f0f0f0" }}>
+      <Sider width="max-content" style={{ background: "#fff", borderRight: "1px solid #f0f0f0" }}>
         <div style={{ padding: 16, borderBottom: "1px solid #f0f0f0" }}>
           <Dropdown menu={{ items: projectMenuItems }} trigger={["click"]}>
             <Button

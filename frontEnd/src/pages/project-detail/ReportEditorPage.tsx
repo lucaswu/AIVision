@@ -528,8 +528,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
 
-  // --- 新增：鼠标悬停的高亮缺陷 Key ---
+  // --- 鼠标悬停的高亮缺陷 Key ---
   const [hoveredDefectKey, setHoveredDefectKey] = useState<string | null>(null);
+
+  // --- 左侧栏宽度动态计算 ---
+  const reportTitleRef = useRef<HTMLDivElement>(null);
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(280);
 
   // --- 标记是否为初始加载（防止自动保存时触发） ---
   const isInitialLoadRef = useRef(true);
@@ -598,6 +602,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // 2. 获取缺陷类型列表
   const { data: defectTypesResp, error: defectTypesError } = useRequest(() => defectTypeAPI.getDefectTypes());
   const isDefectTypesFromBackend = !defectTypesError && defectTypesResp?.Data != null;
+
+  // 动态计算左侧栏宽度
+  useEffect(() => {
+    if (reportTitleRef.current) {
+      // 测量标题的实际宽度，并加上左右内边距（16px * 2 = 32px）
+      const measuredWidth = reportTitleRef.current.offsetWidth + 40; 
+      setLeftSidebarWidth(Math.max(measuredWidth, 240)); // 最小不低于 240
+    }
+  }, [report?.ReportName, taskId, reportResp]);
 
   // 使用 useMemo 缓存 DEFECT_TYPES，避免每次渲染都创建新数组导致 useEffect 重复执行
   const DEFECT_TYPES = useMemo(() => {
@@ -2492,9 +2505,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ color: item.color, fontSize: 14 }}>●</span>
-                <span style={{ color: '#262626', fontSize: 13 }}>{item.label}</span>
+                <span style={{ color: '#262626', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
               </div>
-              {item.position && <span style={{ color: '#8c8c8c', fontSize: 12, paddingLeft: 20 }}>({item.position})</span>}
+              {item.position && <span style={{ color: '#8c8c8c', fontSize: 12, paddingLeft: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>({item.position})</span>}
             </div>
           )}
 
@@ -2572,8 +2585,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
       {/* 左侧文件列表 (保持不变) */}
-      <Sider width={280} theme="light" style={{ borderRight: "1px solid #f0f0f0", overflow: 'hidden' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Sider width={leftSidebarWidth} theme="light" style={{ borderRight: "1px solid #f0f0f0", overflow: 'hidden', transition: 'width 0.2s' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: leftSidebarWidth }}>
         <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
           <Space direction="vertical" style={{ width: "100%" }} size={12}>
             <Button
@@ -2584,8 +2597,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             >
               返回列表
             </Button>
-            <Title level={4} style={{ margin: 0, fontSize: '18px' }}>
-              {report?.ReportName || `检测报告_${taskId.slice(-6)}`}
+            <Title level={4} style={{ margin: 0, fontSize: '18px', whiteSpace: 'nowrap', display: 'inline-block' }}>
+              <div ref={reportTitleRef}>
+                {report?.ReportName || `检测报告_${taskId.slice(-6)}`}
+              </div>
             </Title>
           </Space>
 
@@ -2652,9 +2667,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     ) : (
                       <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #faad14' }} />
                     )}
-                    <Text ellipsis style={{ width: 160, color: selectedFile?.TaskFileId === file.TaskFileId ? "#1890ff" : "inherit" }}>
-                      {file.FileName}
-                    </Text>
+                    <Tooltip title={file.FileName} placement="topLeft" mouseEnterDelay={0.1}>
+                      <Text ellipsis style={{ flex: 1, color: selectedFile?.TaskFileId === file.TaskFileId ? "#1890ff" : "inherit", minWidth: 0 }}>
+                        {file.FileName}
+                      </Text>
+                    </Tooltip>
                   </Space>
                 </div>
               </List.Item>
@@ -3790,7 +3807,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       </Content >
 
       {/* 右侧审核信息 (重构区域) */}
-      < Sider width={320} theme="light" style={{ borderLeft: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column', background: '#fff' }}>
+      < Sider width={256} theme="light" style={{ borderLeft: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column', background: '#fff' }}>
         {/* 设置 height: 100% 和 overflowY: auto，
             确保内容超出时，这个容器内部出现滚动条，而不是把页面撑开。
            */}
