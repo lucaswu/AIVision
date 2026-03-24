@@ -1,0 +1,20 @@
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+mosaic: 1.0
+mixup: 0.0
+copy_paste: 0.0
+
+# These keys are consumed by gauge/train.py and are not passed to Ultralytics directly.
+custom_aug:
+  quadrantal_rotation:
+    enabled: true
+    base_angles: [0, 90, 180, 270]
+    jitter: 15.0

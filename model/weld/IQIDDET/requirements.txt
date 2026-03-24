@@ -1,0 +1,17 @@
+# Install a CUDA-matched PyTorch first if you train on GPU:
+# https://pytorch.org/get-started/locally/
+torch
+numpy
+scipy
+matplotlib
+scikit-image
+opencv-python
+PyYAML
+docopt
+tqdm
+ultralytics
+optuna
+paddleocr
+
+# DVC is used by this repo's pipeline/experiments commands.
+dvc

@@ -1,0 +1,35 @@
+model:
+  # backbone multi-task parameters
+  image:
+    mean: [ 125.678420 ]
+    stddev: [ 65.406591 ]
+  ang_type: radian
+  lformat: la    # la means length angle, dxdy means
+  heatmap_1d: true
+
+  # backbone parameters
+  backbone: hrnet   # hrnet,  hrn·et_line
+  num_stacks: 1
+  width: 32  # 32
+  hrnet_config: config/hrnet_w32.yaml
+
+  head_net: [raw, raw, raw, raw, raw]  # see MultitaskHead for details  raw, mask, raw_upsampler, line
+  head:               #loss权重放在params.yaml中
+    order: [lcmap, lcoff, lleng, angle, count]  # [lcmap, lcoff, lleng, angle, count]
+    lcmap:
+      head_size: 2
+      loss: Focal_loss  # Focal_loss  CE
+      focal_alpha: 5.0
+    lcoff:
+      head_size: 1
+      loss: sigmoid_L1
+    lleng:
+      head_size: 1
+      loss: sigmoid_L1  # sigmoid_L1, L1, lt
+    angle:
+      head_size: 1
+      loss: sigmoid_L1
+    count:
+      head_size: 8
+      loss: CE
+      sigma: 1.0

@@ -43,7 +43,16 @@ from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
 from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc0  # noqa: E402
 from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc1  # noqa: E402
-from utils.weld_OCR import OCRRunner, _OCR_UTILS_AVAILABLE  # noqa: E402
+# IQI Grade Inferencer (replaces legacy OCR runner)
+IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
+if str(IQIDDET_ROOT) not in sys.path:
+    sys.path.insert(0, str(IQIDDET_ROOT))
+try:
+    from gauge.iqi_inferencer import IQIInferencer, build_delivery_record, build_iqi_statistics  # noqa: E402
+    _IQI_AVAILABLE = True
+except ImportError as _iqi_err:
+    _IQI_AVAILABLE = False
+    print(f"[警告] IQIInferencer 加载失败，IQI 功能不可用: {_iqi_err}")
 
 
 SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
@@ -138,15 +147,50 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-location2-dir",
                         help="可选，将缺陷位置检测2可视化图像保存到指定目录")
 
-    # OCR集成参数
-    parser.add_argument("--enable-ocr", action="store_true",
-                        help="启用OCR识别（与缺陷检测并行，输入为矫正后的原始图C）")
-    parser.add_argument("--ocr-max-size", type=int, default=1920,
-                        help="OCR处理时的最大图像边长（默认1920）")
-    parser.add_argument("--no-ocr-annotation", action="store_true",
-                        help="不保存OCR标注图片")
-    parser.add_argument("--ocr-results-json", default="ocr_results.json",
-                        help="OCR结果JSON文件名（相对output_dir，默认ocr_results.json）")
+    # IQI Grade Inferencer 集成参数（替换旧版 OCR runner）
+    parser.add_argument("--enable-iqi", action="store_true",
+                        help="启用 IQI 像质计识别（调用 IQIDDET/run_iqi_grade_infer.py 逻辑）")
+    parser.add_argument("--iqi-results-json", default="iqi_grade_results.json",
+                        help="IQI 结果 JSON 文件名（相对 output_dir）")
+    # Gauge（OBB 检测）
+    parser.add_argument("--gauge-weights", default="IQIDDET/models/guagerotation.pt",
+                        help="OBB 像质计检测权重")
+    parser.add_argument("--gauge-conf", type=float, default=0.25, help="OBB 置信度阈值")
+    parser.add_argument("--gauge-iou", type=float, default=0.45, help="OBB IoU 阈值")
+    parser.add_argument("--gauge-imgsz", type=int, default=640, help="OBB 推理图像尺寸")
+    parser.add_argument("--gauge-device", default=None, help="OBB 推理设备（如 cuda:0/cpu）")
+    parser.add_argument("--gauge-select", choices=["conf", "area"], default="conf",
+                        help="多个检测结果时选取策略")
+    # FClip（像质丝计数）
+    parser.add_argument("--fclip-ckpt", default="IQIDDET/models/fclip67.pth.tar",
+                        help="FClip 检查点路径")
+    parser.add_argument("--fclip-config", default="IQIDDET/models/fclip_config.yaml",
+                        help="FClip 模型配置 YAML")
+    parser.add_argument("--fclip-device", default=None, help="FClip 推理设备")
+    # OCR（文字识别，用于像质计标识读取）
+    parser.add_argument("--ocr-device", choices=["cpu", "gpu"], default="gpu",
+                        help="PaddleOCR 设备")
+    parser.add_argument("--ocr-det-model-name", default="PP-OCRv5_server_det",
+                        help="PaddleOCR 文字检测模型名称")
+    parser.add_argument("--ocr-det-model-dir", default=None,
+                        help="本地 PaddleOCR 文字检测模型目录")
+    parser.add_argument("--ocr-det-limit-side-len", type=int, default=960,
+                        help="OCR 检测输入最长边限制")
+    parser.add_argument("--ocr-det-limit-type", default="max", choices=["max", "min"],
+                        help="PaddleOCR 检测边长限制类型")
+    parser.add_argument("--ocr-rec-model-name", default="en_PP-OCRv5_mobile_rec",
+                        help="PaddleOCR 文字识别模型名称")
+    parser.add_argument("--ocr-rec-model-dir", default=None,
+                        help="本地 PaddleOCR 文字识别模型目录（如 IQIDDET/models/OCR_rec_inference_best_accuracy）")
+    parser.add_argument("--enable-ocr-orientation", action="store_true",
+                        help="启用文本裁剪方向矫正")
+    parser.add_argument("--ocr-orientation-model",
+                        default="IQIDDET/models/ocr_orientation_model.pth",
+                        help="文本方向矫正模型权重(.pth)")
+    parser.add_argument("--ocr-orientation-device", default="cuda:0",
+                        help="文本方向矫正推理设备")
+    parser.add_argument("--ocr-number-range", default="6,10-15",
+                        help="允许的像质计标号范围，如 6,10-15")
 
     return parser.parse_args()
 
@@ -219,7 +263,7 @@ class InferencePipelineRunner:
                  corrector: Optional[WeldOrientationCorrector] = None,
                  locator: Optional[WeldSeamLocator] = None,
                  detector: Optional[WeldDefectPositionDetector] = None,
-                 ocr_runner: Optional[OCRRunner] = None):
+                 iqi_inferencer=None):
         self.args = args
         self.mode = args.mode
         self.roi_detector = roi_detector
@@ -229,7 +273,7 @@ class InferencePipelineRunner:
         self.corrector = corrector
         self.locator = locator
         self.detector = detector
-        self.ocr_runner = ocr_runner
+        self.iqi_inferencer = iqi_inferencer
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -248,12 +292,6 @@ class InferencePipelineRunner:
         results: List[Dict[str, Any]] = []
         total = len(image_paths)
 
-        # Pre-create OCR annotated-images directory once (avoids repeated mkdir calls)
-        ocr_annotated_dir: Optional[Path] = None
-        if self.ocr_runner is not None and self.ocr_runner.save_annotations and self.output_dir:
-            ocr_annotated_dir = self.output_dir / "annotated_images"
-            ocr_annotated_dir.mkdir(parents=True, exist_ok=True)
-
         for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
             try:
                 # A→B/D: weld seam / defect-position detection; A→correction→C: defect type detection
@@ -262,23 +300,14 @@ class InferencePipelineRunner:
                 label = correction_info.get('label', 0)
                 transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
 
-                # OCR on corrected image C (independent of defect detection)
-                ocr_result: Optional[Dict[str, Any]] = None
-                if self.ocr_runner is not None and corrected_img is not None:
+                # IQI Grade Inference（替换旧版 OCR runner，直接传入原始图像路径）
+                iqi_result: Optional[Dict[str, Any]] = None
+                if self.iqi_inferencer is not None:
                     try:
-                        ocr_save_path: Optional[str] = None
-                        if ocr_annotated_dir is not None:
-                            ocr_save_path = str(ocr_annotated_dir / f"{image_path.stem}_annotated.jpg")
-                        ocr_result = self.ocr_runner.process_image_array(
-                            corrected_img, image_path.name, ocr_save_path
-                        )
-                        if ocr_result:
-                            self.ocr_runner.results.append(ocr_result)
-                            self.ocr_runner.statistics.append(
-                                self.ocr_runner._extract_statistics(ocr_result)
-                            )
-                    except Exception as ocr_exc:
-                        print(f"[警告] OCR失败 ({image_path.name}): {ocr_exc}")
+                        iqi_record, _ = self.iqi_inferencer.infer_image_path(image_path)
+                        iqi_result = iqi_record
+                    except Exception as iqi_exc:
+                        print(f"[警告] IQI 推理失败 ({image_path.name}): {iqi_exc}")
 
                 # Compute grayscale density (film blackness) from the inference results
                 # corrected_img is orientation-corrected image matching weld_location keypoints
@@ -308,7 +337,7 @@ class InferencePipelineRunner:
                     "rois": rois,
                     "weld_location": weld_location,
                     "defect_position": defect_position,
-                    "ocr": ocr_result,
+                    "ocr": iqi_result,
                     "grayscale_density": grayscale_density,
                 })
             except Exception as exc:
@@ -576,27 +605,64 @@ def main():
                 "请确认路径正确，或通过 --location2-model 指定正确路径"
             )
         try:
+            def _abs(p):
+                from pathlib import Path
+                return str(Path(p).resolve()) if p else p
+
             detector = WeldDefectPositionDetector(
                 model_path=str(location2_model_path),
                 conf_threshold=args.location2_conf,
+                ocr_device=args.ocr_device if hasattr(args, 'ocr_device') else 'cpu',
+                ocr_det_model_dir=_abs(args.ocr_det_model_dir) if hasattr(args, 'ocr_det_model_dir') else None,
+                ocr_rec_model_dir=_abs(args.ocr_rec_model_dir) if hasattr(args, 'ocr_rec_model_dir') else None,
+                ocr_det_model_name=args.ocr_det_model_name if hasattr(args, 'ocr_det_model_name') else "PP-OCRv5_server_det",
+                ocr_rec_model_name=None if (hasattr(args, 'ocr_rec_model_dir') and args.ocr_rec_model_dir) else "en_PP-OCRv5_mobile_rec"
             )
         except Exception as e:
             print(f"[警告] 缺陷位置检测2初始化失败: {e}")
     else:
         print("[信息] 未启用缺陷位置检测2（使用 --enable-location2 开启）")
 
-    # Initialize OCR runner if --enable-ocr is set
-    ocr_runner = None
-    if args.enable_ocr:
-        if _OCR_UTILS_AVAILABLE:
-            print("启用OCR识别（在矫正后图像C上运行，与缺陷检测独立并行）")
-            ocr_runner = OCRRunner(
-                max_image_size=args.ocr_max_size,
-                save_annotations=not args.no_ocr_annotation,
-                verbose=False,
-            )
+    # Initialize IQI Grade Inferencer if --enable-iqi is set
+    iqi_inferencer = None
+    if args.enable_iqi:
+        if _IQI_AVAILABLE:
+            print("启用 IQI 像质计识别（IQIDDET 集成，与缺陷检测独立并行）")
+            try:
+                # 将所有路径参数转为绝对路径，避免子进程(ocr_paddle_worker)工作目录
+                # 与主进程不同导致相对路径失效
+                def _abs(p):
+                    return str(Path(p).resolve()) if p else p
+
+                # 当提供本地 rec_model_dir 时，不传 rec_model_name，
+                # 让 PaddleOCR 直接从目录内 inference.yml 读取 model_name，
+                # 避免默认 model_name 与本地模型不匹配导致 AssertionError。
+                iqi_inferencer = IQIInferencer(
+                    gauge_weights=_abs(args.gauge_weights),
+                    fclip_ckpt=_abs(args.fclip_ckpt),
+                    gauge_conf=args.gauge_conf,
+                    gauge_iou=args.gauge_iou,
+                    gauge_imgsz=args.gauge_imgsz,
+                    gauge_device=args.gauge_device,
+                    gauge_select=args.gauge_select,
+                    ocr_device=args.ocr_device,
+                    ocr_det_model_name=args.ocr_det_model_name,
+                    ocr_det_model_dir=_abs(args.ocr_det_model_dir),
+                    ocr_rec_model_name=None if args.ocr_rec_model_dir else args.ocr_rec_model_name,
+                    ocr_rec_model_dir=_abs(args.ocr_rec_model_dir),
+                    ocr_det_limit_side_len=args.ocr_det_limit_side_len,
+                    ocr_det_limit_type=args.ocr_det_limit_type,
+                    enable_ocr_orientation=args.enable_ocr_orientation,
+                    ocr_orientation_model=_abs(args.ocr_orientation_model),
+                    ocr_orientation_device=args.ocr_orientation_device,
+                    ocr_number_range=args.ocr_number_range,
+                    fclip_device=args.fclip_device,
+                    fclip_model_config=_abs(args.fclip_config),
+                )
+            except Exception as iqi_init_err:
+                print(f"[警告] IQIInferencer 初始化失败，跳过 IQI 推理: {iqi_init_err}")
         else:
-            print("[警告] --enable-ocr 已指定，但OCR工具未加载，跳过OCR")
+            print("[警告] --enable-iqi 已指定，但 IQIInferencer 未加载，跳过 IQI 推理")
 
     runner = InferencePipelineRunner(
         args=args,
@@ -606,7 +672,7 @@ def main():
         corrector=corrector,
         locator=locator,
         detector=detector,
-        ocr_runner=ocr_runner,
+        iqi_inferencer=iqi_inferencer,
     )
     results = runner.run(image_paths)
 
@@ -621,12 +687,52 @@ def main():
     print(f"\n推理完成: 模式={args.mode}，共处理 {len(results)} 张图像。")
     print(f"结果JSON: {results_path}")
 
-    # Save OCR outputs (mirrors OCR_main.py output files)
-    if ocr_runner is not None:
-        ocr_runner.save_statistics(output_dir)
-        ocr_runner.save_detailed_results(output_dir)
-        ocr_runner.save_results_json(output_dir, filename=args.ocr_results_json)
-        print(f"OCR完成: 共处理 {len(ocr_runner.results)} 张图像。")
+    # Save IQI results summary JSON（只要 --enable-iqi 就保存，不依赖初始化是否成功）
+    if args.enable_iqi:
+        if iqi_inferencer is not None:
+            iqi_inferencer.close()
+        iqi_raw_records = [r.get("ocr") for r in results if r.get("ocr") is not None]
+        delivery_records = [build_delivery_record(rec) for rec in iqi_raw_records]
+        summary = build_iqi_statistics(iqi_raw_records)
+        image_root = Path(args.image_dir).resolve() if args.image_dir else None
+        iqi_payload = {
+            "schema": "iqi_grade_batch_v1",
+            "ok": True,
+            "fatal_error": None,
+            "meta": {
+                "created_at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
+                "image_root": str(image_root) if image_root is not None else None,
+                **(iqi_inferencer.get_runtime_meta() if iqi_inferencer is not None else {}),
+                "ocr_device": args.ocr_device,
+                "ocr_det_model_name": args.ocr_det_model_name,
+                "ocr_det_model_dir": args.ocr_det_model_dir,
+                "ocr_rec_model_name": args.ocr_rec_model_name,
+                "ocr_rec_model_dir": args.ocr_rec_model_dir,
+                "ocr_det_limit_side_len": args.ocr_det_limit_side_len,
+                "ocr_det_limit_type": args.ocr_det_limit_type,
+                "ocr_number_range": args.ocr_number_range,
+                "enable_ocr_orientation": args.enable_ocr_orientation,
+                "ocr_orientation_model": args.ocr_orientation_model,
+                "ocr_orientation_device": args.ocr_orientation_device,
+            },
+            "summary": {
+                "images_total": summary["images_total"],
+                "success_total": summary["success_total"],
+                "failure_total": summary["failure_total"],
+                "result_code_hist": summary["result_code_hist"],
+                "result_code_hist_named": summary["result_code_hist_named"],
+                "iqi_type_hist": summary["iqi_type_hist"],
+                "grade_hist": summary["grade_hist"],
+                "field_totals": summary["field_totals"],
+                "images_with_general_fields": summary["images_with_general_fields"],
+                "images_with_iqi_marker": summary["images_with_iqi_marker"],
+            },
+            "results": delivery_records,
+        }
+        iqi_out_path = output_dir / args.iqi_results_json
+        with open(iqi_out_path, "w", encoding="utf-8") as f:
+            json.dump(iqi_payload, f, indent=2, ensure_ascii=False)
+        print(f"IQI 推理完成: 共处理 {len(delivery_records)} 张图像，结果JSON: {iqi_out_path}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+
+generated/
+runs/
+
+en_PP-OCRv5_mobile_rec_pretrained.pdparams
+ocr_rec_dataset_examples/
+
+tools/build/
+tools/dist/
+tools/*.spec
+tools/.venv_win_build/
+
+third_party/__pycache__/

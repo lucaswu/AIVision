@@ -89,16 +89,14 @@ class WeldDefectPositionDetector:
                  model_path: Union[str, Path] = DEFAULT_LOCATION1_MODEL_PATH,
                  conf_threshold: float = 0.25,
                  use_ocr: bool = True,
-                 adaptive_processor_path: Optional[str] = None):
+                 adaptive_processor_path: Optional[str] = None,
+                 ocr_device: str = "cpu",
+                 ocr_det_model_dir: Optional[str] = None,
+                 ocr_rec_model_dir: Optional[str] = None,
+                 ocr_det_model_name: Optional[str] = "PP-OCRv5_server_det",
+                 ocr_rec_model_name: Optional[str] = "en_PP-OCRv5_mobile_rec"):
         """
         Initialize the weld defect position detector.
-
-        Args:
-            model_path: Path to the YOLO detection model weights (.pt file).
-            conf_threshold: Minimum confidence to keep a detection.
-            use_ocr: Whether to run PaddleOCR on detected mark regions.
-            adaptive_processor_path: Explicit path to adaptive-image-processor.py.
-                If None, the module will search relative to the weld root and cwd.
         """
         from ultralytics import YOLO  # lazy import
 
@@ -112,12 +110,24 @@ class WeldDefectPositionDetector:
         # Load YOLO detection model
         self.model = YOLO(str(self.model_path))
 
-        # Initialize PaddleOCR
+        # Initialize PaddleOCRSubprocessClient
         self.reader = None
-        if self.use_ocr and HAS_PADDLEOCR:
-            self.reader = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
-        elif self.use_ocr:
-            print("[WeldDefectPositionDetector] Warning: PaddleOCR not available, OCR will be skipped.")
+        if self.use_ocr:
+            try:
+                import sys
+                if str(_WELD_ROOT / "IQIDDET") not in sys.path:
+                    sys.path.insert(0, str(_WELD_ROOT / "IQIDDET"))
+                from gauge.ocr_stage import PaddleOCRSubprocessClient
+                
+                self.reader = PaddleOCRSubprocessClient(
+                    device=ocr_device,
+                    det_model_name=ocr_det_model_name if not ocr_det_model_dir else None,
+                    det_model_dir=ocr_det_model_dir,
+                    rec_model_name=ocr_rec_model_name if not ocr_rec_model_dir else None,
+                    rec_model_dir=ocr_rec_model_dir
+                )
+            except Exception as e:
+                print(f"[WeldDefectPositionDetector] Warning: cannot initialize PaddleOCRSubprocessClient, OCR will be skipped. Exception: {e}")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -225,7 +235,7 @@ class WeldDefectPositionDetector:
             return None
 
         try:
-            ocr_result = self.reader.ocr(roi, cls=True)
+            ocr_result = self.reader.ocr(roi)
             if not ocr_result or not ocr_result[0]:
                 return None
 
@@ -417,16 +427,6 @@ def create_detector(model_path: Union[str, Path, None] = None,
                     **kwargs) -> WeldDefectPositionDetector:
     """
     Factory function to create a WeldDefectPositionDetector instance.
-
-    Args:
-        model_path: Path to the YOLO detection model weights.
-                    Defaults to ``weight/location_1.pt`` relative to the
-                    weld module root.
-        **kwargs: Additional keyword arguments forwarded to
-                  :class:`WeldDefectPositionDetector`.
-
-    Returns:
-        WeldDefectPositionDetector instance.
     """
     if model_path is None:
         model_path = DEFAULT_LOCATION1_MODEL_PATH
@@ -435,19 +435,24 @@ def create_detector(model_path: Union[str, Path, None] = None,
 
 def detect_defect_position(image_bgr: np.ndarray,
                            model_path: Union[str, Path, None] = None,
-                           conf_threshold: float = 0.25) -> Dict:
+                           conf_threshold: float = 0.25,
+                           ocr_device: str = "cpu",
+                           ocr_det_model_dir: Optional[str] = None,
+                           ocr_rec_model_dir: Optional[str] = None,
+                           ocr_det_model_name: Optional[str] = "PP-OCRv5_server_det",
+                           ocr_rec_model_name: Optional[str] = "en_PP-OCRv5_mobile_rec") -> Dict:
     """
     Convenience function to run defect position detection on a single image.
-
-    Args:
-        image_bgr: Input BGR image (corrected original).
-        model_path: Path to model weights (uses default if None).
-        conf_threshold: Minimum detection confidence.
-
-    Returns:
-        Result dict (see :meth:`WeldDefectPositionDetector.predict`).
     """
-    detector = create_detector(model_path=model_path, conf_threshold=conf_threshold)
+    detector = create_detector(
+        model_path=model_path, 
+        conf_threshold=conf_threshold,
+        ocr_device=ocr_device,
+        ocr_det_model_dir=ocr_det_model_dir,
+        ocr_rec_model_dir=ocr_rec_model_dir,
+        ocr_det_model_name=ocr_det_model_name,
+        ocr_rec_model_name=ocr_rec_model_name
+    )
     return detector.predict(image_bgr)
 
 

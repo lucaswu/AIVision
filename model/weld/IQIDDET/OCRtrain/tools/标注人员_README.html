@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>像质计文字标注说明</title>
+  <style>
+    body {
+      font-family: "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+      margin: 36px 44px;
+      color: #222;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+    h1, h2 {
+      color: #111;
+      margin-bottom: 8px;
+    }
+    h1 {
+      font-size: 24px;
+      border-bottom: 2px solid #444;
+      padding-bottom: 8px;
+      margin-bottom: 18px;
+    }
+    h2 {
+      font-size: 18px;
+      margin-top: 24px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    ul, ol {
+      margin: 8px 0 8px 24px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    code, pre {
+      font-family: "Consolas", "Courier New", monospace;
+    }
+    pre {
+      background: #f6f6f6;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .note {
+      padding: 10px 12px;
+      background: #fff7e6;
+      border: 1px solid #e3c58a;
+      border-radius: 6px;
+    }
+    .strong {
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <h1>像质计文字标注说明</h1>
+  <p>本压缩包用于像质计文字图片标注。请严格按照下面步骤操作。</p>
+
+  <h2>1. 解压要求</h2>
+  <p>请先将整个压缩包<strong>完整解压到一个独立文件夹</strong>中，再开始操作。</p>
+  <div class="note">
+    <p>注意：</p>
+    <ul>
+      <li>不要在压缩包预览界面里直接运行 <code>exe</code></li>
+      <li>不要只解压其中一部分文件</li>
+      <li><code>exe</code>、待标注图片文件夹、说明文件必须保持在同一个解压目录内</li>
+    </ul>
+  </div>
+
+  <h2>2. 启动程序并选择待标注文件夹</h2>
+  <p>双击打开标注程序 <code>label_rec_no_box.exe</code>。</p>
+  <p>程序启动后会弹出文件夹选择框：</p>
+  <ul>
+    <li>如果由 <strong>1 人独立完成全部标注</strong>，请选择大文件夹 <code>iqi_rec_textdet_v1</code></li>
+    <li>如果由 <strong>多人分工标注</strong>，请只选择自己分配到的子文件夹</li>
+  </ul>
+  <p>多人分工示例：</p>
+  <pre>iqi_rec_textdet_v1/det_crops/all/images__bde9ea/1120</pre>
+  <p>也就是说，每位标注人员只处理自己分配到的那个文件夹，不要重复标注其他人的文件夹。</p>
+  <p>如果程序启动后浏览器没有自动打开，可手动访问：</p>
+  <pre>http://127.0.0.1:8766/</pre>
+
+  <h2>3. 标注规则</h2>
+  <ol>
+    <li>如果图片方向不正，必须先把图片<strong>旋转 / 镜像到文字方向正确</strong>后，再填写标注内容。原因是后续文本矫正模型需要使用这些数据，输入图像必须保证文字方向正确。</li>
+    <li>遇到<strong>文字重叠、严重遮挡、完全无法辨识</strong>的图片，才允许点击“跳过 =&gt; ~”。</li>
+    <li>只要文字<strong>可以辨识</strong>，就<strong>禁止跳过</strong>，必须填写真实内容。</li>
+    <li>十字箭头请统一标注为：<code>+</code></li>
+    <li>所有英文字母请统一使用<strong>大写</strong></li>
+  </ol>
+
+  <p>常用按钮和快捷键：</p>
+  <ul>
+    <li>保存并下一张：<code>Ctrl+E</code> 或回车</li>
+    <li>跳过 =&gt; ~：<code>Ctrl+Q</code></li>
+    <li>左转 90 度：<code>A</code></li>
+    <li>右转 90 度：<code>D</code></li>
+    <li>水平镜像：<code>M</code></li>
+    <li>重置预览：<code>R</code></li>
+  </ul>
+
+  <h2>4. 标注完成后的回传要求</h2>
+  <p>当所选文件夹中的所有图片都标注完成后，程序会在 <code>exe</code> 同级目录自动生成 3 个文件：</p>
+  <ul>
+    <li><code>&lt;所选文件夹名&gt;.txt</code></li>
+    <li><code>&lt;所选文件夹名&gt;_labels.tsv</code></li>
+    <li><code>&lt;所选文件夹名&gt;_session.json</code></li>
+  </ul>
+  <p>请将以下内容<strong>一起打包成一个压缩包并返回</strong>：</p>
+  <ul>
+    <li>上面自动生成的 3 个标注文件</li>
+    <li>你本次实际选择并标注的那个文件夹</li>
+  </ul>
+  <p>例如，如果你选择并标注的是：</p>
+  <pre>iqi_rec_textdet_v1/det_crops/all/images__bde9ea/1120</pre>
+  <p>则回传压缩包中应至少包含：</p>
+  <ul>
+    <li><code>1120.txt</code></li>
+    <li><code>1120_labels.tsv</code></li>
+    <li><code>1120_session.json</code></li>
+    <li>文件夹 <code>1120</code></li>
+  </ul>
+
+  <h2>5. 额外提醒</h2>
+  <ul>
+    <li>每次建议只处理一个分配好的文件夹</li>
+    <li>标注过程中不要随意改动图片文件夹结构</li>
+    <li>如中途退出，下次可继续打开程序并重新选择同一个文件夹，程序会自动接续之前的标注进度</li>
+  </ul>
+</body>
+</html>

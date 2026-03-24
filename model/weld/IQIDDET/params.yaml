@@ -1,0 +1,75 @@
+data:
+  label_dir: IQIdata/ori/label
+  img_dir: IQIdata/ori/img
+  processed_dir: IQIdata/processed
+  dataname: IQI
+preprocess:
+  heatmap_resolution: 64
+  input_resolution_h: 256
+  input_resolution_w: 256
+  val_ratio: 0.1
+  seed: 0
+  angle_thresh: 50
+  crop: true
+  crop_factor: 1.2
+train:
+  logdir: logs/IQI
+  run_name: HR_1D_0204_test2
+  batch_size: 64
+  eval_batch_size: 64
+  lr: 0.004
+  max_epoch: 400
+  num_workers: 8
+  validation_interval: 6400
+  early_stop: 16
+  visual_num: 2
+  stage1: fclip
+  delta: 0.8
+  nlines: 7
+  s_nms: 2
+loss:
+  lcmap_weight: 3
+  lcoff_weight: 0.25
+  lleng_weight: 0.0
+  angle_weight: 1.0
+  count_weight: 1
+  count_sigma: 1
+optim:
+  name: Adam
+  amsgrad: true
+  weight_decay: 0.0001
+  lr_scheduler: multi_step
+  lr_decay_epoch:
+  - 240
+  - 280
+gauge_preprocess:
+  out_dir: IQIdata/gauge_obb
+  val_ratio: 0.1
+  seed: 0
+  class_name: IQI
+  label_filter: ''
+gauge_train:
+  model: yolo26n-obb.pt
+  data: IQIdata/gauge_obb/data.yaml
+  run_name: guage_rotation
+  project: logs/gauge
+  imgsz: 1024
+  batch: 32
+  epochs: 300
+  resume: null
+  device: 0
+  workers: 8
+  seed: 0
+  patience: 50
+  optimizer: SGD
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  amp: true
+  cache: false
+  val: true
+  save_period: -1
+  augment: gauge/config/augment.yaml
+  metrics_path: metrics/gauge_metrics.json
+  extra_args: {}
