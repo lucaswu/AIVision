@@ -89,16 +89,30 @@ services:
     container_name: ai-detection-inference
     restart: unless-stopped
     environment:
-      - USE_GPU=${USE_GPU:-false}
+      - USE_GPU=true
       # 模型权重路径（使用绑定挂载的本地目录）
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
       - PRIMARY_WEIGHTS=/app/model/weights/0208primary.pth
       - LOCATION_MODEL=/app/model/weights/location_0.pt
       - LOCATION2_MODEL=/app/model/weights/location_1.pt
+      # IQI 像质计模型路径（已通过 COPY weld/ /app/model/ 内置于镜像，使用相对路径）
+      - GAUGE_WEIGHTS=IQIDDET/models/guagerotation.pt
+      - FCLIP_CKPT=IQIDDET/models/fclip67.pth.tar
+      - FCLIP_CONFIG=IQIDDET/models/fclip_config.yaml
+      - OCR_REC_MODEL_DIR=IQIDDET/models/OCR_rec_inference_best_accuracy
+      - OCR_DET_MODEL_DIR=IQIDDET/models/PP-OCRv5_server_det
+      - OCR_ORIENTATION_MODEL=IQIDDET/models/ocr_orientation_model.pth
     ports:
       - "8000:8000"
     networks:
       - ai-services
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
     volumes:
       - files_data:/app/data/files
       - results_data:/app/data/results
@@ -121,9 +135,16 @@ services:
     container_name: ai-inference-ocr
     restart: unless-stopped
     environment:
-      - USE_GPU=${USE_GPU:-false}
+      - USE_GPU=true
     networks:
       - ai-services
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
     volumes:
       - paddleocr_cache:/root/.paddleocr
     healthcheck:

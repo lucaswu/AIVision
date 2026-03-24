@@ -82,8 +82,7 @@ class InferenceRequest(BaseModel):
     location_conf: float = Field(default=0.6, description="焊缝位置检测置信度阈值")
     enable_location2: bool = Field(default=True, description="是否启用缺陷位置检测2（location_1.pt）")
     location2_conf: float = Field(default=0.25, description="缺陷位置检测2置信度阈值")
-    enable_ocr: bool = Field(default=True, description="是否启用OCR识别（在矫正后图像C上运行）")
-    ocr_max_size: int = Field(default=1920, description="OCR处理时的最大图像边长")
+    enable_iqi: bool = Field(default=True, description="是否启用IQI像质计识别")
 
 
 class InferenceResponse(BaseModel):
@@ -452,12 +451,25 @@ def _sync_run_inference_via_script(request: InferenceRequest):
         else:
             print(f"[Task {task_id}] 缺陷位置检测2模型未找到，跳过检测: {location2_model}")
 
-    # OCR集成（在矫正后图像C上运行，与缺陷检测独立）
-    if request.enable_ocr:
-        cmd += ["--enable-ocr", "--ocr-max-size", str(request.ocr_max_size)]
-        print(f"[Task {task_id}] 启用OCR识别")
+    # IQI 像质计识别
+    if request.enable_iqi:
+        iqi_device = "cuda:0" if _cuda_available else "cpu"
+        cmd += [
+            "--enable-iqi",
+            "--gauge-weights",        os.environ.get("GAUGE_WEIGHTS",        "IQIDDET/models/guagerotation.pt"),
+            "--fclip-ckpt",           os.environ.get("FCLIP_CKPT",           "IQIDDET/models/fclip67.pth.tar"),
+            "--fclip-config",         os.environ.get("FCLIP_CONFIG",         "IQIDDET/models/fclip_config.yaml"),
+            "--ocr-rec-model-dir",    os.environ.get("OCR_REC_MODEL_DIR",    "IQIDDET/models/OCR_rec_inference_best_accuracy"),
+            "--ocr-det-model-dir",    os.environ.get("OCR_DET_MODEL_DIR",    "IQIDDET/models/PP-OCRv5_server_det"),
+            "--enable-ocr-orientation",
+            "--ocr-orientation-model", os.environ.get("OCR_ORIENTATION_MODEL", "IQIDDET/models/ocr_orientation_model.pth"),
+            "--ocr-orientation-device", iqi_device,
+            "--ocr-device",           "gpu" if _cuda_available else "cpu",
+            "--ocr-number-range",     "6,10-15",
+        ]
+        print(f"[Task {task_id}] 启用IQI像质计识别 (device={iqi_device})")
     else:
-        print(f"[Task {task_id}] OCR识别未启用")
+        print(f"[Task {task_id}] IQI像质计识别未启用")
 
     print(f"[Task {task_id}] Executing command: {' '.join(cmd)}")
     

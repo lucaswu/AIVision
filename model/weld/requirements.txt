@@ -18,6 +18,7 @@ peft==0.7.1
 # Computer Vision
 opencv-python>=4.8.0
 Pillow>=10.0.0
+scikit-image>=0.21.0
 
 # Data Processing
 numpy>=1.24.0,<2.0.0
@@ -36,5 +37,5 @@ httpx>=0.26.0
 pydantic>=2.5.0
 
 # OCR (integrated PaddleOCR pipeline)
-paddleocr==2.7.3
+paddleocr==3.4.0
 pandas>=2.0.0

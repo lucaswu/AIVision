@@ -52,46 +52,36 @@ WORKDIR /app
 
 # ── PaddlePaddle 安装 ─────────────────────────────────────────────────────────
 # 根据 USE_GPU 决定安装 GPU 版还是 CPU 版
-# CUDA 12.1 镜像兼容 cu118 版 PaddlePaddle
+# CUDA 12.1 镜像兼容 cu118/cu123 版 PaddlePaddle，使用 3.0 GPU 版本
 ARG INSTALL_PADDLE=true
 RUN if [ "$INSTALL_PADDLE" = "true" ]; then \
     if [ "$USE_GPU" = "true" ]; then \
-        pip install --no-cache-dir paddlepaddle-gpu==2.6.1 \
-            -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ \
+        pip install --no-cache-dir paddlepaddle-gpu==3.1.0 \
+            -i https://www.paddlepaddle.org.cn/packages/stable/cu123/ \
+            --extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple \
             --trusted-host www.paddlepaddle.org.cn \
-            --trusted-host paddle-whl.bj.bcebos.com; \
+            --trusted-host paddle-whl.bj.bcebos.com \
+            --trusted-host pypi.tuna.tsinghua.edu.cn; \
     else \
-        pip install --no-cache-dir paddlepaddle==2.6.2 \
+        pip install --no-cache-dir paddlepaddle==3.1.0 \
             -i https://mirrors.aliyun.com/pypi/simple/ \
             --trusted-host mirrors.aliyun.com; \
     fi \
     fi
 
-# 将系统 cuDNN 库软链接到 paddle/libs 目录，确保 PaddlePaddle 能加载
-RUN if [ "$USE_GPU" = "true" ]; then \
-    PADDLE_LIBS=$(python3 -c "import paddle; import os; print(os.path.join(os.path.dirname(paddle.__file__), 'libs'))") && \
-    echo "Paddle libs dir: $PADDLE_LIBS" && \
-    for lib in /usr/lib/x86_64-linux-gnu/libcudnn*.so.8*; do \
-        [ -e "$lib" ] && ln -svf "$lib" "$PADDLE_LIBS/$(basename $lib)"; \
-    done; \
-    fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 复制依赖文件并安装（构建上下文为 model/ 目录）
 COPY weld/requirements.txt .
-# paddleocr==2.7.3 和 imgaug 都声明依赖 opencv-python<=4.6，与焊缝检测所需的 >=4.8 冲突。
-# 解决方法：先安装除 paddleocr 以外的所有依赖（含新版 opencv），再用 --no-deps 安装 paddleocr，
-# 最后补装其余依赖（shapely/scikit-image 等不受 opencv 版本约束）。
+# PaddleOCR 3.4 与 PaddlePaddle 3.0 兼容，不再有 opencv 版本冲突，直接安装
 RUN if [ "$USE_GPU" = "false" ]; then \
     sed -i '/--extra-index-url/d' requirements.txt; \
     fi && \
-    grep -v 'paddleocr' requirements.txt > /tmp/requirements-base.txt && \
-    pip install --no-cache-dir -r /tmp/requirements-base.txt \
+    pip install --no-cache-dir -r requirements.txt \
         -i https://pypi.tuna.tsinghua.edu.cn/simple \
         --trusted-host pypi.tuna.tsinghua.edu.cn && \
-    pip install --no-cache-dir --no-deps paddleocr==2.7.3 imgaug==0.4.0 && \
-    pip install --no-cache-dir \
-        shapely scikit-image pyclipper lmdb visualdl rapidfuzz \
+    pip install --no-cache-dir paddleocr==3.4.0 \
         -i https://pypi.tuna.tsinghua.edu.cn/simple \
         --trusted-host pypi.tuna.tsinghua.edu.cn
 

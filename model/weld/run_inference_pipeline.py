@@ -628,6 +628,13 @@ def main():
     if args.enable_iqi:
         if _IQI_AVAILABLE:
             print("启用 IQI 像质计识别（IQIDDET 集成，与缺陷检测独立并行）")
+            print(f"IQI 像质计识,模型配置路径:gauge-weights:{args.gauge_weights}")
+            print(f"FClip 检查点路径:fclip-ckpt:{args.fclip_ckpt}")
+            print(f"FClip 模型配置路径:fclip-config:{args.fclip_config}")
+            print(f"OCR 检测模型目录:ocr-det-model-dir:{args.ocr_det_model_dir}")
+            print(f"OCR 识别模型目录:ocr-rec-model-dir:{args.ocr_rec_model_dir}")
+
+
             try:
                 # 将所有路径参数转为绝对路径，避免子进程(ocr_paddle_worker)工作目录
                 # 与主进程不同导致相对路径失效
@@ -691,48 +698,56 @@ def main():
     if args.enable_iqi:
         if iqi_inferencer is not None:
             iqi_inferencer.close()
-        iqi_raw_records = [r.get("ocr") for r in results if r.get("ocr") is not None]
-        delivery_records = [build_delivery_record(rec) for rec in iqi_raw_records]
-        summary = build_iqi_statistics(iqi_raw_records)
-        image_root = Path(args.image_dir).resolve() if args.image_dir else None
-        iqi_payload = {
-            "schema": "iqi_grade_batch_v1",
-            "ok": True,
-            "fatal_error": None,
-            "meta": {
-                "created_at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
-                "image_root": str(image_root) if image_root is not None else None,
-                **(iqi_inferencer.get_runtime_meta() if iqi_inferencer is not None else {}),
-                "ocr_device": args.ocr_device,
-                "ocr_det_model_name": args.ocr_det_model_name,
-                "ocr_det_model_dir": args.ocr_det_model_dir,
-                "ocr_rec_model_name": args.ocr_rec_model_name,
-                "ocr_rec_model_dir": args.ocr_rec_model_dir,
-                "ocr_det_limit_side_len": args.ocr_det_limit_side_len,
-                "ocr_det_limit_type": args.ocr_det_limit_type,
-                "ocr_number_range": args.ocr_number_range,
-                "enable_ocr_orientation": args.enable_ocr_orientation,
-                "ocr_orientation_model": args.ocr_orientation_model,
-                "ocr_orientation_device": args.ocr_orientation_device,
-            },
-            "summary": {
-                "images_total": summary["images_total"],
-                "success_total": summary["success_total"],
-                "failure_total": summary["failure_total"],
-                "result_code_hist": summary["result_code_hist"],
-                "result_code_hist_named": summary["result_code_hist_named"],
-                "iqi_type_hist": summary["iqi_type_hist"],
-                "grade_hist": summary["grade_hist"],
-                "field_totals": summary["field_totals"],
-                "images_with_general_fields": summary["images_with_general_fields"],
-                "images_with_iqi_marker": summary["images_with_iqi_marker"],
-            },
-            "results": delivery_records,
-        }
-        iqi_out_path = output_dir / args.iqi_results_json
-        with open(iqi_out_path, "w", encoding="utf-8") as f:
-            json.dump(iqi_payload, f, indent=2, ensure_ascii=False)
-        print(f"IQI 推理完成: 共处理 {len(delivery_records)} 张图像，结果JSON: {iqi_out_path}")
+        if not _IQI_AVAILABLE:
+            # IQI 模块加载失败（如缺少依赖），写入错误占位文件后继续
+            iqi_out_path = output_dir / args.iqi_results_json
+            with open(iqi_out_path, "w", encoding="utf-8") as f:
+                json.dump({"ok": False, "fatal_error": str(_iqi_err),
+                           "results": []}, f, indent=2, ensure_ascii=False)
+            print(f"[警告] IQI 模块不可用，已写入错误占位: {iqi_out_path}")
+        else:
+            iqi_raw_records = [r.get("ocr") for r in results if r.get("ocr") is not None]
+            delivery_records = [build_delivery_record(rec) for rec in iqi_raw_records]
+            summary = build_iqi_statistics(iqi_raw_records)
+            image_root = Path(args.image_dir).resolve() if args.image_dir else None
+            iqi_payload = {
+                "schema": "iqi_grade_batch_v1",
+                "ok": True,
+                "fatal_error": None,
+                "meta": {
+                    "created_at": __import__("time").strftime("%Y-%m-%d %H:%M:%S"),
+                    "image_root": str(image_root) if image_root is not None else None,
+                    **(iqi_inferencer.get_runtime_meta() if iqi_inferencer is not None else {}),
+                    "ocr_device": args.ocr_device,
+                    "ocr_det_model_name": args.ocr_det_model_name,
+                    "ocr_det_model_dir": args.ocr_det_model_dir,
+                    "ocr_rec_model_name": args.ocr_rec_model_name,
+                    "ocr_rec_model_dir": args.ocr_rec_model_dir,
+                    "ocr_det_limit_side_len": args.ocr_det_limit_side_len,
+                    "ocr_det_limit_type": args.ocr_det_limit_type,
+                    "ocr_number_range": args.ocr_number_range,
+                    "enable_ocr_orientation": args.enable_ocr_orientation,
+                    "ocr_orientation_model": args.ocr_orientation_model,
+                    "ocr_orientation_device": args.ocr_orientation_device,
+                },
+                "summary": {
+                    "images_total": summary["images_total"],
+                    "success_total": summary["success_total"],
+                    "failure_total": summary["failure_total"],
+                    "result_code_hist": summary["result_code_hist"],
+                    "result_code_hist_named": summary["result_code_hist_named"],
+                    "iqi_type_hist": summary["iqi_type_hist"],
+                    "grade_hist": summary["grade_hist"],
+                    "field_totals": summary["field_totals"],
+                    "images_with_general_fields": summary["images_with_general_fields"],
+                    "images_with_iqi_marker": summary["images_with_iqi_marker"],
+                },
+                "results": delivery_records,
+            }
+            iqi_out_path = output_dir / args.iqi_results_json
+            with open(iqi_out_path, "w", encoding="utf-8") as f:
+                json.dump(iqi_payload, f, indent=2, ensure_ascii=False)
+            print(f"IQI 推理完成: 共处理 {len(delivery_records)} 张图像，结果JSON: {iqi_out_path}")
 
 
 if __name__ == "__main__":

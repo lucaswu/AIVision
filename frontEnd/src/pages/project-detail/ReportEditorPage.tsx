@@ -515,6 +515,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [pendingShape, setPendingShape] = useState<any>(null);
   const [pendingShapeType, setPendingShapeType] = useState<DrawingType>('rect');
 
+  // --- IQI 丝状像质计线条（来自 VisionResult.ocr.wire.lines，原始图像坐标系）---
+  const [iqiWireLines, setIqiWireLines] = useState<Array<{ index: number; image_xy: [[number, number], [number, number]] }>>([]);
+  const [showIqiWires, setShowIqiWires] = useState(false);
+
   // --- 新增：折叠状态 ---
   const [showDefectList, setShowDefectList] = useState(true);
   const [showFilmInfo, setShowFilmInfo] = useState(true); // 底片信息折叠状态
@@ -797,6 +801,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setIsSettingPositioning(false);
     // 重置焊缝位置形状（新文件加载时重新解析）
     setWeldLocationShapes([]);
+    // 重置 IQI 线条（新文件加载时重新解析）
+    setIqiWireLines([]);
+    setShowIqiWires(false);
     // 重置缺陷位置检测2原点及来源元信息
     setDefectOriginPoint(null);
     setDefectOriginMeta(null);
@@ -1675,7 +1682,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       prevTaskFileIdRef.current = selectedFile.TaskFileId;
 
       // 从后端加载底片信息字段
-      // 从后端加载底片信息字段
       const initialFilmInfo = {
         weldId: selectedFile.WeldId || '',
         filmNumber: selectedFile.FilmNumber || '',
@@ -1684,6 +1690,20 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       };
       filmInfoForm.setFieldsValue(initialFilmInfo);
       originalFilmInfoRef.current = initialFilmInfo;
+
+      // 从 VisionResult 解析 IQI 线条（wire lines 不单独存 DB，直接读 VisionResult）
+      const parsedWireLines: Array<{ index: number; image_xy: [[number, number], [number, number]] }> = [];
+      if (selectedFile.VisionResult) {
+        try {
+          const lines: any[] = JSON.parse(selectedFile.VisionResult)?.ocr?.wire?.lines ?? [];
+          for (const ln of lines) {
+            if (Array.isArray(ln.image_xy) && ln.image_xy.length >= 2) {
+              parsedWireLines.push({ index: ln.index ?? parsedWireLines.length, image_xy: ln.image_xy });
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      setIqiWireLines(parsedWireLines);
 
       // 立即清空缺陷列表，防止在加载新数据前显示旧数据或发生时序闪烁
       setDefectRects([]);
@@ -2189,6 +2209,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           FilmDensity: values.filmDensity,
           Sensitivity: values.sensitivity,
         });
+        // 同步更新内存中的对象，避免切换图片后表单被重置为旧值
+        selectedFile.WeldId = values.weldId;
+        selectedFile.FilmNumber = values.filmNumber;
+        selectedFile.FilmDensity = values.filmDensity;
+        selectedFile.Sensitivity = values.sensitivity;
         console.log('底片信息已自动保存');
       } catch (err) {
         console.error('自动保存底片信息失败:', err);
@@ -3151,6 +3176,27 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     );
                   })()}
 
+                  {/* 0-C. IQI 丝状像质计线条层（来自 ocr.wire.lines.image_xy，原始图像坐标系）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiWires && iqiWireLines.length > 0 && (
+                    <g>
+                      {iqiWireLines.map((ln) => {
+                        const x1 = widthRatio > 0 ? ln.image_xy[0][0] / widthRatio : ln.image_xy[0][0];
+                        const y1 = heightRatio > 0 ? ln.image_xy[0][1] / heightRatio : ln.image_xy[0][1];
+                        const x2 = widthRatio > 0 ? ln.image_xy[1][0] / widthRatio : ln.image_xy[1][0];
+                        const y2 = heightRatio > 0 ? ln.image_xy[1][1] / heightRatio : ln.image_xy[1][1];
+                        return (
+                          <line key={`iqi-wire-${ln.index}`}
+                            x1={x1} y1={y1} x2={x2} y2={y2}
+                            stroke="#ff0000"
+                            strokeWidth={2 / scale}
+                            strokeLinecap="round"
+                            opacity={0.85}
+                          />
+                        );
+                      })}
+                    </g>
+                  )}
+
                   {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
                   {/* 从后端加载的数据是矫正后像素坐标,需要先逆变换回原图坐标再转为 CSS 坐标 */}
                   {/*只在图片加载完成后且当前文件ID匹配时才显示缺陷信息 */}
@@ -3852,10 +3898,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   form={filmInfoForm}
                   layout="horizontal"
                   size="small"
-                  labelCol={{ span: 10 }}
-                  wrapperCol={{ span: 14 }}
+                  labelCol={{ style: { width: '7em' } }}
+                  wrapperCol={{ style: { flex: 1, minWidth: 0 } }}
                   labelAlign="left"
-                  style={{ padding: '0 8px' }} // 稍微缩进一点内容
+                  style={{ padding: '0 8px' }}
                   onValuesChange={autoSaveFilmInfo}
                 >
                   <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
@@ -3906,7 +3952,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                       </Form.Item>
                     </Space.Compact>
                   </Form.Item>
-                  <Form.Item label="像质计灵敏度" style={{ marginBottom: 0 }}>
+                  <Form.Item label="像质计灵敏度" style={{ marginBottom: 8 }}>
                     <Space.Compact style={{ width: '100%' }}>
                       <Tooltip title={ocrTargetField === 'sensitivity' ? '点击取消OCR' : 'OCR框选识别'}>
                         <Button
@@ -3921,6 +3967,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         <Input placeholder="输入像质计灵敏度" />
                       </Form.Item>
                     </Space.Compact>
+                  </Form.Item>
+                  <Form.Item label=" " colon={false} style={{ marginBottom: 0 }}>
+                    <Button
+                      size="small"
+                      type={showIqiWires ? 'primary' : 'default'}
+                      disabled={!selectedFile || iqiWireLines.length === 0}
+                      onClick={() => setShowIqiWires(v => !v)}
+                    >
+                      {showIqiWires ? '隐藏结果' : '显示结果'}
+                    </Button>
                   </Form.Item>
                 </Form>
               )}

@@ -219,9 +219,9 @@ public class TaskProcessService {
                         logger.warn("保存缺陷记录失败: taskFileId={}, error={}", tf.getTaskFileId(), e.getMessage());
                     }
                     
-                    // 6. 从 Vision AI 结果的 metadata.ocr 中提取 OCR 数据（OCR已合并到推理流水线）
+                    // 6. 从 Vision AI 结果顶层 ocr 节点提取 IQI 数据
                     try {
-                        JsonNode ocrNode = objectMapper.readTree(res).path("metadata").path("ocr");
+                        JsonNode ocrNode = objectMapper.readTree(res).path("ocr");
                         if (!ocrNode.isMissingNode() && !ocrNode.isNull()) {
                             parseOcrResultAndUpdateTaskFile(tf, objectMapper.writeValueAsString(ocrNode));
                         }
@@ -517,110 +517,35 @@ public class TaskProcessService {
     }
     
     /**
-     * 解析 OCR 结果并更新 TaskFile 的底片信息字段
-     * 
-     * OCR 结果 field_statistics 格式：
-     * {
-     *   "焊道号_片号": ["焊道19/片2"],
-     *   "像质计灵敏度": ["值=13"],
-     *   ...
-     * }
-     * 
-     * 解析规则：
-     * 1. 焊道号_片号: "焊道19/片2" -> weldId="19", filmNumber="2"
-     * 2. 像质计灵敏度: "值=13" -> sensitivity="13"
+     * 从 IQIdet ocr 节点提取底片信息并更新 TaskFile
+     *
+     * 读取路径：
+     *   fields.weld_film_pairs[0].weld_no  → weldId
+     *   fields.weld_film_pairs[0].film_no  → filmNumber
+     *   grade                              → sensitivity
      */
     private void parseOcrResultAndUpdateTaskFile(TaskFile tf, String ocrResultJson) throws Exception {
         JsonNode rootNode = objectMapper.readTree(ocrResultJson);
-        
-        // 解析 field_statistics
-        JsonNode fieldStats = rootNode.path("field_statistics");
-        if (fieldStats.isMissingNode() || fieldStats.isNull()) {
-            return;
+
+        JsonNode fieldsNode = rootNode.path("fields");
+        if (!fieldsNode.isMissingNode() && !fieldsNode.isNull()) {
+            JsonNode weldFilmPairs = fieldsNode.path("weld_film_pairs");
+            if (weldFilmPairs.isArray() && weldFilmPairs.size() > 0) {
+                JsonNode pair = weldFilmPairs.get(0);
+                String weldNo = pair.path("weld_no").asText(null);
+                String filmNo = pair.path("film_no").asText(null);
+                if (weldNo != null && !weldNo.isEmpty()) tf.setWeldId(weldNo);
+                if (filmNo != null && !filmNo.isEmpty()) tf.setFilmNumber(filmNo);
+            }
         }
-        
-        // 1. 解析 焊道号_片号
-        JsonNode weldFilmArray = fieldStats.path("焊道号_片号");
-        if (weldFilmArray.isArray() && weldFilmArray.size() > 0) {
-            String weldFilmStr = weldFilmArray.get(0).asText();
-            // 格式: "焊道19/片2" 或类似
-            parseWeldAndFilmNumber(tf, weldFilmStr);
+
+        JsonNode gradeNode = rootNode.path("grade");
+        if (!gradeNode.isMissingNode() && !gradeNode.isNull()) {
+            tf.setSensitivity(gradeNode.asText());
         }
-        
-        // 2. 解析 像质计灵敏度
-        JsonNode sensitivityArray = fieldStats.path("像质计灵敏度");
-        if (sensitivityArray.isArray() && sensitivityArray.size() > 0) {
-            String sensitivityStr = sensitivityArray.get(0).asText();
-            // 格式: "值=13" 或类似
-            parseSensitivity(tf, sensitivityStr);
-        }
-        
-        logger.debug("OCR解析完成: taskFileId={}, weldId={}, filmNumber={}, sensitivity={}", 
+
+        logger.debug("OCR解析完成: taskFileId={}, weldId={}, filmNumber={}, sensitivity={}",
                      tf.getTaskFileId(), tf.getWeldId(), tf.getFilmNumber(), tf.getSensitivity());
     }
     
-    /**
-     * 解析焊道号和片号
-     * 输入格式: "焊道19/片2" -> weldId="19", filmNumber="2"
-     * 兼容格式: "焊道/片32" -> weldId=null, filmNumber="32"
-     */
-    private void parseWeldAndFilmNumber(TaskFile tf, String weldFilmStr) {
-        if (weldFilmStr == null || weldFilmStr.isEmpty()) {
-            return;
-        }
-        
-        String weldId = null;
-        String filmNumber = null;
-
-        // 1. 尝试分别提取 "焊道" 和 "片" 后面的数字
-        java.util.regex.Pattern weldPattern = java.util.regex.Pattern.compile("焊道(\\d+)");
-        java.util.regex.Matcher weldMatcher = weldPattern.matcher(weldFilmStr);
-        if (weldMatcher.find()) {
-            weldId = weldMatcher.group(1);
-        }
-
-        java.util.regex.Pattern filmPattern = java.util.regex.Pattern.compile("片(\\d+)");
-        java.util.regex.Matcher filmMatcher = filmPattern.matcher(weldFilmStr);
-        if (filmMatcher.find()) {
-            filmNumber = filmMatcher.group(1);
-        }
-        
-        // 2. 如果上面都失败，尝试匹配 "19/2" 或 "19-2" 这种纯数字组合
-        if (weldId == null && filmNumber == null) {
-            java.util.regex.Pattern altPattern = java.util.regex.Pattern.compile("^(\\d+)[/-](\\d+)$");
-            java.util.regex.Matcher altMatcher = altPattern.matcher(weldFilmStr);
-            if (altMatcher.find()) {
-                weldId = altMatcher.group(1);
-                filmNumber = altMatcher.group(2);
-            }
-        }
-        
-        if (weldId != null) tf.setWeldId(weldId);
-        if (filmNumber != null) tf.setFilmNumber(filmNumber);
-    }
-    
-    /**
-     * 解析像质计灵敏度
-     * 输入格式: "值=13" -> sensitivity="13"
-     */
-    private void parseSensitivity(TaskFile tf, String sensitivityStr) {
-        if (sensitivityStr == null || sensitivityStr.isEmpty()) {
-            return;
-        }
-        
-        // 匹配格式: 值={数字}
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("值=(\\d+)");
-        java.util.regex.Matcher matcher = pattern.matcher(sensitivityStr);
-        
-        if (matcher.find()) {
-            tf.setSensitivity(matcher.group(1));
-        } else {
-            // 尝试直接提取数字
-            java.util.regex.Pattern numPattern = java.util.regex.Pattern.compile("(\\d+)");
-            java.util.regex.Matcher numMatcher = numPattern.matcher(sensitivityStr);
-            if (numMatcher.find()) {
-                tf.setSensitivity(numMatcher.group(1));
-            }
-        }
-    }
 }

@@ -51,11 +51,10 @@ class PaddleOCRSubprocessClient:
             str(self.worker_script),
             "--device",
             self.device,
-            "--det-model-name",
-            self.det_model_name,
         ]
-        # 只有当 rec_model_name 非空时才传参数；传 None 表示由 worker 使用默认值（
-        # 适用于本地 rec_model_dir 内 inference.yml 自带 model_name 的场景）
+        # 只有非 None 时才传参数；det/rec_model_dir 存在时 model_name 可为 None
+        if self.det_model_name:
+            cmd.extend(["--det-model-name", self.det_model_name])
         if self.rec_model_name:
             cmd.extend(["--rec-model-name", self.rec_model_name])
         if self.det_model_dir:

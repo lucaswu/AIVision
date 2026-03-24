@@ -379,6 +379,8 @@ public class AiServiceClient {
             JsonNode ocrData = pythonResult.path("ocr");
             if (!ocrData.isMissingNode() && !ocrData.isNull()) {
                 metadata.put("ocr", ocrData);
+                // 同时保留在顶层，供 TaskProcessService 和前端直接读取
+                finalResult.put("ocr", ocrData);
             }
 
             // 提取灰度密度值（底片黑度，由推理流水线计算得出）
