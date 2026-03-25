@@ -48,7 +48,7 @@ services:
 
       # AI 推理服务配置
       - AI_SERVICES_INFERENCE_URL=http://ai-inference:8000
-      - AI_SERVICES_OCR_INFERENCE_URL=http://ai-inference-ocr:8000
+      - AI_SERVICES_OCR_INFERENCE_URL=http://ai-inference:8000
 
       # 应用配置
       - SPRING_PROFILES_ACTIVE=docker
@@ -124,35 +124,8 @@ services:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 120s
-
-  # ================================
-  # OCR 推理服务（独立，供前端框选识别使用）
-  # ================================
-  ai-inference-ocr:
-    image: aivision-ai-inference-ocr:latest
-    container_name: ai-inference-ocr
-    restart: unless-stopped
-    environment:
-      - USE_GPU=true
-    networks:
-      - ai-services
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
-    volumes:
-      - paddleocr_cache:/root/.paddleocr
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
+      retries: 5
+      start_period: 300s
 
   # 前端服务
   frontend:

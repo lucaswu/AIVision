@@ -6,17 +6,14 @@ set -e
 # bash model/weld/scripts/download_ocr_models.sh
 
 echo "Building backend..."
-docker build -t aivision-backend:latest -f backEnd/api_gateway/Dockerfile .
+docker build --pull=false -t aivision-backend:latest -f backEnd/api_gateway/Dockerfile .
 
 echo "Building frontend..."
-docker build -t aivision-frontend:latest ./frontEnd
+docker build --pull=false -t aivision-frontend:latest ./frontEnd
 
 echo "Building AI inference (weld)..."
 # 构建上下文为 model/ 目录，以便同时访问 weld/ 和 OCR/ 子目录
-docker build -t aivision-ai-inference:latest -f model/weld/Dockerfile.ai model/
-
-echo "Building OCR inference service..."
-docker build -t aivision-ai-inference-ocr:latest -f model/OCR/Dockerfile.ai model/OCR/
+docker build --pull=false -t aivision-ai-inference:latest -f model/weld/Dockerfile.ai model/
 
 echo "Restarting services..."
 cd deploy

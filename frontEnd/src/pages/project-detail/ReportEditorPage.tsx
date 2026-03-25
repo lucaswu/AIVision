@@ -70,7 +70,7 @@ import {
   ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI } from "../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, type OcrRecognizeResult } from "../../utils/api";
 
 // 移除本地 Mock defectRecordAPI
 // const defectRecordAPI = { ... };
@@ -2386,17 +2386,24 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     tmp.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
     const base64 = tmp.toDataURL('image/png');
 
+    console.log('[OCR] 开始识别, field:', field, '裁剪区域:', { sx, sy, sw, sh }, 'canvas尺寸:', { w: canvas.width, h: canvas.height });
     setOcrLoadingField(field);
     try {
-      const result = await ocrAPI.recognizeRegion(base64);
-      if (result?.text?.trim()) {
-        filmInfoForm.setFieldValue(field, result.text.trim());
+      const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64);
+      console.log('[OCR] 后端返回结果:', result);
+      const recognized = result?.text?.trim();
+      console.log('[OCR] 识别文本 (trim后):', JSON.stringify(recognized), '准备写入字段:', field);
+      if (recognized) {
+        filmInfoForm.setFieldValue(field, recognized);
+        console.log('[OCR] setFieldValue 后, 表单当前值:', filmInfoForm.getFieldsValue());
         autoSaveFilmInfo();
-        message.success('OCR识别成功');
+        message.success(`OCR识别成功: "${recognized}"`);
       } else {
+        console.warn('[OCR] 识别结果为空, raw result:', result);
         message.warning('未识别到文字');
       }
-    } catch {
+    } catch (err) {
+      console.error('[OCR] 请求失败:', err);
       message.error('OCR识别失败');
     } finally {
       setOcrLoadingField(null);

@@ -252,82 +252,51 @@ async def cancel_task(task_id: str):
 # OCR 区域识别（同步，供前端框选功能使用）
 # ==============================================================================
 
-class RecognizeRequest(BaseModel):
-    """单图区域识别请求"""
-    image_base64: str = Field(..., description="Base64编码图片（含或不含data URI前缀）")
+_IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
+if str(_IQIDDET_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IQIDDET_ROOT))
+
+from gauge.region_ocr_api import (
+    RecognizeRequest,
+    RecognizeResponse,
+    recognize_region as _recognize_region,
+    init_region_ocr_api,
+)
 
 
-class RecognizeResponse(BaseModel):
-    """单图区域识别响应"""
-    text: str
-    confidence: float
-    raw_results: list
+def _abs_model_path(rel_or_abs: str) -> str:
+    """将相对路径解析为基于 PROJECT_ROOT 的绝对路径，绝对路径原样返回。"""
+    p = Path(rel_or_abs)
+    if p.is_absolute():
+        return str(p)
+    return str(PROJECT_ROOT / rel_or_abs)
 
 
-_ocr_instance = None
-
-
-def _get_ocr_instance():
-    """获取 PaddleOCR 单例，首次调用时初始化（区域识别用CPU，避免cuDNN兼容问题）"""
-    global _ocr_instance
-    if _ocr_instance is None:
-        from paddleocr import PaddleOCR
-        print("初始化OCR区域识别引擎 (CPU模式)...")
-        _ocr_instance = PaddleOCR(
-            use_gpu=False,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=True,
-        )
-    return _ocr_instance
-
-
-def _sync_ocr_recognize(img):
-    """在线程池中同步执行 OCR"""
-    ocr = _get_ocr_instance()
-    results = ocr.ocr(img, cls=True)
-    texts, confs, raw = [], [], []
-    if results and results[0]:
-        for line in results[0]:
-            t, c = line[1][0], float(line[1][1])
-            texts.append(t)
-            confs.append(c)
-            raw.append({"text": t, "confidence": c})
-    avg_conf = sum(confs) / len(confs) if confs else 0.0
-    return {"text": ' '.join(texts), "confidence": avg_conf, "raw_results": raw}
+def _init_ocr_cpu() -> None:
+    """以 CPU 模式初始化区域 OCR，使用 env var 中的模型路径（解析为绝对路径）。"""
+    rec_model_dir = _abs_model_path(
+        os.environ.get("OCR_REC_MODEL_DIR", "IQIDDET/models/OCR_rec_inference_best_accuracy")
+    )
+    orientation_model = _abs_model_path(
+        os.environ.get("OCR_ORIENTATION_MODEL", "IQIDDET/models/ocr_orientation_model.pth")
+    )
+    print(f"[OCR init] rec_model_dir={rec_model_dir}")
+    print(f"[OCR init] orientation_model={orientation_model}")
+    init_region_ocr_api(
+        ocr_rec_model_dir=rec_model_dir,
+        ocr_device="cpu",
+        ocr_orientation_model=orientation_model,
+    )
 
 
 @app.post("/inference/recognize", response_model=RecognizeResponse)
-async def recognize_region(request: RecognizeRequest):
-    """
-    同步识别单张图片区域（base64输入）
-    用于前端实时OCR框选功能
-    """
-    import base64
-    import numpy as np
-    import cv2
-
-    b64_data = request.image_base64
-    if ',' in b64_data:
-        b64_data = b64_data.split(',', 1)[1]
-
-    try:
-        img_bytes = base64.b64decode(b64_data)
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise HTTPException(status_code=400, detail="无法解码图片")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"图片解码失败: {str(e)}")
-
-    loop = asyncio.get_event_loop()
-    try:
-        result = await loop.run_in_executor(executor, _sync_ocr_recognize, img)
-        return RecognizeResponse(**result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OCR识别失败: {str(e)}")
+async def recognize_region_endpoint(request: RecognizeRequest):
+    """同步识别单张图片区域（base64输入），用于前端实时OCR框选功能。"""
+    import gauge.region_ocr_api as _ocr_mod
+    # 若 warmup 尚未完成，保证懒加载时也使用 CPU，不触发默认的 gpu 初始化
+    if _ocr_mod._region_ocr_service is None:
+        _init_ocr_cpu()
+    return await _recognize_region(request)
 
 
 # ==============================================================================
@@ -511,9 +480,22 @@ def _sync_run_inference_via_script(request: InferenceRequest):
 # 启动事件
 # ==============================================================================
 
+async def _warmup_ocr():
+    """后台初始化 OCR 服务，避免首次请求延迟（不阻塞 health check）"""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    try:
+        print("[OCR warmup] 开始初始化 OCR 服务 (CPU 模式)...")
+        await loop.run_in_executor(None, _init_ocr_cpu)
+        print("[OCR warmup] OCR 服务初始化完成")
+    except Exception as e:
+        print(f"[OCR warmup] OCR 服务初始化失败（首次请求时将重试）: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """服务启动时的初始化"""
+    import asyncio
     print("=" * 60)
     print("AIVision Inference Service Starting...")
     print(f"PyTorch available: {_torch_available}")
@@ -526,6 +508,8 @@ async def startup_event():
     primary_weights = os.environ.get("PRIMARY_WEIGHTS", "/app/model/weights/primary-weights.pth")
     print(f"Primary weights: {primary_weights}")
     print("=" * 60)
+    # 后台预热 OCR，不阻塞 health check
+    asyncio.create_task(_warmup_ocr())
 
 
 if __name__ == "__main__":

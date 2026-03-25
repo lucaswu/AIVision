@@ -235,17 +235,18 @@ class WeldDefectPositionDetector:
             return None
 
         try:
-            ocr_result = self.reader.ocr(roi)
-            if not ocr_result or not ocr_result[0]:
-                return None
-
+            import sys
+            if str(_WELD_ROOT / "IQIDDET") not in sys.path:
+                sys.path.insert(0, str(_WELD_ROOT / "IQIDDET"))
+            from gauge.ocr_stage import infer_roi_ocr
+            ocr_output = infer_roi_ocr(self.reader, self.reader, roi)
             candidates = []
-            for line in ocr_result[0]:
-                text_raw, score = line[1][0], line[1][1]
+            for item in ocr_output.get("items", []):
+                text_raw = item.get("text", "")
+                score = item.get("score") or 0.0
                 cleaned = ''.join(c for c in text_raw if c.isalnum()).upper()
                 if cleaned:
                     candidates.append((cleaned, score))
-
             if not candidates:
                 return None
             best_text, _ = max(candidates, key=lambda x: x[1])
