@@ -37,6 +37,9 @@ public class ReportService {
     @Autowired
     private FileRepository fileRepository;
 
+    @Autowired
+    private DefectRecordRepository defectRecordRepository;
+
     /**
      * 获取报告列表
      */
@@ -73,9 +76,10 @@ public class ReportService {
     public List<TaskFile> getReportFiles(String taskId, String status) {
         List<TaskFile> files = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
         
-        // 填充文件名
+        // 填充文件名和缺陷记录
         for (TaskFile tf : files) {
             fileRepository.findById(tf.getFileId()).ifPresent(f -> tf.setFileName(f.getOriginalName()));
+            tf.setDefectRecords(defectRecordRepository.findByTaskFileId(tf.getTaskFileId()));
         }
 
         if (status == null || status.isEmpty() || "all".equalsIgnoreCase(status)) {
