@@ -219,6 +219,7 @@ logs/
 
 # AI/ML specific
 models/
+!model/weld/IQIDDET/FClip/models/
 data/
 datasets/
 checkpoints/
