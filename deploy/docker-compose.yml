@@ -116,8 +116,7 @@ services:
     volumes:
       - files_data:/app/data/files
       - results_data:/app/data/results
-      # 绑定挂载本地权重目录
-      - ../model/weld/weight:/app/model/weights:ro
+      # 模型权重已通过 Dockerfile.pack COPY weight/ /app/model/weights/ 内置于镜像，无需挂载宿主目录
       # PaddleOCR 模型缓存：持久化到 named volume，首次下载后重启不再重新下载
       - paddleocr_cache:/root/.paddleocr
     healthcheck:
