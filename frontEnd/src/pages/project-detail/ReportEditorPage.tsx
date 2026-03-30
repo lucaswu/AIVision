@@ -76,7 +76,7 @@ import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, type OcrR
 // const defectRecordAPI = { ... };
 import { TaskFile, Report, DefectType, DefectRecord } from "../../utils/data";
 import GeometricMeasureTool from './tool/GeometricMeasureTool';
-import { useWindowLevelTool } from './tool/WindowLevelTool';
+import { useWindowLevelTool,preprocessToGrayCache } from './tool/WindowLevelTool';
 import Ruler from './tool/Ruler';
 import DefectMarking, { DrawingType } from './tool/DefectMarking';
 import PositionAndSizeTool, { PositionSizeType } from './tool/PositionAndSizeTool';
@@ -726,6 +726,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 椭圆工具初始化/重置 ---
   useEffect(() => {
     if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
+      // 切换到椭圆成像时，清除互相排斥的定位标记（0点）状态
+      setOriginPoint(null);
+      setTempOrigin(null);
+      positionSizeOriginDirtyRef.current = false;
+
       // 当图片旋转 90°/270° 时，SVG 的 x 轴在视觉上变为竖直方向，
       // 需要交换 rx/ry 使椭圆在屏幕上保持横向（宽>高）外观
       const normR = ((rotation % 360) + 360) % 360;
@@ -752,6 +757,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 垂直成像工具初始化/重置 ---
   useEffect(() => {
     if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
+      // 切换到垂直成像时，清除互相排斥的定位标记（0点）状态
+      setOriginPoint(null);
+      setTempOrigin(null);
+      positionSizeOriginDirtyRef.current = false;
+
       setVerticalState({
         mode: 'placing',
         shape: { cx: 0, cy: 0, rx: 180, ry: 15, rotation: 0 },  // ry 固定为 15，非常扁平
@@ -773,6 +783,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 定位标记成像工具初始化/重置 ---
   useEffect(() => {
     if (activeTool === 'positionSize' && positionSizeType === 'positioning') {
+      // 切换到定位标记时，清除互相排斥的椭圆工具状态
+      positionSizeEllipseDirtyRef.current = false;
+      
       setIsSettingPositioning(false);
       setTempOrigin(null);
       message.info("定位标记成像：点击图片设置坐标原点");
@@ -844,16 +857,20 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // 预加载单张图片到缓存（不触发渲染）
   const preloadFile = useCallback((file: { FileId: string; FileName?: string } | null | undefined) => {
     if (!file) return;
-    if (fileBlobCacheRef.current.has(file.FileId)) return;
+    // blob 已缓存时，补触发一次灰度预处理（幂等，已有灰度缓存则直接返回）
+    if (fileBlobCacheRef.current.has(file.FileId)) {
+      preprocessToGrayCache(fileBlobCacheRef.current.get(file.FileId)!).catch(() => {});
+      return;
+    }    
     const url = `/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`;
     fetch(url)
       .then(res => res.blob())
       .then(blob => {
         if (!fileBlobCacheRef.current.has(file.FileId)) {
-          fileBlobCacheRef.current.set(
-            file.FileId,
-            new File([blob], file.FileName || 'image.png', { type: blob.type || 'image/png' })
-          );
+          const f = new File([blob], file.FileName || 'image.png', { type: blob.type || 'image/png' });
+          fileBlobCacheRef.current.set(file.FileId, f);
+          // blob 缓存完成后立即在后台预处理灰度数据，用户切换时直接命中缓存
+          preprocessToGrayCache(f).catch(() => { /* 预处理失败静默处理 */ });
         }
       })
       .catch(() => { /* 预加载失败静默处理 */ });
@@ -1601,7 +1618,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     // 确定当前有效的0点（原点）：优先使用手动设置的 originPoint，其次使用 AI 检测的 defectOriginPoint
     // 原点坐标存储在矫正后坐标系中（与缺陷框坐标系一致）
     // location_0 和 location_1 互斥：若已有 location_0 椭圆关键点，则不使用 location_1 的原点
-    const effectiveOrigin = originPoint || (weldLocationShapes.length === 0 ? defectOriginPoint : null);
+    const isEllipseActive = weldLocationShapes.length > 0 || (activeTool === 'positionSize' && (positionSizeType === 'elliptical' || positionSizeType === 'vertical'));
+    const effectiveOrigin = isEllipseActive ? null : (originPoint || defectOriginPoint);
     // 0点来源标签：手动设置用'+'，AI边缘标记用识别文本，其余用'+'
     const effectiveOriginLabel = originPoint
       ? '+'
@@ -2125,7 +2143,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   //     重新计算所有缺陷的尺寸（mm/px²）和位置（+->X~Ypx/mm）---
   useEffect(() => {
     // location_0 和 location_1 互斥：若已有 location_0 椭圆关键点，则不使用 location_1 的原点
-    const effectiveOrigin = originPoint || (weldLocationShapes.length === 0 ? defectOriginPoint : null);
+    const isEllipseActive = weldLocationShapes.length > 0 || (activeTool === 'positionSize' && (positionSizeType === 'elliptical' || positionSizeType === 'vertical'));
+    const effectiveOrigin = isEllipseActive ? null : (originPoint || defectOriginPoint);
     const effectiveOriginLabel = originPoint
       ? '+'
       : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
@@ -2218,7 +2237,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       // 不触发 updateHistoryState，因为这只是补充显示信息，不算用户编辑
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes]);
+  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes, activeTool, positionSizeType]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {

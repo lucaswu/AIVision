@@ -11,6 +11,100 @@ interface GrayDataCacheEntry {
 const grayDataCache = new Map<string, GrayDataCacheEntry>();
 const MAX_CACHE_SIZE = 20; // 最多缓存20张图的灰度数据
 
+// 模块级统计计算（无 React 依赖，可被 hook 外调用）
+function calculateStatsFromGrayData(
+  data: Uint8Array,
+  x: number = 0,
+  y: number = 0,
+  w: number = -1,
+  h: number = -1,
+  imgWidth: number = 0,
+  step: number = 1
+): { mean: number; std: number; min: number; max: number } | null {
+  const width = w === -1 ? imgWidth : w;
+  const height = h === -1 ? data.length / imgWidth : h;
+
+  let sum = 0;
+  let count = 0;
+  const values: number[] = [];
+  let min = 255;
+  let max = 0;
+
+  for (let row = y; row < y + height; row += step) {
+    for (let col = x; col < x + width; col += step) {
+      const index = row * imgWidth + col;
+      if (index >= 0 && index < data.length) {
+        const val = data[index];
+        values.push(val);
+        sum += val;
+        if (val < min) min = val;
+        if (val > max) max = val;
+        count++;
+      }
+    }
+  }
+
+  if (count === 0) return null;
+
+  const mean = sum / count;
+  let sumSqDiff = 0;
+  for (const v of values) sumSqDiff += (v - mean) ** 2;
+  const std = Math.sqrt(sumSqDiff / count);
+
+  return { mean, std, min, max };
+}
+
+/**
+ * 将 File 解码为灰度数据并存入模块级缓存。
+ * 可在后台预加载时调用，下次 hook 加载同一文件时直接命中缓存、跳过解码。
+ */
+export async function preprocessToGrayCache(file: File): Promise<void> {
+  const cacheKey = `${file.name}-${file.size}`;
+  if (grayDataCache.has(cacheKey)) return;
+
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = url;
+    });
+
+    const width = img.naturalWidth;
+    const height = img.naturalHeight;
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+    if (!tempCtx) return;
+
+    tempCtx.drawImage(img, 0, 0);
+    const { data } = tempCtx.getImageData(0, 0, width, height);
+
+    const grayData = new Uint8Array(width * height);
+    for (let i = 0; i < grayData.length; i++) {
+      const idx = i * 4;
+      grayData[i] = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+    }
+
+    // 异步完成后再次检查，避免并发写入重复条目
+    if (grayDataCache.has(cacheKey)) return;
+
+    const stats = calculateStatsFromGrayData(grayData, 0, 0, -1, -1, width, 2);
+    if (!stats) return;
+
+    if (grayDataCache.size >= MAX_CACHE_SIZE) {
+      const firstKey = grayDataCache.keys().next().value;
+      if (firstKey) grayDataCache.delete(firstKey);
+    }
+    grayDataCache.set(cacheKey, { grayData, width, height, stats });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // Hook 入参
 interface UseWindowLevelToolProps {
   activeTool: string;
@@ -63,57 +157,6 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
   // 节流控制
   const lastCalcTime = useRef<number>(0);
-
-  // ==========================================================================
-  // 辅助函数：从灰度数组计算统计信息
-  // ==========================================================================
-  const calculateStatsFromGrayData = useCallback((
-    data: Uint8Array,
-    x: number = 0,
-    y: number = 0,
-    w: number = -1,
-    h: number = -1,
-    imgWidth: number = 0,
-    step: number = 1
-  ): ImageStats | null => {
-    // 如果未指定区域，使用全图
-    const width = w === -1 ? imgWidth : w;
-    const height = h === -1 ? data.length / imgWidth : h;
-
-    let sum = 0;
-    let count = 0;
-    const values: number[] = [];
-    let min = 255;
-    let max = 0;
-
-    for (let row = y; row < y + height; row += step) {
-      for (let col = x; col < x + width; col += step) {
-        const index = row * imgWidth + col;
-
-        if (index >= 0 && index < data.length) {
-          const val = data[index];
-          values.push(val);
-          sum += val;
-
-          if (val < min) min = val;
-          if (val > max) max = val;
-
-          count++;
-        }
-      }
-    }
-
-    if (count === 0) return null;
-
-    const mean = sum / count;
-    let sumSqDiff = 0;
-    for (const v of values) {
-      sumSqDiff += (v - mean) ** 2;
-    }
-    const std = Math.sqrt(sumSqDiff / count);
-
-    return { mean, std, min, max };
-  }, []);
 
   // ==========================================================================
   // 核心：在原始灰度数据上应用窗宽窗位
@@ -256,97 +299,20 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
       try {
         const cacheKey = `${imageFile.name}-${imageFile.size}`;
 
-        // 优先使用缓存的灰度数据，避免重复解码
+        // 解码并缓存灰度数据（若已有缓存则立即返回，否则在后台完成解码）
+        await preprocessToGrayCache(imageFile);
+
+        if (cancelled) return;
+
         const cached = grayDataCache.get(cacheKey);
-        if (cached) {
-          if (cancelled) return;
-          grayDataVersionRef.current = myVersion;
-          setRawGrayData(cached.grayData);
-          setImageWidth(cached.width);
-          setImageHeight(cached.height);
-          imageStatsRef.current = cached.stats;
-          updateWindowLevel(255, 128);
-          return;
-        }
+        if (!cached) return;
 
-        // 创建临时Image对象加载
-        const img = new Image();
-        const url = URL.createObjectURL(imageFile);
-
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = reject;
-          img.src = url;
-        });
-
-        if (cancelled) { URL.revokeObjectURL(url); return; }
-
-        const width = img.naturalWidth;
-        const height = img.naturalHeight;
-
-        // 使用临时Canvas提取像素数据
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = width;
-        tempCanvas.height = height;
-
-        const tempCtx = tempCanvas.getContext('2d', {
-          willReadFrequently: true,
-        });
-
-        if (!tempCtx) {
-          throw new Error('无法创建Canvas上下文');
-        }
-
-        // 绘制图像
-        tempCtx.drawImage(img, 0, 0);
-
-        // 获取RGBA数据
-        const imageData = tempCtx.getImageData(0, 0, width, height);
-        const rgbaData = imageData.data;
-
-        if (cancelled) { URL.revokeObjectURL(url); return; }
-
-        // 转换为单通道灰度数据（这才是真正的"原始数据"）
-        const grayData = new Uint8Array(width * height);
-        for (let i = 0; i < grayData.length; i++) {
-          const idx = i * 4;
-          // 使用标准灰度转换公式
-          grayData[i] = Math.round(
-            0.299 * rgbaData[idx] +
-            0.587 * rgbaData[idx + 1] +
-            0.114 * rgbaData[idx + 2]
-          );
-        }
-
-        if (cancelled) { URL.revokeObjectURL(url); return; }
-
-        // 保存原始数据（记录版本号，确保 renderToCanvas 能识别这批数据属于当前加载）
         grayDataVersionRef.current = myVersion;
-        setRawGrayData(grayData);
-        setImageWidth(width);
-        setImageHeight(height);
-
-        // 计算全图统计
-        const stats = calculateStatsFromGrayData(grayData, 0, 0, -1, -1, width, 2);
-
-        if (stats) {
-          imageStatsRef.current = stats;
-
-          // 存入缓存（LRU 简化版：超过上限时删除最旧的条目）
-          if (grayDataCache.size >= MAX_CACHE_SIZE) {
-            const firstKey = grayDataCache.keys().next().value;
-            if (firstKey) grayDataCache.delete(firstKey);
-          }
-          grayDataCache.set(cacheKey, { grayData, width, height, stats });
-
-          // 默认使用全范围显示，与原始图片明暗一致
-          updateWindowLevel(255, 128);
-        } else {
-          updateWindowLevel(255, 128);
-        }
-
-        URL.revokeObjectURL(url);
-
+        setRawGrayData(cached.grayData);
+        setImageWidth(cached.width);
+        setImageHeight(cached.height);
+        imageStatsRef.current = cached.stats;
+        updateWindowLevel(255, 128);
       } catch (error) {
         if (!cancelled) {
           console.error('图像加载失败:', error);
@@ -359,7 +325,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
     // effect 清理：标记取消，防止旧请求的异步回调污染新图片的状态
     return () => { cancelled = true; };
-  }, [imageFile, calculateStatsFromGrayData, updateWindowLevel]);
+  }, [imageFile, updateWindowLevel]);
 
   // 监听窗宽窗位变化，更新显示
   useEffect(() => {
@@ -429,7 +395,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
     if (!isRealtime) {
       message.destroy();
     }
-  }, [rawGrayData, imageWidth, imageHeight, calculateStatsFromGrayData, updateWindowLevel]);
+  }, [rawGrayData, imageWidth, imageHeight, updateWindowLevel]);
 
   // ==========================================================================
   // 鼠标事件
