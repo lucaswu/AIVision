@@ -93,6 +93,12 @@ RUN mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights
 # 复制焊缝模型代码
 COPY weld/ /app/model/
 
+# 将模型权重文件显式复制到 /app/model/weights/（本地 weight/ → 容器 weights/）
+COPY weld/weight/ /app/model/weights/
+
+# 将 IQIDDET 模型文件显式复制到镜像中（.gitignore 排除了该目录，COPY weld/ 不一定包含）
+COPY weld/IQIDDET/models/ /app/model/IQIDDET/models/
+
 
 # 将预下载的 PaddleOCR 模型缓存复制到镜像内
 # 离线构建：先在有网络的机器上运行 model/weld/scripts/download_ocr_models.sh，

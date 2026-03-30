@@ -126,6 +126,21 @@ public class ReportController {
         }
     }
 
+    @PutMapping("/files/{taskFileId}/location")
+    @Operation(summary = "更新文件定位信息（手动调整椭圆/原点）")
+    public ResponseEntity<ApiResponse<Void>> updateFileLocation(
+        @PathVariable String taskFileId,
+        @RequestBody Map<String, Object> body) {
+        try {
+            String weldLocation = (String) body.get("WeldLocation");
+            String defectPosition = (String) body.get("DefectPosition");
+            reportService.updateFileLocation(taskFileId, weldLocation, defectPosition);
+            return ResponseEntity.ok(ApiResponse.success("保存成功", null));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
     @PutMapping("/{reportId}/archive")
     @Operation(summary = "归档/取消归档报告")
     public ResponseEntity<ApiResponse<Void>> archiveReport(

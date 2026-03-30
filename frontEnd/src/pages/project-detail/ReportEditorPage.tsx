@@ -291,9 +291,12 @@ function formatDefectPosition(minX: number, maxX: number, originX: number, pixel
   }
 }
 
-/** 判断位置字符串是否为自动计算格式（形如 "X->...~..."），用于决定是否覆盖重算 */
+/**
+ * 判断位置字符串是否为自动计算格式，用于决定是否覆盖重算。
+ * 匹配："+->10~20mm"、"+->10~20mm 2'-3'"（含时钟）、"2'-3'"（纯时钟）
+ */
 function isAutoPosition(pos: string): boolean {
-  return /^[^~\s]+->.+~/.test(pos);
+  return /^[^~\s]+->.+~/.test(pos) || /^\d+'-\d+'$/.test(pos);
 }
 
 /**
@@ -511,6 +514,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 9. 是否显示定位坐标（焊缝位置矩形 + 缺陷位置检测2原点） ---
   const [showPositioningCoords, setShowPositioningCoords] = useState(true);
 
+  // --- 10. 位置和尺寸工具本次会话中各工具是否有待保存的变更 ---
+  const positionSizeEllipseDirtyRef = useRef(false);
+  const positionSizeOriginDirtyRef = useRef(false);
+
   // 暂存刚画完但未分类的形状数据
   const [pendingShape, setPendingShape] = useState<any>(null);
   const [pendingShapeType, setPendingShapeType] = useState<DrawingType>('rect');
@@ -708,18 +715,25 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setCurrentDefectCircle(null);
       setCursorInImage(null);
     }
-    // 当切换到位置和尺寸工具时，重置子类型为 null（默认不选中任何选项）
+    // 当切换到位置和尺寸工具时，重置子类型为 null（默认不选中任何选项），同时重置脏标记
     if (activeTool === 'positionSize') {
       setPositionSizeType(null);
+      positionSizeEllipseDirtyRef.current = false;
+      positionSizeOriginDirtyRef.current = false;
     }
   }, [activeTool]);
 
   // --- 椭圆工具初始化/重置 ---
   useEffect(() => {
     if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
+      // 当图片旋转 90°/270° 时，SVG 的 x 轴在视觉上变为竖直方向，
+      // 需要交换 rx/ry 使椭圆在屏幕上保持横向（宽>高）外观
+      const normR = ((rotation % 360) + 360) % 360;
+      const initRx = (normR === 90 || normR === 270) ? 60 : 120;
+      const initRy = (normR === 90 || normR === 270) ? 120 : 60;
       setEllipseState({
         mode: 'placing',
-        shape: { cx: 0, cy: 0, rx: 120, ry: 60, rotation: 0 },
+        shape: { cx: 0, cy: 0, rx: initRx, ry: initRy, rotation: 0 },
         drag: {
           active: false,
           type: null,
@@ -1074,6 +1088,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           mode: 'editing',
           shape: newShape
         });
+        positionSizeEllipseDirtyRef.current = true;
         message.success("已固定。可拖拽调整或重新放置");
         return;
       }
@@ -1372,17 +1387,30 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'positioning' && isSettingPositioning && tempOrigin) {
       setIsSettingPositioning(false);
-      const trueCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
-      setOriginPoint(trueCoords);
-      message.success(`定位标记已设置（坐标原点）: (${trueCoords.x}, ${trueCoords.y})`);
+      // 先转为原图像素坐标，再正向变换到矫正后坐标系（与缺陷框坐标系一致）
+      const rawCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+      const _corrR = selectedFile?.CorrectionRotation ?? 0;
+      const _corrF = selectedFile?.CorrectionFlip ? -1 : 1;
+      const _rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+      const _rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+      const corrCoords = forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
+      setOriginPoint(corrCoords);
+      positionSizeOriginDirtyRef.current = true;
+      message.success(`定位标记已设置（坐标原点）: (${corrCoords.x}, ${corrCoords.y})`);
       setTempOrigin(null);
       // 不切换工具，允许用户继续调整定位标记
     }
     else if (activeTool === 'setOrigin' && isSettingOrigin && tempOrigin) {
       setIsSettingOrigin(false);
-      const trueCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
-      setOriginPoint(trueCoords);
-      message.success(`坐标原点已设置: (${trueCoords.x}, ${trueCoords.y})`);
+      // 先转为原图像素坐标，再正向变换到矫正后坐标系（与缺陷框坐标系一致）
+      const rawCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+      const _corrR = selectedFile?.CorrectionRotation ?? 0;
+      const _corrF = selectedFile?.CorrectionFlip ? -1 : 1;
+      const _rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+      const _rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+      const corrCoords = forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
+      setOriginPoint(corrCoords);
+      message.success(`坐标原点已设置: (${corrCoords.x}, ${corrCoords.y})`);
       setTempOrigin(null);
       setActiveTool('pan');
     }
@@ -1465,6 +1493,89 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       }
     } else {
       message.warning('请输入有效的实际长度');
+    }
+  };
+
+  // --- 位置和尺寸工具关闭：将手动标注的椭圆/原点保存到 DB 并更新本地状态 ---
+  const handlePositionSizeClose = () => {
+    setActiveTool('pan');
+    if (!selectedFile) return;
+
+    const corrRotation = selectedFile.CorrectionRotation ?? 0;
+    const corrFlipH = selectedFile.CorrectionFlip ? -1 : 1;
+    const rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+    const rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+    const wR = (rawW > 0 && imgSize.w > 0) ? rawW / imgSize.w : 1;
+    const hR = (rawH > 0 && imgSize.h > 0) ? rawH / imgSize.h : 1;
+
+    const payload: { WeldLocation?: string; DefectPosition?: string } = {};
+
+    // --- 提交手动椭圆 ---
+    if (positionSizeEllipseDirtyRef.current && ellipseState.shape && ellipseState.mode === 'editing') {
+      const shape = ellipseState.shape;
+      const cosR = Math.cos(shape.rotation);
+      const sinR = Math.sin(shape.rotation);
+      // 生成 12 个时钟关键点（椭圆局部坐标 → display → raw → corrected）
+      const keypoints = Array.from({ length: 12 }, (_, i) => {
+        const angle = -Math.PI / 2 + (i * Math.PI / 6);
+        const lx = shape.rx * Math.cos(angle);
+        const ly = shape.ry * Math.sin(angle);
+        const kxDisp = shape.cx + lx * cosR - ly * sinR;
+        const kyDisp = shape.cy + lx * sinR + ly * cosR;
+        const kxRaw = kxDisp * wR;
+        const kyRaw = kyDisp * hR;
+        const { x, y } = forwardTransformPoint(kxRaw, kyRaw, rawW, rawH, corrRotation, corrFlipH);
+        return { id: i + 1, x, y };
+      });
+      const xs = keypoints.map(k => k.x);
+      const ys = keypoints.map(k => k.y);
+      const bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+      const weldLocationData = [{ class: 'ellipse', confidence: 1.0, bbox, keypoints }];
+      payload.WeldLocation = JSON.stringify(weldLocationData);
+
+      // 更新本地 weldLocationShapes
+      setWeldLocationShapes([{
+        x1: bbox[0], y1: bbox[1], x2: bbox[2], y2: bbox[3],
+        keypoints: keypoints.map(k => ({ x: k.x, y: k.y }))
+      }]);
+      // 手动椭圆接管后，location_1 的原点不再生效
+      setDefectOriginPoint(null);
+      setDefectOriginMeta(null);
+    }
+
+    // --- 提交手动原点（定位标记成像） ---
+    if (positionSizeOriginDirtyRef.current && originPoint) {
+      // originPoint 已在矫正后坐标系中存储，无需再次 forwardTransformPoint
+      const corrX = originPoint.x;
+      const corrY = originPoint.y;
+      const defectPositionData = {
+        detected: true,
+        positioning_type: 0,
+        origin_x: corrX,
+        origin_y: corrY,
+        origin_text: null,
+        detections: []
+      };
+      payload.DefectPosition = JSON.stringify(defectPositionData);
+
+      // 将原点转入 defectOriginPoint（持久显示）
+      // 注意：不清除 originPoint，避免退出后 effectiveOrigin 因 weldLocationShapes 互斥逻辑变为 null（Issue 3）
+      setDefectOriginPoint({ x: corrX, y: corrY });
+      setDefectOriginMeta({ positioningType: 0, originText: null });
+
+      // 定位标记成像接管后，清除 AI 椭圆（Issue 2：避免原图椭圆残留）
+      setWeldLocationShapes([]);
+      payload.WeldLocation = '[]';
+    }
+
+    // 重置脏标记
+    positionSizeEllipseDirtyRef.current = false;
+    positionSizeOriginDirtyRef.current = false;
+
+    if (Object.keys(payload).length > 0) {
+      reportAPI.updateFileLocation(selectedFile.TaskFileId, payload)
+        .then(() => message.success('位置信息已保存'))
+        .catch(() => message.error('位置信息保存失败'));
     }
   };
 
@@ -2021,6 +2132,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     const calibrated = pixelRatio > 0 && pixelRatio !== 1;
     let changed = false;
 
+    // 辅助：从 weldLocationShapes 取最近椭圆时钟位置
+    const getClockStr = (centerX: number, centerY: number): string => {
+      if (weldLocationShapes.length === 0) return '';
+      const ellipse = getNearestEllipseParams(weldLocationShapes, centerX, centerY);
+      if (!ellipse) return '';
+      return getClockPositionLabel(centerX, centerY, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
+    };
+    // 辅助：合并 X 轴位置串和时钟串
+    const buildPos = (xPosStr: string, clockStr: string): string =>
+      [xPosStr, clockStr].filter(Boolean).join(' ');
+
     const newRects = defectRects.map(dr => {
       let updated: SavedRect = { ...dr };
       // 重新计算尺寸
@@ -2029,9 +2151,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
         changed = true;
       }
-      // 重新计算位置（仅当存在有效原点，且当前位置字符串包含 px 或为空时）
-      if (effectiveOrigin && (!dr.position || isAutoPosition(dr.position))) {
-        const newPos = formatDefectPosition(dr.x, dr.x + dr.w, effectiveOrigin.x, pixelRatio, effectiveOriginLabel);
+      // 重新计算位置（位置为空或自动格式时更新；同时计算 X 轴偏移和时钟位置）
+      if (!dr.position || isAutoPosition(dr.position)) {
+        const xPos = effectiveOrigin
+          ? formatDefectPosition(dr.x, dr.x + dr.w, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+          : '';
+        const clock = getClockStr(dr.x + dr.w / 2, dr.y + dr.h / 2);
+        const newPos = buildPos(xPos, clock);
         if (newPos !== dr.position) { updated = { ...updated, position: newPos }; changed = true; }
       }
       return updated;
@@ -2044,8 +2170,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
         changed = true;
       }
-      if (effectiveOrigin && (!dc.position || isAutoPosition(dc.position))) {
-        const newPos = formatDefectPosition(dc.x - dc.r, dc.x + dc.r, effectiveOrigin.x, pixelRatio, effectiveOriginLabel);
+      if (!dc.position || isAutoPosition(dc.position)) {
+        const xPos = effectiveOrigin
+          ? formatDefectPosition(dc.x - dc.r, dc.x + dc.r, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+          : '';
+        const clock = getClockStr(dc.x, dc.y);
+        const newPos = buildPos(xPos, clock);
         if (newPos !== dc.position) { updated = { ...updated, position: newPos }; changed = true; }
       }
       return updated;
@@ -2065,9 +2195,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
         changed = true;
       }
-      if (effectiveOrigin && dp.points && dp.points.length >= 1 && (!dp.position || isAutoPosition(dp.position))) {
+      if (dp.points && dp.points.length >= 1 && (!dp.position || isAutoPosition(dp.position))) {
         const xs = dp.points.map((p: { x: number; y: number }) => p.x);
-        const newPos = formatDefectPosition(Math.min(...xs), Math.max(...xs), effectiveOrigin.x, pixelRatio, effectiveOriginLabel);
+        const ys = dp.points.map((p: { x: number; y: number }) => p.y);
+        const xPos = effectiveOrigin
+          ? formatDefectPosition(Math.min(...xs), Math.max(...xs), effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+          : '';
+        const clock = getClockStr(
+          (Math.min(...xs) + Math.max(...xs)) / 2,
+          (Math.min(...ys) + Math.max(...ys)) / 2
+        );
+        const newPos = buildPos(xPos, clock);
         if (newPos !== dp.position) { updated = { ...updated, position: newPos }; changed = true; }
       }
       return updated;
@@ -2291,12 +2429,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const rulerVertMax = isAxesSwapped ? trueImageW : trueImageH;
 
   const displayOrigin = useMemo(() => {
-    // 如果是设置原点工具或定位标记成像工具，且有临时原点，显示临时坐标
+    // 如果是设置原点工具或定位标记成像工具，且有临时原点，显示矫正后坐标
     if ((activeTool === 'setOrigin' || (activeTool === 'positionSize' && positionSizeType === 'positioning')) && tempOrigin) {
-      return calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+      const rawCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
+      const _corrR = selectedFile?.CorrectionRotation ?? 0;
+      const _corrF = selectedFile?.CorrectionFlip ? -1 : 1;
+      const _rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+      const _rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+      return forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
     }
+    // originPoint 已存储为矫正后坐标系，直接显示
     return originPoint || { x: 0, y: 0 };
-  }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize]);
+  }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize, selectedFile, rawImageWidth, rawImageHeight]);
 
   // --- 更新缺陷信息的辅助函数 ---
   const updateDefectInfo = (
@@ -2578,8 +2722,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               />
             </div>
             {/* 等级 - 下拉选择 */}
-            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
+            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', flexWrap: 'nowrap' }}>
               <span style={{
+                flexShrink: 0,
                 backgroundColor: '#fafafa',
                 border: '1px solid #d9d9d9',
                 borderRight: 'none',
@@ -2588,19 +2733,20 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 height: '24px',
                 lineHeight: '22px',
                 fontSize: '14px',
+                whiteSpace: 'nowrap',
                 color: 'rgba(0, 0, 0, 0.85)'
               }}>等级</span>
               <Select
                 size="small"
-                placeholder="请选择质量等级"
+                placeholder="等级"
                 value={item.quality || undefined}
-                style={{ flex: 1 }}
+                style={{ flex: 1, minWidth: 0 }}
                 onChange={(val) => updateDefectInfo(type, index, 'quality', val)}
               >
-                <Option value="一级">I 级 (优)</Option>
-                <Option value="二级">II 级 (良)</Option>
-                <Option value="三级">III 级 (中)</Option>
-                <Option value="四级">IV 级 (差)</Option>
+                <Option value="一级">I 级</Option>
+                <Option value="二级">II 级</Option>
+                <Option value="三级">III 级</Option>
+                <Option value="四级">IV 级</Option>
               </Select>
             </div>
             {/* 备注 */}
@@ -3062,33 +3208,64 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         return { label, x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) };
                       });
 
+                      // 将时钟点转换到显示坐标，供椭圆轮廓和时钟点共用
+                      const dispClockPts = clockPoints.map(pt => {
+                        let kx = pt.x, ky = pt.y;
+                        if (needsInverse && rimgW > 0 && rimgH > 0) {
+                          const t = inverseTransformPoint(kx, ky, rimgW, rimgH, corrRotation, corrFlipH);
+                          kx = t.x; ky = t.y;
+                        }
+                        return {
+                          label: pt.label,
+                          x: widthRatio > 0 ? kx / widthRatio : kx,
+                          y: heightRatio > 0 ? ky / heightRatio : ky
+                        };
+                      });
+                      // 从显示坐标还原椭圆参数，用于绘制椭圆轮廓
+                      const allDx = dispClockPts.map(p => p.x);
+                      const allDy = dispClockPts.map(p => p.y);
+                      const ellCx = (Math.max(...allDx) + Math.min(...allDx)) / 2;
+                      const ellCy = (Math.max(...allDy) + Math.min(...allDy)) / 2;
+                      const ellRx = (Math.max(...allDx) - Math.min(...allDx)) / 2;
+                      const ellRy = (Math.max(...allDy) - Math.min(...allDy)) / 2;
+
                       return (
                         <g key={`weld-loc-${idx}`}>
+                          {/* 椭圆轮廓（绿色虚线） */}
+                          <ellipse
+                            cx={ellCx} cy={ellCy}
+                            rx={ellRx} ry={ellRy}
+                            fill="none"
+                            stroke="#39ff14"
+                            strokeWidth={2 / scale}
+                            strokeDasharray={`${6 / scale} ${4 / scale}`}
+                            opacity={0.85}
+                          />
                           {/* 时钟位置点：12'/3'/6'/9' 为主方向（较大），其余等距插值 */}
-                          {clockPoints.map((pt, ki) => {
-                            let kx = pt.x, ky = pt.y;
-                            if (needsInverse && rimgW > 0 && rimgH > 0) {
-                              const transformed = inverseTransformPoint(kx, ky, rimgW, rimgH, corrRotation, corrFlipH);
-                              kx = transformed.x; ky = transformed.y;
-                            }
-                            const dKx = widthRatio > 0 ? kx / widthRatio : kx;
-                            const dKy = heightRatio > 0 ? ky / heightRatio : ky;
+                          {dispClockPts.map((pt, ki) => {
                             const isCardinal = ki % 3 === 0; // 12', 3', 6', 9'
+                            const normCSS = ((rotation % 360) + 360) % 360;
+                            const tx = pt.x + 6 / scale;
+                            const ty = pt.y - 4 / scale;
+                            let textTfm = '';
+                            if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${tx}, ${ty}) `;
+                            if (flipH === -1) textTfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
                             return (
                               <g key={ki}>
-                                <circle cx={dKx} cy={dKy}
+                                <circle cx={pt.x} cy={pt.y}
                                   r={(isCardinal ? 5 : 3.5) / scale}
-                                  fill="#fd0202"
+                                  fill={ki === 0 ? '#00e5ff' : '#fd0202'}
                                   opacity={0.9}
                                 />
                                 <text
-                                  x={dKx + 6 / scale}
-                                  y={dKy - 4 / scale}
-                                  fill="#fd0202"
+                                  x={tx}
+                                  y={ty}
+                                  fill={ki === 0 ? '#00e5ff' : '#fd0202'}
                                   fontSize={(isCardinal ? 13 : 11) / scale}
                                   fontWeight="bold"
                                   textAnchor="start"
                                   style={{ filter: 'drop-shadow(0 0 2px #000)' }}
+                                  transform={textTfm || undefined}
                                 >
                                   {pt.label}
                                 </text>
@@ -3470,14 +3647,29 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 11 }}
                   >
                     {(() => {
-                      const imageCoords = calculateImageCoordinates(originPoint.x, originPoint.y);
+                      // originPoint 存储于矫正后坐标系，需逆变换回原图坐标系再转 SVG 显示坐标
+                      const _corrR = selectedFile?.CorrectionRotation ?? 0;
+                      const _corrF = selectedFile?.CorrectionFlip ? -1 : 1;
+                      const _normCorrR = ((_corrR % 360) + 360) % 360;
+                      const _corrImgW = (_normCorrR === 90 || _normCorrR === 270)
+                        ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                      const _corrImgH = (_normCorrR === 90 || _normCorrR === 270)
+                        ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+                      const rawPt = (_corrR !== 0 || _corrF === -1)
+                        ? inverseTransformPoint(originPoint.x, originPoint.y, _corrImgW, _corrImgH, _corrR, _corrF)
+                        : { x: originPoint.x, y: originPoint.y };
+                      const imageCoords = calculateImageCoordinates(rawPt.x, rawPt.y);
+                      const normR = ((rotation % 360) + 360) % 360;
+                      // CSS rotate(90°/270°) 使 SVG 竖线变为屏幕水平线，反之亦然
+                      // 90°/270° 时改画水平SVG线，使其在屏幕上仍显示为竖线（垂直x轴）
+                      const isSwapped = normR === 90 || normR === 270;
                       return (
                         <line
-                          x1={imageCoords.x}
-                          y1={0}
-                          x2={imageCoords.x}
-                          y2={imgSize.h}
-                          stroke="rgba(245, 34, 45, 1"
+                          x1={isSwapped ? 0 : imageCoords.x}
+                          y1={isSwapped ? imageCoords.y : 0}
+                          x2={isSwapped ? imgSize.w : imageCoords.x}
+                          y2={isSwapped ? imageCoords.y : imgSize.h}
+                          stroke="rgba(245, 34, 45, 1)"
                           strokeWidth={1 / scale}
                           strokeDasharray="5 5"
                         />
@@ -3517,35 +3709,15 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         strokeDasharray={ellipseState.mode === 'placing' ? '5 5' : 'none'}
                       />
 
-                      {/* B. 时钟系统刻度 */}
+                      {/* B. 时钟系统刻度（刻度圆点在旋转g内，标签在外部以便抵消CSS旋转）
+                           startAngle = -π/2 - rotation_rad，使 12' 始终对应屏幕正上方方向 */}
                       {Array.from({ length: 12 }).map((_, i) => {
-                        const startAngle = -Math.PI / 2;
+                        const startAngle = -Math.PI / 2 - (rotation * Math.PI / 180);
                         const angle = startAngle + (i * (Math.PI / 6));
                         const px = ellipseState.shape!.rx * Math.cos(angle);
                         const py = ellipseState.shape!.ry * Math.sin(angle);
-
-                        // 根据椭圆大小动态调整标签偏移量
-                        // 使用椭圆较小半径的15%作为偏移，最小20像素，最大40像素
-                        const minRadius = Math.min(ellipseState.shape!.rx, ellipseState.shape!.ry);
-                        const labelOffset = Math.max(20, Math.min(40, minRadius * 0.15)) / scale;
-                        const tx = (ellipseState.shape!.rx + labelOffset) * Math.cos(angle);
-                        const ty = (ellipseState.shape!.ry + labelOffset) * Math.sin(angle);
-                        const label = i === 0 ? "12'" : i + "'";
-
                         return (
-                          <g key={`clock-${i}`}>
-                            <circle cx={px} cy={py} r={3 / scale} fill="#00ccff" />
-                            <text
-                              x={tx} y={ty}
-                              fill={(i % 3 === 0) ? "#ffcc00" : "#00ccff"}
-                              fontSize={16 / scale}
-                              fontWeight="bold"
-                              textAnchor="middle"
-                              dominantBaseline="middle"
-                            >
-                              {label}
-                            </text>
-                          </g>
+                          <circle key={`clock-dot-${i}`} cx={px} cy={py} r={3 / scale} fill="#00ccff" />
                         );
                       })}
 
@@ -3590,6 +3762,47 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         </g>
                       )}
                     </g>
+
+                    {/* B-外部. 时钟标签（绝对坐标，附加抵消CSS旋转的transform使文字保持正向） */}
+                    {ellipseState.shape && (() => {
+                      const shape = ellipseState.shape;
+                      const R = shape.rotation;
+                      const cosR = Math.cos(R);
+                      const sinR = Math.sin(R);
+                      const normCSS = ((rotation % 360) + 360) % 360;
+
+                      const startAngleLbl = -Math.PI / 2 - (rotation * Math.PI / 180);
+                      return Array.from({ length: 12 }).map((_, i) => {
+                        const angle = startAngleLbl + (i * Math.PI / 6);
+                        const minRadius = Math.min(shape.rx, shape.ry);
+                        const labelOffset = Math.max(20, Math.min(40, minRadius * 0.15)) / scale;
+                        // 局部坐标（g坐标系内）
+                        const lx = (shape.rx + labelOffset) * Math.cos(angle);
+                        const ly = (shape.ry + labelOffset) * Math.sin(angle);
+                        // 转换到绝对SVG坐标
+                        const absTx = shape.cx + lx * cosR - ly * sinR;
+                        const absTy = shape.cy + lx * sinR + ly * cosR;
+                        // 抵消CSS旋转与翻转
+                        let tfm = '';
+                        if (normCSS !== 0) tfm += `rotate(${-normCSS}, ${absTx}, ${absTy}) `;
+                        if (flipH === -1) tfm += `translate(${2 * absTx}, 0) scale(-1, 1)`;
+                        const label = i === 0 ? "12'" : `${i}'`;
+                        return (
+                          <text
+                            key={`clock-label-${i}`}
+                            x={absTx} y={absTy}
+                            fill={(i % 3 === 0) ? "#ffcc00" : "#00ccff"}
+                            fontSize={16 / scale}
+                            fontWeight="bold"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            transform={tfm || undefined}
+                          >
+                            {label}
+                          </text>
+                        );
+                      });
+                    })()}
                   </svg>
                 )}
 
@@ -3723,25 +3936,26 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                       x2={imgSize.w} y2={tempOrigin.y}
                       stroke="#f5222d" strokeWidth={1 / scale}
                     />
-                    {/* x 和 y 标签 */}
-                    <text
-                      x={tempOrigin.x + 10 / scale}
-                      y={tempOrigin.y - 6 / scale}
-                      fill="#f5222d"
-                      fontSize={12 / scale}
-                      style={{ userSelect: 'none' }}
-                    >
-                      x
-                    </text>
-                    <text
-                      x={tempOrigin.x + 6 / scale}
-                      y={tempOrigin.y + 14 / scale}
-                      fill="#f5222d"
-                      fontSize={12 / scale}
-                      style={{ userSelect: 'none' }}
-                    >
-                      y
-                    </text>
+                    {/* x 和 y 标签（抵消CSS旋转，保持文字正向显示） */}
+                    {(() => {
+                      const normCSS = ((rotation % 360) + 360) % 360;
+                      const lx1 = tempOrigin.x + 10 / scale, ly1 = tempOrigin.y - 6 / scale;
+                      const lx2 = tempOrigin.x + 6 / scale, ly2 = tempOrigin.y + 14 / scale;
+                      const makeTfm = (tx: number, ty: number) => {
+                        let t = '';
+                        if (normCSS !== 0) t += `rotate(${-normCSS}, ${tx}, ${ty}) `;
+                        if (flipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                        return t || undefined;
+                      };
+                      return (
+                        <>
+                          <text x={lx1} y={ly1} fill="#f5222d" fontSize={12 / scale}
+                            style={{ userSelect: 'none' }} transform={makeTfm(lx1, ly1)}>x</text>
+                          <text x={lx2} y={ly2} fill="#f5222d" fontSize={12 / scale}
+                            style={{ userSelect: 'none' }} transform={makeTfm(lx2, ly2)}>y</text>
+                        </>
+                      );
+                    })()}
                   </svg>
                 )}
 
@@ -3850,7 +4064,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <PositionAndSizeTool
                 currentType={positionSizeType}
                 onTypeChange={setPositionSizeType}
-                onClose={() => setActiveTool('pan')}
+                onClose={handlePositionSizeClose}
               />
             </div>
           )}

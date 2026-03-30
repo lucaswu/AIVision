@@ -214,6 +214,11 @@ export const reportAPI = {
       method: "POST",
       body: JSON.stringify(taskFileIds),
     }),
+  updateFileLocation: (taskFileId: string, data: { WeldLocation?: string; DefectPosition?: string }) =>
+    request<void>(`/api/v1/reports/files/${taskFileId}/location`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
   archiveReport: (reportId: string, archived: boolean) =>
     request<void>(`/api/v1/reports/${reportId}/archive?archived=${archived}`, {
       method: "PUT",

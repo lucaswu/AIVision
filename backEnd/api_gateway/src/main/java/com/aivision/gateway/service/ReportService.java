@@ -154,6 +154,17 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
 }
 
     /**
+     * 更新文件定位信息（手动调整椭圆/原点）
+     */
+    public void updateFileLocation(String taskFileId, String weldLocation, String defectPosition) {
+        TaskFile tf = taskFileRepository.findById(taskFileId)
+            .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
+        if (weldLocation != null) tf.setWeldLocation(weldLocation);
+        if (defectPosition != null) tf.setDefectPosition(defectPosition);
+        taskFileRepository.save(tf);
+    }
+
+    /**
      * 批量确认文件
      */
     public void batchConfirmFiles(List<String> taskFileIds) {
