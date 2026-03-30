@@ -1489,7 +1489,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
     // 确定当前有效的0点（原点）：优先使用手动设置的 originPoint，其次使用 AI 检测的 defectOriginPoint
     // 原点坐标存储在矫正后坐标系中（与缺陷框坐标系一致）
-    const effectiveOrigin = originPoint || defectOriginPoint;
+    // location_0 和 location_1 互斥：若已有 location_0 椭圆关键点，则不使用 location_1 的原点
+    const effectiveOrigin = originPoint || (weldLocationShapes.length === 0 ? defectOriginPoint : null);
     // 0点来源标签：手动设置用'+'，AI边缘标记用识别文本，其余用'+'
     const effectiveOriginLabel = originPoint
       ? '+'
@@ -1736,7 +1737,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
         let loadTimeOrigin: { x: number; y: number } | null = originPoint;
         let loadTimeOriginLabel = '+';
-        if (!loadTimeOrigin && selectedFile?.DefectPosition) {
+        // location_0 和 location_1 互斥：若 location_0 有检测结果，则不从 location_1（DefectPosition）读取原点
+        if (!loadTimeOrigin && loadTimeWeldShapes.length === 0 && selectedFile?.DefectPosition) {
           try {
             const dp = JSON.parse(selectedFile.DefectPosition);
             if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
@@ -1939,10 +1941,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           return [];
         }
       };
-      setWeldLocationShapes(parseWeldLocationShapes());
+      const parsedWeldShapes = parseWeldLocationShapes();
+      setWeldLocationShapes(parsedWeldShapes);
 
       // 解析缺陷位置检测2结果（D路径，来自 location_1.pt，center_mark 十字架或边缘标记）
-      if (selectedFile?.DefectPosition) {
+      // location_0 和 location_1 互斥：若 location_0 有检测结果（椭圆关键点），则忽略 location_1 的原点
+      if (parsedWeldShapes.length === 0 && selectedFile?.DefectPosition) {
         try {
           const dp = JSON.parse(selectedFile.DefectPosition);
           if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
@@ -2009,7 +2013,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 监听 pixelRatio / originPoint / defectOriginPoint 变化，
   //     重新计算所有缺陷的尺寸（mm/px²）和位置（+->X~Ypx/mm）---
   useEffect(() => {
-    const effectiveOrigin = originPoint || defectOriginPoint;
+    // location_0 和 location_1 互斥：若已有 location_0 椭圆关键点，则不使用 location_1 的原点
+    const effectiveOrigin = originPoint || (weldLocationShapes.length === 0 ? defectOriginPoint : null);
     const effectiveOriginLabel = originPoint
       ? '+'
       : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
@@ -2075,7 +2080,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       // 不触发 updateHistoryState，因为这只是补充显示信息，不算用户编辑
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pixelRatio, originPoint, defectOriginPoint]);
+  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
