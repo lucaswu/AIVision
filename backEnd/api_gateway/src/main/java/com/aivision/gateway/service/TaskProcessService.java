@@ -8,6 +8,7 @@ import com.aivision.gateway.repository.DefectRecordRepository;
 import com.aivision.gateway.repository.DefectTypeRepository;
 import com.aivision.gateway.repository.TaskFileRepository;
 import com.aivision.gateway.repository.TaskRepository;
+import com.aivision.gateway.service.storage.StorageStrategy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -17,9 +18,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -49,9 +52,15 @@ public class TaskProcessService {
     
     @Autowired
     private AiServiceClient aiServiceClient;
-    
+
+    @Autowired
+    private StorageStrategy storageStrategy;
+
     @Value("${storage.local.result-dir:/app/data/results}")
     private String resultBaseDir;
+
+    @Value("${storage.external-base-dir:/app/data/files}")
+    private String inferenceInputBaseDir;
     
     /**
      * 异步处理任务 (仅视觉 AI，结果追加到大的 JSON 文件中)
@@ -90,6 +99,8 @@ public class TaskProcessService {
                 tf.setProcessingStartTime(LocalDateTime.now());
             }
             taskFileRepository.saveAll(allTaskFiles);
+
+            stageFilesForInference(taskId, allTaskFiles);
 
             // 3. 一次性调用 Python 进行全量推理
             // 收集所有文件的相对路径 (使用 minioFilePath，即物理存储路径，包含 Project/User 层级)
@@ -514,6 +525,49 @@ public class TaskProcessService {
         } catch (Exception e) {
             logger.error("记录任务失败状态出错: taskId={}", taskId, e);
         }
+    }
+
+    private void stageFilesForInference(String taskId, List<TaskFile> taskFiles) {
+        Path basePath = Paths.get(inferenceInputBaseDir).normalize().toAbsolutePath();
+        List<String> stagedPaths = new ArrayList<>();
+
+        for (TaskFile taskFile : taskFiles) {
+            String relativePath = taskFile.getMinioFilePath();
+            if (relativePath == null || relativePath.isBlank()) {
+                throw new RuntimeException("任务文件缺少存储路径: taskFileId=" + taskFile.getTaskFileId());
+            }
+
+            String normalizedRelativePath = relativePath.startsWith("/")
+                    ? relativePath.substring(1)
+                    : relativePath;
+            Path targetPath = basePath.resolve(normalizedRelativePath).normalize();
+            if (!targetPath.startsWith(basePath)) {
+                throw new RuntimeException("非法的文件路径: " + relativePath);
+            }
+
+            try {
+                if (Files.exists(targetPath) && Files.isRegularFile(targetPath) && Files.size(targetPath) > 0) {
+                    stagedPaths.add(relativePath);
+                    continue;
+                }
+
+                if (!storageStrategy.exists(relativePath)) {
+                    throw new RuntimeException("存储中不存在待推理文件: " + relativePath);
+                }
+
+                Files.createDirectories(targetPath.getParent());
+                try (InputStream inputStream = storageStrategy.download(relativePath)) {
+                    Files.copy(inputStream, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+                stagedPaths.add(relativePath);
+                logger.info("已准备推理输入文件: taskId={}, path={}", taskId, relativePath);
+            } catch (Exception e) {
+                throw new RuntimeException("准备推理输入文件失败: " + relativePath + ", " + e.getMessage(), e);
+            }
+        }
+
+        logger.info("推理输入文件准备完成: taskId={}, count={}, baseDir={}",
+                taskId, stagedPaths.size(), basePath);
     }
     
     /**

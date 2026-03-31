@@ -1,0 +1,7 @@
+FROM crpi-wypvanlammbrxwe3.cn-hangzhou.personal.cr.aliyuncs.com/aivisondocker/aivision-backend:3-30
+
+USER root
+
+COPY --chown=appuser:appuser backEnd/api_gateway/target/api-gateway-0.0.1-SNAPSHOT.jar /app/app.jar
+
+USER appuser
