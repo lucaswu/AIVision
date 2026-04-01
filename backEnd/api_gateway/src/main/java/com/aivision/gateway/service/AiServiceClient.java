@@ -140,8 +140,8 @@ public class AiServiceClient {
         request.put("device", device);
         // 新增参数
         request.put("class_names", getClassNames());
-        request.put("det_confidence", detConfidence);
-        request.put("det_wide_slice", detWideSlice);
+        request.put("primary_conf", detConfidence);
+        request.put("wide_slice", detWideSlice);
         
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
                         help="主干/宽切片NMS融合IoU阈值")
 
     # 分割模式参数
-    parser.add_argument("--primary-conf", type=float, default=0.25, help="主模型置信度阈值")
+    parser.add_argument("--primary-conf", type=float, default=0.15, help="主模型置信度阈值")
     parser.add_argument("--device", help="推理设备（如0, cuda:0, cpu）")
 
     # 检测模式参数(RF-DETR)

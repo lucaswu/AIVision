@@ -47,7 +47,7 @@ ai-services:
     inference-mode: det
     device: cpu # Local test default to CPU
     engine: rfdet
-    det-confidence: 0.25
+    det-confidence: 0.15
     det-wide-slice: true
     timeout-minutes: 1440
 

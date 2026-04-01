@@ -53,7 +53,7 @@ ai-services:
     device: ${AI_SERVICES_DEVICE:cuda:0}
     engine: ${AI_SERVICES_ENGINE:rfdet}
     # 检测置信度阈值
-    det-confidence: ${AI_SERVICES_DET_CONFIDENCE:0.25}
+    det-confidence: ${AI_SERVICES_DET_CONFIDENCE:0.15}
     # 是否启用横切纵拼推理
     det-wide-slice: ${AI_SERVICES_DET_WIDE_SLICE:true}
     # 超时配置（分钟）

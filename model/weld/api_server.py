@@ -76,7 +76,7 @@ class InferenceRequest(BaseModel):
     device: str = Field(default="cuda:0", description="推理设备: cuda:0, cuda:1, cpu")
     roi_weights: Optional[str] = Field(default=None, description="ROI模型权重路径")
     primary_weights: Optional[str] = Field(default=None, description="主模型权重路径")
-    primary_conf: float = Field(default=0.25, description="主模型置信度阈值")
+    primary_conf: float = Field(default=0.15, description="主模型置信度阈值")
     wide_slice: bool = Field(default=True, description="是否启用横切纵拼推理")
     enable_location: bool = Field(default=True, description="是否启用焊缝位置检测")
     location_conf: float = Field(default=0.6, description="焊缝位置检测置信度阈值")
