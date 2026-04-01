@@ -297,6 +297,22 @@ GPU 机器如果需要 `deploy.resources.reservations.devices`，可额外合并
 - `AI_INFERENCE_BASE_IMAGE=aivision-ai-inference:latest`
 - `AI_INFERENCE_IMAGE=aivision-ai-inference:packed`
 
+### 5.4 VPN 与堡垒机
+
+VPN 地址：
+
+- [https://vpn.ztpc.com](https://vpn.ztpc.com)
+
+VPN 账户：
+
+- 用户名：`shenguohua`
+- 密码：`ovalab00Test!123`
+
+堡垒机账户：
+
+- 用户名：`shenguohua`
+- 密码：`12345678.Com`
+
 ## 6. 推荐部署顺序
 
 ```bash
