@@ -851,30 +851,60 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const [imageFile, setImageFile] = useState<File | undefined>(undefined);
 
-  // 图片 Blob 缓存，key = FileId，避免重复 fetch 同一张图
+  // ─── Blob 内存缓存 （LRU）───────────────────────────────────────────────
+  // Map 维持插入顺序，头部 = 最久未使用（LRU），尾部 = 最近使用
+  // 每张 BMP 大约 10～20MB，最大缓存 15 张 ≈ 150～300MB
+  const MAX_BLOB_CACHE_SIZE = 15;
   const fileBlobCacheRef = useRef<Map<string, File>>(new Map());
+
+  /** 写入缓存，带 LRU 淘汰。每次微少渮负（Map 操作 O(1)） */
+  const setBlobCache = useCallback((fileId: string, file: File) => {
+    const cache = fileBlobCacheRef.current;
+    // 已存在则先删除，再插入尾部（运动到“最新使用”位置）
+    if (cache.has(fileId)) cache.delete(fileId);
+    cache.set(fileId, file);
+    // 超出最大容量时，一次性淨消最旧的一条
+    if (cache.size > MAX_BLOB_CACHE_SIZE) {
+      const oldestKey = cache.keys().next().value as string;
+      cache.delete(oldestKey);
+    }
+  }, []);
+
+  /** 读取缓存，命中时将条目移至尾部（更新为“最近使用”） */
+  const getBlobCache = useCallback((fileId: string): File | undefined => {
+    const cache = fileBlobCacheRef.current;
+    const file = cache.get(fileId);
+    if (file) {
+      // 移动到尾部 —— Map 维持插入顺序，删除后重新插入即可
+      cache.delete(fileId);
+      cache.set(fileId, file);
+    }
+    return file;
+  }, []);
 
   // 预加载单张图片到缓存（不触发渲染）
   const preloadFile = useCallback((file: { FileId: string; FileName?: string } | null | undefined) => {
     if (!file) return;
     // blob 已缓存时，补触发一次灰度预处理（幂等，已有灰度缓存则直接返回）
-    if (fileBlobCacheRef.current.has(file.FileId)) {
-      preprocessToGrayCache(fileBlobCacheRef.current.get(file.FileId)!).catch(() => {});
+    const existing = getBlobCache(file.FileId);
+    if (existing) {
+      preprocessToGrayCache(existing).catch(() => {});
       return;
-    }    
+    }
     const url = `/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`;
     fetch(url)
       .then(res => res.blob())
       .then(blob => {
-        if (!fileBlobCacheRef.current.has(file.FileId)) {
+        // 并发预加载时，可能多个请求同时完成，只保留第一个
+        if (!getBlobCache(file.FileId)) {
           const f = new File([blob], file.FileName || 'image.png', { type: blob.type || 'image/png' });
-          fileBlobCacheRef.current.set(file.FileId, f);
+          setBlobCache(file.FileId, f);
           // blob 缓存完成后立即在后台预处理灰度数据，用户切换时直接命中缓存
           preprocessToGrayCache(f).catch(() => { /* 预处理失败静默处理 */ });
         }
       })
       .catch(() => { /* 预加载失败静默处理 */ });
-  }, [projectId]);
+  }, [projectId, getBlobCache, setBlobCache]);
 
   const {
     selectionRect,
@@ -916,8 +946,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       return;
     }
 
-    // 命中缓存：直接使用，无需网络请求
-    const cached = fileBlobCacheRef.current.get(selectedFile.FileId);
+    // 命中缓存：直接使用，并将该条目更新为“最近使用”（LRU 刷新）
+    const cached = getBlobCache(selectedFile.FileId);
     if (cached) {
       setImageFile(cached);
       return;
@@ -930,21 +960,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       .then(res => res.blob())
       .then(blob => {
         const file = new File([blob], selectedFile.FileName || 'image.png', { type: blob.type || 'image/png' });
-        fileBlobCacheRef.current.set(selectedFile.FileId, file);
+        setBlobCache(selectedFile.FileId, file);
         setImageFile(file);
       })
       .catch(err => {
         console.error('Failed to load image:', err);
         message.error('图像加载失败');
       });
-  }, [selectedFile, previewUrl]);
+  }, [selectedFile, previewUrl, getBlobCache, setBlobCache]);
 
-  // 预加载相邻图片（前1张 + 后2张），减少切换等待时间
+  // 预加载相邻图片（前 2 张 + 后 3 张），减少小范围往返翻页时的等待时间
   useEffect(() => {
     if (!selectedFile || files.length === 0) return;
     const idx = files.findIndex((f: TaskFile) => f.FileId === selectedFile.FileId);
     if (idx === -1) return;
-    [-1, 1, 2].forEach(offset => {
+    [-2, -1, 1, 2, 3].forEach(offset => {
       const neighbor = files[idx + offset];
       if (neighbor) preloadFile(neighbor);
     });

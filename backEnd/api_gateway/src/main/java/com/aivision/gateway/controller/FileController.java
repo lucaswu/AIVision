@@ -13,8 +13,10 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.concurrent.TimeUnit;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
@@ -198,7 +200,12 @@ public class FileController {
             String contentType = fileData.getContentType();
             
             // 直接返回图片数据流
+            // 图片文件上传后内容不变（FileId 即版本），使用强缓存 7 天
+            // cachePrivate() 确保只缓存在用户本地，不经过共享代理
+            String etag = "\"" + fileId + "\"";
             return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(7, TimeUnit.DAYS).cachePrivate())
+                .eTag(etag)
                 .contentType(org.springframework.http.MediaType.parseMediaType(contentType))
                 .contentLength(imageBytes.length)
                 .body(imageBytes);
