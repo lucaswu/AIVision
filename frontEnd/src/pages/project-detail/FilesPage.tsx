@@ -17,6 +17,7 @@ import {
   Image,
   Breadcrumb,
   List,
+  Spin,
 } from "antd";
 import {
   UploadOutlined,
@@ -68,7 +69,9 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const [previewImage, setPreviewImage] = useState("");
   // 渐进式加载：previewSrc 先指向 JPEG，原图就绪后替换
   const [previewSrc, setPreviewSrc] = useState<string>("");
+  const [isPreviewQuality, setIsPreviewQuality] = useState<boolean>(false); // true = JPEG 占位；false = 原图
   const previewObjectUrls = useRef<string[]>([]);
+  const originalArrivedRef = useRef<boolean>(false); // Phase-2 是否已先到达（防止 JPEG 覆盖原图）
   // 新增状态管理上传文件列表
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -250,40 +253,52 @@ const FilesPage: React.FC<FilesPageProps> = ({
   // 关闭预览时释放所有 Object URL，避免内存泄漏
   const closePreview = useCallback(() => {
     setPreviewVisible(false);
+    setPreviewSrc("");
+    setIsPreviewQuality(false);
+    originalArrivedRef.current = false;
     previewObjectUrls.current.forEach(url => URL.revokeObjectURL(url));
     previewObjectUrls.current = [];
-    setPreviewSrc("");
   }, []);
 
   const handlePreview = useCallback((file: any) => {
     setPreviewImage(file.Id);
     setPreviewVisible(true);
-    setPreviewSrc(""); // 先清空旧预览
+    setPreviewSrc("");           // 先清空旧预览
+    setIsPreviewQuality(false);
+    originalArrivedRef.current = false; // 重置竞态标志
 
     const thumbUrl = `${fileThumbnailPath}?FileId=${file.Id}&ProjectId=${projectId}&UserId=${getUserId()}`;
     const origUrl  = `${filePreviewPath}?FileId=${file.Id}&ProjectId=${projectId}&UserId=${getUserId()}`;
 
-    // Phase-1: 尝试加载 JPEG 缩略图
+    // ── Phase-1：尝试获取 JPEG 缩略图（先到先显示）─────────────────────────────
     fetch(thumbUrl)
       .then(async res => {
-        if (!res.ok) return;
+        if (!res.ok) return; // 404 = 缩略图未就绪，静默忽略
         const blob = await res.blob();
         const thumbObjUrl = URL.createObjectURL(blob);
         previewObjectUrls.current.push(thumbObjUrl);
-        setPreviewSrc(prev => prev ? prev : thumbObjUrl); // 仅在原图未就绪时设置
+        // 若原图已先到达，不用 JPEG 覆盖（防竞态）
+        if (!originalArrivedRef.current) {
+          setPreviewSrc(prev => prev ? prev : thumbObjUrl);
+          setIsPreviewQuality(true);
+          console.log('[Progressive] Phase-1: JPEG thumbnail loaded');
+        }
       })
-      .catch(() => {});
+      .catch(() => { /* 缩略图失败静默忽略 */ });
 
-    // Phase-2: 后台拉取原图
+    // ── Phase-2：后台并行拉取原图，到达后无缝替换 ──────────────────────────────
     fetch(origUrl)
       .then(res => res.blob())
       .then(blob => {
+        originalArrivedRef.current = true; // 标记原图已到达
         const origObjUrl = URL.createObjectURL(blob);
         previewObjectUrls.current.push(origObjUrl);
-        setPreviewSrc(origObjUrl); // 原图到达后无缝替换
+        setPreviewSrc(origObjUrl);
+        setIsPreviewQuality(false);
+        console.log('[Progressive] Phase-2: Original image loaded, replaced JPEG');
       })
       .catch(() => {
-        // 原图加载失败时保留 JPEG 预览
+        // 原图加载失败时保留 JPEG 预览（不修改 isPreviewQuality）
       });
   }, [projectId]);
 
@@ -906,22 +921,67 @@ const FilesPage: React.FC<FilesPageProps> = ({
       {/* 图片预览弹窗（渐进式加载：先 JPEG 占位，原图就绪后替换） */}
       <Modal
         open={previewVisible}
-        title="图片预览"
+        title={
+          <span>
+            图片预览
+            {isPreviewQuality && (
+              <span style={{
+                marginLeft: 8,
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#fa8c16',
+                backgroundColor: 'rgba(250,173,20,0.12)',
+                border: '1px solid rgba(250,173,20,0.4)',
+                borderRadius: 4,
+                padding: '1px 7px',
+                verticalAlign: 'middle',
+              }}>
+                预览图 · 原图加载中…
+              </span>
+            )}
+          </span>
+        }
         footer={null}
         onCancel={closePreview}
         width={800}
         centered
       >
-        <div style={{ textAlign: "center", minHeight: 200 }}>
+        <div style={{ textAlign: "center", minHeight: 200, position: 'relative' }}>
           {previewSrc ? (
             <img
               src={previewSrc}
               alt="预览图片"
-              style={{ maxWidth: "100%", maxHeight: "60vh", transition: "filter 0.3s" }}
+              style={{
+                maxWidth: "100%",
+                maxHeight: "60vh",
+                display: 'block',
+                margin: '0 auto',
+                transition: 'opacity 0.25s ease',
+              }}
             />
           ) : (
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 200, color: "#999" }}>
-              加载中...
+            <div style={{ display: "flex", flexDirection: 'column', justifyContent: "center", alignItems: "center", height: 200, gap: 12, color: "#999" }}>
+              <Spin size="large" />
+              <span style={{ fontSize: 13 }}>图片加载中...</span>
+            </div>
+          )}
+          {/* JPEG 占位时右下角质量徽标 */}
+          {previewSrc && isPreviewQuality && (
+            <div style={{
+              position: 'absolute',
+              bottom: 8,
+              right: 8,
+              backgroundColor: 'rgba(250, 173, 20, 0.92)',
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '2px 8px',
+              borderRadius: 4,
+              pointerEvents: 'none',
+              letterSpacing: '0.5px',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+            }}>
+              预览图 · 原图加载中…
             </div>
           )}
         </div>
