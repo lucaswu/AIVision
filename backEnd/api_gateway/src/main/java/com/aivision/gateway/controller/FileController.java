@@ -5,6 +5,7 @@ import com.aivision.gateway.model.FileImageData;
 import com.aivision.gateway.model.FilePreviewResponse;
 import com.aivision.gateway.model.FileUploadResponse;
 import com.aivision.gateway.service.FileService;
+import com.aivision.gateway.service.ThumbnailService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -27,6 +28,9 @@ public class FileController {
     
     @Autowired
     private FileService fileService;
+
+    @Autowired
+    private ThumbnailService thumbnailService;
     
     /**
      * 多文件上传
@@ -303,6 +307,52 @@ public class FileController {
         } catch (Exception e) {
             return ResponseEntity.status(500).body(
                 ApiResponse.error(500, "服务器内部错误: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 缩略图获取（JPEG 预览图）
+     * GET /api/v1/files/thumbnail
+     *
+     * <p>返回 HTTP 200 + JPEG 字节流：缩略图已就绪
+     * <p>返回 HTTP 404：缩略图尚未生成（前端应回退到加载原图）
+     */
+    @GetMapping("/thumbnail")
+    @Operation(
+        summary = "JPEG 缩略图获取",
+        description = "返回指定文件的 JPEG 预览图字节流（质量 85%）。\n" +
+                     "缩略图尚未就绪时返回 404，前端应回退加载原图。"
+    )
+    public ResponseEntity<?> getThumbnail(
+        @Parameter(description = "文件ID", required = true)
+        @RequestParam("FileId") String fileId,
+
+        @Parameter(description = "项目ID", required = true)
+        @RequestParam("ProjectId") String projectId,
+
+        @Parameter(description = "用户ID", required = true)
+        @RequestParam("UserId") String userId) {
+
+        try {
+            byte[] jpegBytes = thumbnailService.getThumbnailBytes(fileId, projectId, userId);
+            if (jpegBytes == null) {
+                // 缩略图尚未就绪，前端回退加载原图
+                return ResponseEntity.notFound().build();
+            }
+            String etag = "\"thumb-" + fileId + "\"";
+            return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(7, TimeUnit.DAYS).cachePrivate())
+                .eTag(etag)
+                .contentType(org.springframework.http.MediaType.IMAGE_JPEG)
+                .contentLength(jpegBytes.length)
+                .body(jpegBytes);
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            return ResponseEntity.status(500)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(ApiResponse.error(500, "服务器内部错误: " + e.getMessage()));
         }
     }
 

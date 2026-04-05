@@ -71,6 +71,7 @@ import {
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
 import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, type OcrRecognizeResult } from "../../utils/api";
+import { fileThumbnailPath } from "../../utils/constans";
 
 // 移除本地 Mock defectRecordAPI
 // const defectRecordAPI = { ... };
@@ -850,6 +851,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const progressPercent = files.length > 0 ? Math.round((confirmedCount / files.length) * 100) : 0;
 
   const [imageFile, setImageFile] = useState<File | undefined>(undefined);
+  // true = 当前显示的是 JPEG 预览图（低画质占位）；false = 原始 BMP 已加载
+  const [isPreviewQuality, setIsPreviewQuality] = useState<boolean>(false);
 
   // ─── Blob 内存缓存 （LRU）───────────────────────────────────────────────
   // Map 维持插入顺序，头部 = 最久未使用（LRU），尾部 = 最近使用
@@ -940,34 +943,80 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   }, [imageReady]);
 
+  // ─── 两阶段渐进式加载 ────────────────────────────────────────────────────────
+  // Phase-1: 先尝试获取 JPEG 缩略图（~0.5MB），命中则立即显示（视觉占位）
+  // Phase-2: 后台同时拉取原始 BMP，完成后无缝替换，并写入 LRU 缓存
+  // 规则：原图写入 LRU 缓存 + 灰度预处理；JPEG 仅用于视觉占位，不写入缓存
   useEffect(() => {
     if (!selectedFile || !previewUrl) {
       setImageFile(undefined);
       return;
     }
 
-    // 命中缓存：直接使用，并将该条目更新为“最近使用”（LRU 刷新）
+    // 命中原图缓存：直接使用（LRU 刷新），无需任何网络请求
     const cached = getBlobCache(selectedFile.FileId);
     if (cached) {
       setImageFile(cached);
+      setIsPreviewQuality(false); // 缓存命中 = 原图
       return;
     }
 
-    // 未命中缓存：先清空旧图，再 fetch
+    // 未命中缓存：启动两阶段加载
     setImageFile(undefined);
+    setIsPreviewQuality(false);
 
+    // 用 fileId 快照防止异步竞态（切换文件时忽略过期响应）
+    const targetFileId = selectedFile.FileId;
+    const targetFileName = selectedFile.FileName || 'image.png';
+    let originalFetchAborted = false;
+
+    const thumbnailUrl = `${fileThumbnailPath}?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`;
+
+    // ── Phase-1：尝试获取 JPEG 缩略图 ─────────────────────────────────────────
+    fetch(thumbnailUrl)
+      .then(async res => {
+        if (!res.ok) return; // 404 = 缩略图未就绪，静默忽略，等原图
+        const blob = await res.blob();
+        const jpegFile = new File([blob], targetFileName.replace(/\.bmp$/i, '.jpg'), { type: 'image/jpeg' });
+        if (originalFetchAborted) return;
+        // 只在原图尚未到达时才设置 JPEG（防止原图先到被 JPEG 覆盖）
+        if (!getBlobCache(targetFileId)) {
+          setImageFile(prev => {
+            if (prev) return prev; // 原图已到达，不覆盖
+            setIsPreviewQuality(true); // 标记：当前显示的是 JPEG 预览
+            console.log('[Progressive] Phase-1: JPEG thumbnail loaded');
+            return jpegFile;
+          });
+        }
+      })
+      .catch(() => { /* 缩略图网络错误静默忽略 */ });
+
+    // ── Phase-2：后台并行拉取原始 BMP ─────────────────────────────────────────
     fetch(previewUrl)
       .then(res => res.blob())
       .then(blob => {
-        const file = new File([blob], selectedFile.FileName || 'image.png', { type: blob.type || 'image/png' });
-        setBlobCache(selectedFile.FileId, file);
-        setImageFile(file);
+        if (originalFetchAborted) return;
+        const originalFile = new File([blob], targetFileName, { type: blob.type || 'image/bmp' });
+        setBlobCache(targetFileId, originalFile);
+        // 原图到达后立即替换（无论当前显示的是 JPEG 还是空）
+        setImageFile(originalFile);
+        setIsPreviewQuality(false); // 标记：原图已就位
+        console.log('[Progressive] Phase-2: Original BMP loaded, replaced JPEG');
+        // 灰度预处理仅对原图执行（JPEG 有损，不用于窗宽窗位计算）
+        preprocessToGrayCache(originalFile).catch(() => {});
       })
       .catch(err => {
-        console.error('Failed to load image:', err);
-        message.error('图像加载失败');
+        if (!originalFetchAborted) {
+          console.error('Failed to load image:', err);
+          message.error('图像加载失败');
+        }
       });
-  }, [selectedFile, previewUrl, getBlobCache, setBlobCache]);
+
+    return () => {
+      // effect 清理：标记原图 fetch 结果已过期，防止竞态覆盖
+      originalFetchAborted = true;
+    };
+  }, [selectedFile, previewUrl, getBlobCache, setBlobCache, projectId]);
 
   // 预加载相邻图片（前 2 张 + 后 3 张），减少小范围往返翻页时的等待时间
   useEffect(() => {
@@ -3201,6 +3250,27 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     visibility: imageReady ? 'visible' : 'hidden',
                   }}
                 />
+
+                {/* 图片质量徽章：JPEG 占位时显示"预览图"，原图加载完毕后消失 */}
+                {isPreviewQuality && imageReady && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 8,
+                    right: 8,
+                    backgroundColor: 'rgba(250, 173, 20, 0.92)',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    pointerEvents: 'none',
+                    zIndex: 20,
+                    letterSpacing: '0.5px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                  }}>
+                    预览图 · 原图加载中…
+                  </div>
+                )}
 
                 {/* --- 1. Window Level 选框 --- */}
                 {selectionRect && (

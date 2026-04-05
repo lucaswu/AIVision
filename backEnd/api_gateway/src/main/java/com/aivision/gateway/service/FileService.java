@@ -16,6 +16,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
@@ -53,6 +55,9 @@ public class FileService {
     
     @Autowired
     private StorageStrategy storageStrategy;
+
+    @Autowired
+    private ThumbnailService thumbnailService;
     
     /**
      * 上传多个文件
@@ -95,14 +100,29 @@ public class FileService {
             return new FileUploadResponse(0, failedFiles.size(), successFiles, failedFiles);
         }
         
-        // 4. 逐个处理文件
+        // 4. 逐个处理文件，收集需要生成缩略图的 fileId
+        List<String> bmpFileIds = new ArrayList<>();
         for (MultipartFile file : files) {
             try {
-                processFile(file, projectId, userId, directoryId, directory, successFiles, failedFiles);
+                processFile(file, projectId, userId, directoryId, directory, successFiles, failedFiles, bmpFileIds);
             } catch (Exception e) {
                 failedFiles.add(new FileUploadResponse.FailedFileInfo(
                     file.getOriginalFilename(), "文件处理失败: " + e.getMessage()));
             }
+        }
+
+        // 5. 注册事务提交后回调，确保 DB 记录已可见再触发缩略图生成
+        //    （批量上传时若在事务内触发，缩略图线程会因 findById 查不到记录而失败）
+        if (!bmpFileIds.isEmpty()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    bmpFileIds.forEach(fileId -> {
+                        thumbnailService.generateAndStore(fileId);
+                        logger.info("已触发异步缩略图生成（事务提交后）: fileId={}", fileId);
+                    });
+                }
+            });
         }
         
         return new FileUploadResponse(successFiles.size(), failedFiles.size(), successFiles, failedFiles);
@@ -167,10 +187,11 @@ public class FileService {
     
     /**
      * 处理单个文件
+     * @param bmpFileIds 收集 BMP 文件的 fileId，用于事务提交后触发缩略图生成
      */
     private void processFile(MultipartFile file, String projectId, String userId, String directoryId,
                             Directory directory, List<FileUploadResponse.SuccessFileInfo> successFiles,
-                            List<FileUploadResponse.FailedFileInfo> failedFiles) {
+                            List<FileUploadResponse.FailedFileInfo> failedFiles, List<String> bmpFileIds) {
         
         String originalFilename = file.getOriginalFilename();
         
@@ -200,8 +221,13 @@ public class FileService {
             );
             
             fileRepository.save(fileEntity);
+
+            // 5. BMP 文件记录到待处理列表（在事务提交后统一触发，避免竞态）
+            if ("bmp".equals(fileExtension)) {
+                bmpFileIds.add(fileId);
+            }
             
-            // 5. 添加到成功列表
+            // 6. 添加到成功列表
             successFiles.add(new FileUploadResponse.SuccessFileInfo(
                 fileId, originalFilename, file.getSize(), fullPath));
                 

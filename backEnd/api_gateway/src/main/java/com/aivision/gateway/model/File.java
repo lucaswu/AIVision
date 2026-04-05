@@ -43,6 +43,10 @@ public class File {
     
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /** JPEG 预览图在 Storage 中的路径；NULL 表示尚未生成（非 BMP 文件或转换进行中） */
+    @Column(name = "thumbnail_path", length = 500)
+    private String thumbnailPath;
     
     // 构造函数
     public File() {}
@@ -170,6 +174,14 @@ public class File {
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
     }
+
+    public String getThumbnailPath() {
+        return thumbnailPath;
+    }
+
+    public void setThumbnailPath(String thumbnailPath) {
+        this.thumbnailPath = thumbnailPath;
+    }
     
     @PrePersist
     protected void onCreate() {
@@ -195,6 +207,7 @@ public class File {
                 ", fileSize=" + fileSize +
                 ", mimeType='" + mimeType + '\'' +
                 ", fileExtension='" + fileExtension + '\'' +
+                ", thumbnailPath='" + thumbnailPath + '\'' +
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
                 '}';

@@ -81,3 +81,5 @@ export const userMenuItems: MenuProps["items"] = [
 ];
 
 export const filePreviewPath = "/api/v1/files/preview";
+export const fileThumbnailPath = "/api/v1/files/thumbnail";
+

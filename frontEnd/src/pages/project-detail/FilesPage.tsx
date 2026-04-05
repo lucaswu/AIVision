@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Button,
   Table,
@@ -42,7 +42,7 @@ import { useRequest } from "ahooks";
 import { fileAPI, directoryAPI, getUserId } from "../../utils/api";
 import { FileTreeNode } from "../../utils/data";
 import "./FilesPage.css";
-import { filePreviewPath } from "@/utils/constans";
+import { filePreviewPath, fileThumbnailPath } from "@/utils/constans";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
@@ -66,6 +66,9 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const [uploadType, setUploadType] = useState<"file" | "directory">("file");
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewImage, setPreviewImage] = useState("");
+  // 渐进式加载：previewSrc 先指向 JPEG，原图就绪后替换
+  const [previewSrc, setPreviewSrc] = useState<string>("");
+  const previewObjectUrls = useRef<string[]>([]);
   // 新增状态管理上传文件列表
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -244,10 +247,45 @@ const FilesPage: React.FC<FilesPageProps> = ({
     setPageSize(size);
   };
 
-  const handlePreview = (file) => {
+  // 关闭预览时释放所有 Object URL，避免内存泄漏
+  const closePreview = useCallback(() => {
+    setPreviewVisible(false);
+    previewObjectUrls.current.forEach(url => URL.revokeObjectURL(url));
+    previewObjectUrls.current = [];
+    setPreviewSrc("");
+  }, []);
+
+  const handlePreview = useCallback((file: any) => {
     setPreviewImage(file.Id);
     setPreviewVisible(true);
-  };
+    setPreviewSrc(""); // 先清空旧预览
+
+    const thumbUrl = `${fileThumbnailPath}?FileId=${file.Id}&ProjectId=${projectId}&UserId=${getUserId()}`;
+    const origUrl  = `${filePreviewPath}?FileId=${file.Id}&ProjectId=${projectId}&UserId=${getUserId()}`;
+
+    // Phase-1: 尝试加载 JPEG 缩略图
+    fetch(thumbUrl)
+      .then(async res => {
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const thumbObjUrl = URL.createObjectURL(blob);
+        previewObjectUrls.current.push(thumbObjUrl);
+        setPreviewSrc(prev => prev ? prev : thumbObjUrl); // 仅在原图未就绪时设置
+      })
+      .catch(() => {});
+
+    // Phase-2: 后台拉取原图
+    fetch(origUrl)
+      .then(res => res.blob())
+      .then(blob => {
+        const origObjUrl = URL.createObjectURL(blob);
+        previewObjectUrls.current.push(origObjUrl);
+        setPreviewSrc(origObjUrl); // 原图到达后无缝替换
+      })
+      .catch(() => {
+        // 原图加载失败时保留 JPEG 预览
+      });
+  }, [projectId]);
 
   const handleDelete = async (fileId: string) => {
     Modal.confirm({
@@ -865,22 +903,27 @@ const FilesPage: React.FC<FilesPageProps> = ({
         </div>
       </Modal>
 
-      {/* 图片预览弹窗 */}
+      {/* 图片预览弹窗（渐进式加载：先 JPEG 占位，原图就绪后替换） */}
       <Modal
         open={previewVisible}
         title="图片预览"
         footer={null}
-        onCancel={() => setPreviewVisible(false)}
+        onCancel={closePreview}
         width={800}
         centered
       >
-        <div style={{ textAlign: "center" }}>
-          <Image
-            src={`${filePreviewPath}?FileId=${previewImage}&ProjectId=${projectId}&UserId=${getUserId()}`}
-            alt="预览图片"
-            style={{ maxWidth: "100%", maxHeight: "60vh" }}
-            preview={false}
-          />
+        <div style={{ textAlign: "center", minHeight: 200 }}>
+          {previewSrc ? (
+            <img
+              src={previewSrc}
+              alt="预览图片"
+              style={{ maxWidth: "100%", maxHeight: "60vh", transition: "filter 0.3s" }}
+            />
+          ) : (
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 200, color: "#999" }}>
+              加载中...
+            </div>
+          )}
         </div>
       </Modal>
     </div>
