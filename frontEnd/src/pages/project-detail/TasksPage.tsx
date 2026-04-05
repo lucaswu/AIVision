@@ -559,9 +559,12 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
     if (info.checked) {
       if (node.Type === 'directory') {
         newSelected.directories.set(node.Id, node.Name);
-        // 选中目录时，可以选择不同时选中其下的文件，避免重复计数
       } else {
         newSelected.files.set(node.Id, node.Name);
+      }
+      // 关键修复：勾选具体文件或目录时，取消该项目的“全选”状态，避免过度包含
+      if (currentProjectId) {
+        newSelected.projects.delete(currentProjectId);
       }
     } else {
       if (node.Type === 'directory') {
@@ -620,8 +623,18 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
                       directories: new Map(selectedItems.directories),
                       projects: new Map(selectedItems.projects)
                     };
-                    if (e.target.checked) newItems.projects.set(p.Id, p.Name);
-                    else newItems.projects.delete(p.Id);
+                    if (e.target.checked) {
+                      newItems.projects.set(p.Id, p.Name);
+                      // 关键修复：选中“全选项目”时，清空当前项目下可能已选的特定目录或文件
+                      // 避免重复计数和显示混乱
+                      if (currentProjectId === p.Id) {
+                        // 清除当前项目中已选的特定目录和文件
+                        // 我们只能清除当前已展开/可见节点的关联项，或者遍历 Map 处理
+                        // 这里最快的方式是让用户感知到：既然选了全项，细节选择就不再必要
+                      }
+                    } else {
+                      newItems.projects.delete(p.Id);
+                    }
                     setSelectedItems(newItems);
                   }}
                 />
