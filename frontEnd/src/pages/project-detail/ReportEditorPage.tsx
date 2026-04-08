@@ -3023,7 +3023,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 icon={<img src="/fullscreen.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 onClick={() => {
-                  setScale(1); setRotation(0); setFlipH(1); setFlipV(1);
+                  setScale(1);
+                  setRotation(selectedFile?.CorrectionRotation ?? 0);
+                  setFlipH(selectedFile?.CorrectionFlip ? -1 : 1);
+                  setFlipV(1);
                   setPosition({ x: 0, y: 0 });
                   resetWindow();
                 }} /></Tooltip>
