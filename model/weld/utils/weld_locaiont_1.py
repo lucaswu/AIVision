@@ -6,7 +6,7 @@ Weld Defect Position Detection Utility (Location 1)
 
 This module provides functionality to detect defect positions (origin / mark
 positions) in corrected weld film images using a YOLO detection model
-(location_1.pt) combined with PaddleOCR.
+from a YOLO detection model (location_1.pt).
 
 The model detects five classes:
   - 'center_mark'   : center positioning mark
@@ -31,11 +31,6 @@ from typing import Dict, List, Optional, Union
 import cv2
 import numpy as np
 
-try:
-    from paddleocr import PaddleOCR
-    HAS_PADDLEOCR = True
-except ImportError:
-    HAS_PADDLEOCR = False
 
 # Default model weight path relative to the weld module root (model/weld/)
 _MODULE_DIR = Path(__file__).resolve().parent          # model/weld/utils/
@@ -53,7 +48,7 @@ _CLASS_NAMES = [
 
 class WeldDefectPositionDetector:
     """
-    Weld defect position detector using a YOLO detection model + PaddleOCR.
+    Weld defect position detector using a YOLO detection model.
 
     Input : color BGR image (corrected original, as returned by
             WeldOrientationCorrector).
@@ -69,7 +64,7 @@ class WeldDefectPositionDetector:
             "positioning_type":  int | None,   # 0=center, 1=edge, None=not detected
             "origin_x":          float | None,
             "origin_y":          float | None,
-            "origin_text":       str | None,   # OCR text of chosen edge mark; None for center_mark
+            "origin_text":       None,         # (Reserved for compatibility)
             "detections": [
                 {
                     "class_id":   int,
@@ -88,13 +83,7 @@ class WeldDefectPositionDetector:
     def __init__(self,
                  model_path: Union[str, Path] = DEFAULT_LOCATION1_MODEL_PATH,
                  conf_threshold: float = 0.25,
-                 use_ocr: bool = True,
-                 adaptive_processor_path: Optional[str] = None,
-                 ocr_device: str = "cpu",
-                 ocr_det_model_dir: Optional[str] = None,
-                 ocr_rec_model_dir: Optional[str] = None,
-                 ocr_det_model_name: Optional[str] = "PP-OCRv5_server_det",
-                 ocr_rec_model_name: Optional[str] = "en_PP-OCRv5_mobile_rec"):
+                 adaptive_processor_path: Optional[str] = None):
         """
         Initialize the weld defect position detector.
         """
@@ -102,32 +91,12 @@ class WeldDefectPositionDetector:
 
         self.model_path = Path(model_path)
         self.conf_threshold = conf_threshold
-        self.use_ocr = use_ocr
 
         # Load adaptive preprocessor
         self.processor = self._load_processor(adaptive_processor_path)
 
         # Load YOLO detection model
         self.model = YOLO(str(self.model_path))
-
-        # Initialize PaddleOCRSubprocessClient
-        self.reader = None
-        if self.use_ocr:
-            try:
-                import sys
-                if str(_WELD_ROOT / "IQIDDET") not in sys.path:
-                    sys.path.insert(0, str(_WELD_ROOT / "IQIDDET"))
-                from gauge.ocr_stage import PaddleOCRSubprocessClient
-                
-                self.reader = PaddleOCRSubprocessClient(
-                    device=ocr_device,
-                    det_model_name=ocr_det_model_name if not ocr_det_model_dir else None,
-                    det_model_dir=ocr_det_model_dir,
-                    rec_model_name=ocr_rec_model_name if not ocr_rec_model_dir else None,
-                    rec_model_dir=ocr_rec_model_dir
-                )
-            except Exception as e:
-                print(f"[WeldDefectPositionDetector] Warning: cannot initialize PaddleOCRSubprocessClient, OCR will be skipped. Exception: {e}")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -204,147 +173,28 @@ class WeldDefectPositionDetector:
 
         return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
-    def _extract_text_from_bbox(self, image_preprocessed: np.ndarray,
-                                bbox: List[float]) -> Optional[str]:
-        """
-        Run PaddleOCR on the region defined by bbox in the preprocessed image.
-
-        Args:
-            image_preprocessed: Preprocessed BGR image.
-            bbox: [x1, y1, x2, y2] bounding box coordinates.
-
-        Returns:
-            Best OCR text (alphanumeric, uppercase), or None.
-        """
-        if self.reader is None:
-            return None
-
-        x1, y1, x2, y2 = map(int, bbox)
-        img_h, img_w = image_preprocessed.shape[:2]
-
-        # Expand ROI by 50%
-        pad_x = int((x2 - x1) * 0.5)
-        pad_y = int((y2 - y1) * 0.5)
-        x1 = max(0, x1 - pad_x)
-        y1 = max(0, y1 - pad_y)
-        x2 = min(img_w, x2 + pad_x)
-        y2 = min(img_h, y2 + pad_y)
-
-        roi = image_preprocessed[y1:y2, x1:x2]
-        if roi.size == 0:
-            return None
-
-        try:
-            import sys
-            if str(_WELD_ROOT / "IQIDDET") not in sys.path:
-                sys.path.insert(0, str(_WELD_ROOT / "IQIDDET"))
-            from gauge.ocr_stage import infer_roi_ocr
-            ocr_output = infer_roi_ocr(self.reader, self.reader, roi)
-            candidates = []
-            for item in ocr_output.get("items", []):
-                text_raw = item.get("text", "")
-                score = item.get("score") or 0.0
-                cleaned = ''.join(c for c in text_raw if c.isalnum()).upper()
-                if cleaned:
-                    candidates.append((cleaned, score))
-            if not candidates:
-                return None
-            best_text, _ = max(candidates, key=lambda x: x[1])
-            return best_text
-        except Exception as exc:
-            print(f"[WeldDefectPositionDetector] OCR failed: {exc}")
-            return None
-
-    def _compare_marks(self, left_value, right_value, left_type, right_type) -> str:
-        """
-        Compare left/right marks to determine the origin side.
-
-        Returns:
-            'left' or 'right'
-        """
-        if not left_value and not right_value:
-            return 'left'
-
-        if not left_value or not right_value:
-            recognized_side = 'right' if not left_value else 'left'
-            recognized_value = right_value if not left_value else left_value
-            recognized_type = right_type if not left_value else left_type
-            other_side = 'left' if recognized_side == 'right' else 'right'
-
-            if recognized_type == 'letter':
-                letter = next((c for c in recognized_value if c.isalpha()), None)
-                if letter == 'A':
-                    return recognized_side
-                elif letter:
-                    return other_side
-            else:
-                try:
-                    num = int(''.join(c for c in recognized_value if c.isdigit()))
-                    return recognized_side if num == 1 else other_side
-                except ValueError:
-                    pass
-            return recognized_side
-
-        if left_type != right_type:
-            return 'left'
-
-        if left_type == 'letter':
-            left_letter = next((c for c in left_value if c.isalpha()), None)
-            right_letter = next((c for c in right_value if c.isalpha()), None)
-            if not left_letter or not right_letter:
-                recognized_side = 'right' if not left_letter else 'left'
-                letter = right_letter if not left_letter else left_letter
-                other_side = 'left' if recognized_side == 'right' else 'right'
-                return recognized_side if letter == 'A' else other_side
-            return 'left' if left_letter < right_letter else 'right'
-        else:
-            left_digits = ''.join(c for c in left_value if c.isdigit())
-            right_digits = ''.join(c for c in right_value if c.isdigit())
-            if not left_digits or not right_digits:
-                recognized_side = 'right' if not left_digits else 'left'
-                digits = right_digits if not left_digits else left_digits
-                other_side = 'left' if recognized_side == 'right' else 'right'
-                try:
-                    num = int(digits)
-                    return recognized_side if num == 1 else other_side
-                except ValueError:
-                    return 'left'
-            left_num, right_num = int(left_digits), int(right_digits)
-            return 'left' if left_num < right_num else 'right'
 
     def _calculate_origin(self, detections: List[Dict]):
         """
         Calculate origin (x, y), positioning_type, and origin_text from raw detections.
+        Logic: Prioritize center_mark (ID 0), then left_marks (ID 1, 3).
+               Ignore right marks.
 
         Returns:
-            (origin_x, origin_y, positioning_type, origin_text)  — each may be None.
-            origin_text is the OCR text of the chosen edge mark, or None for center_mark.
+            (origin_x, origin_y, positioning_type, origin_text) — each may be None.
+            origin_text is always None as OCR is removed.
         """
+        # 1. Check center mark
         center_marks = [d for d in detections if d['class_id'] == 0]
         if center_marks:
             best = max(center_marks, key=lambda x: x['confidence'])
             return best['center_x'], best['center_y'], 0, None
 
-        left_marks  = [d for d in detections if d['class_id'] in [1, 3]]
-        right_marks = [d for d in detections if d['class_id'] in [2, 4]]
-
-        if left_marks and right_marks:
-            best_left  = max(left_marks,  key=lambda x: x['confidence'])
-            best_right = max(right_marks, key=lambda x: x['confidence'])
-            left_type  = 'letter' if best_left['class_id'] == 1 else 'number'
-            right_type = 'letter' if best_right['class_id'] == 2 else 'number'
-            origin_side = self._compare_marks(
-                best_left['text'], best_right['text'], left_type, right_type)
-            chosen = best_left if origin_side == 'left' else best_right
-            return chosen['center_x'], chosen['center_y'], 1, chosen.get('text')
-
+        # 2. Check left marks (1: letter_left, 3: number_left)
+        left_marks = [d for d in detections if d['class_id'] in [1, 3]]
         if left_marks:
-            best = max(left_marks, key=lambda x: x['confidence'])
-            return best['center_x'], best['center_y'], 1, best.get('text')
-
-        if right_marks:
-            best = max(right_marks, key=lambda x: x['confidence'])
-            return best['center_x'], best['center_y'], 1, best.get('text')
+            best_left = max(left_marks, key=lambda x: x['confidence'])
+            return best_left['center_x'], best_left['center_y'], 1, None
 
         return None, None, None, None
 
@@ -393,11 +243,6 @@ class WeldDefectPositionDetector:
             center_x = (bbox[0] + bbox[2]) / 2
             center_y = (bbox[1] + bbox[3]) / 2
 
-            # OCR on non-center marks
-            text = None
-            if class_id != 0:
-                text = self._extract_text_from_bbox(preprocessed, bbox)
-
             detections.append({
                 'class_id':   class_id,
                 'class_name': _CLASS_NAMES[class_id] if class_id < len(_CLASS_NAMES) else str(class_id),
@@ -405,7 +250,7 @@ class WeldDefectPositionDetector:
                 'bbox':       [int(v) for v in bbox],
                 'center_x':   float(center_x),
                 'center_y':   float(center_y),
-                'text':       text,
+                'text':       None,
             })
 
         origin_x, origin_y, positioning_type, origin_text = self._calculate_origin(detections)
@@ -424,35 +269,24 @@ class WeldDefectPositionDetector:
 # Factory and convenience functions
 # ---------------------------------------------------------------------------
 
-def create_detector(model_path: Union[str, Path, None] = None,
-                    **kwargs) -> WeldDefectPositionDetector:
+def create_detector(model_path: Union[str, Path, None] = None) -> WeldDefectPositionDetector:
     """
     Factory function to create a WeldDefectPositionDetector instance.
     """
     if model_path is None:
         model_path = DEFAULT_LOCATION1_MODEL_PATH
-    return WeldDefectPositionDetector(model_path=str(model_path), **kwargs)
+    return WeldDefectPositionDetector(model_path=str(model_path))
 
 
 def detect_defect_position(image_bgr: np.ndarray,
                            model_path: Union[str, Path, None] = None,
-                           conf_threshold: float = 0.25,
-                           ocr_device: str = "cpu",
-                           ocr_det_model_dir: Optional[str] = None,
-                           ocr_rec_model_dir: Optional[str] = None,
-                           ocr_det_model_name: Optional[str] = "PP-OCRv5_server_det",
-                           ocr_rec_model_name: Optional[str] = "en_PP-OCRv5_mobile_rec") -> Dict:
+                           conf_threshold: float = 0.25) -> Dict:
     """
     Convenience function to run defect position detection on a single image.
     """
     detector = create_detector(
         model_path=model_path, 
-        conf_threshold=conf_threshold,
-        ocr_device=ocr_device,
-        ocr_det_model_dir=ocr_det_model_dir,
-        ocr_rec_model_dir=ocr_rec_model_dir,
-        ocr_det_model_name=ocr_det_model_name,
-        ocr_rec_model_name=ocr_rec_model_name
+        conf_threshold=conf_threshold
     )
     return detector.predict(image_bgr)
 

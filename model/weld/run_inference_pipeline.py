@@ -466,10 +466,7 @@ class InferencePipelineRunner:
                         x1, y1, x2, y2 = det['bbox']
                         color = (0, 255, 0) if det['class_id'] == 0 else (255, 100, 0)
                         cv2.rectangle(vis2, (x1, y1), (x2, y2), color, 2)
-                        label2 = det['class_name']
-                        if det.get('text'):
-                            label2 += f" '{det['text']}'"
-                        label2 += f" {det['confidence']:.2f}"
+                        label2 = f"{det['class_name']} {det['confidence']:.2f}"
                         cv2.putText(vis2, label2, (x1, max(y1 - 6, 0)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                     ox = int(defect_position['origin_x'])
@@ -611,12 +608,7 @@ def main():
 
             detector = WeldDefectPositionDetector(
                 model_path=str(location2_model_path),
-                conf_threshold=args.location2_conf,
-                ocr_device=args.ocr_device if hasattr(args, 'ocr_device') else 'cpu',
-                ocr_det_model_dir=_abs(args.ocr_det_model_dir) if hasattr(args, 'ocr_det_model_dir') else None,
-                ocr_rec_model_dir=_abs(args.ocr_rec_model_dir) if hasattr(args, 'ocr_rec_model_dir') else None,
-                ocr_det_model_name=args.ocr_det_model_name if hasattr(args, 'ocr_det_model_name') else "PP-OCRv5_server_det",
-                ocr_rec_model_name=None if (hasattr(args, 'ocr_rec_model_dir') and args.ocr_rec_model_dir) else "en_PP-OCRv5_mobile_rec"
+                conf_threshold=args.location2_conf
             )
         except Exception as e:
             print(f"[警告] 缺陷位置检测2初始化失败: {e}")

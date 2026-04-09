@@ -1951,18 +1951,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             const dp = JSON.parse(selectedFile.DefectPosition);
             if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
               loadTimeOrigin = { x: dp.origin_x, y: dp.origin_y };
-              if (dp.positioning_type === 1) {
-                // 优先取新字段 origin_text，旧数据则从 detections 中找匹配项
-                let label: string | null = typeof dp.origin_text === 'string' ? dp.origin_text : null;
-                if (!label && Array.isArray(dp.detections)) {
-                  const EPS = 1;
-                  const matched = dp.detections.find((d: any) =>
-                    Math.abs(d.center_x - dp.origin_x) < EPS && Math.abs(d.center_y - dp.origin_y) < EPS
-                  );
-                  if (matched && typeof matched.text === 'string') label = matched.text;
-                }
-                if (label) loadTimeOriginLabel = label;
-              }
             }
           } catch { /* ignore */ }
         }
@@ -2160,18 +2148,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
             setDefectOriginPoint({ x: dp.origin_x, y: dp.origin_y });
             const posType: number | null = typeof dp.positioning_type === 'number' ? dp.positioning_type : null;
-            // origin_text 优先取顶层字段（新数据），旧数据则从 detections 中找与原点坐标匹配的项读取 text
-            let originText: string | null = typeof dp.origin_text === 'string' ? dp.origin_text : null;
-            if (originText === null && posType === 1 && Array.isArray(dp.detections)) {
-              const EPS = 1;
-              const matched = dp.detections.find((d: any) =>
-                Math.abs(d.center_x - dp.origin_x) < EPS && Math.abs(d.center_y - dp.origin_y) < EPS
-              );
-              if (matched && typeof matched.text === 'string') {
-                originText = matched.text;
-              }
-            }
-            setDefectOriginMeta({ positioningType: posType, originText });
+            setDefectOriginMeta({ positioningType: posType, originText: null });
           } else {
             setDefectOriginPoint(null);
             setDefectOriginMeta(null);
@@ -3249,7 +3226,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     display: 'block',
                     userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin') ? 'none' : 'auto',
                     filter: isNegative ? 'invert(100%)' : 'none',
-                    // 图片未就绪时隐藏 canvas，防止切换期间闪烁显示旧图或其他图
                     visibility: imageReady ? 'visible' : 'hidden',
                   }}
                 />
@@ -3399,93 +3375,49 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     })
                   )}
 
-                  {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
-                  {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && (() => {
-                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
-                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
-                    const normR = ((corrRotation % 360) + 360) % 360;
-                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
-                    const rimgW = (normR === 90 || normR === 270)
-                      ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
-                    const rimgH = (normR === 90 || normR === 270)
-                      ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+                   {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
+                   {/* 只有在显示坐标且没有手动设置原点时，才显示 AI 检测的原点 */}
+                   {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && !originPoint && (() => {
+                     const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                     const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                     const normR = ((corrRotation % 360) + 360) % 360;
+                     const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                     const rimgW = (normR === 90 || normR === 270)
+                       ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                     const rimgH = (normR === 90 || normR === 270)
+                       ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
 
-                    let ox = defectOriginPoint.x;
-                    let oy = defectOriginPoint.y;
-                    if (needsInverse && rimgW > 0 && rimgH > 0) {
-                      const t = inverseTransformPoint(ox, oy, rimgW, rimgH, corrRotation, corrFlipH);
-                      ox = t.x; oy = t.y;
-                    }
-                    const dox = widthRatio > 0 ? ox / widthRatio : ox;
-                    const doy = heightRatio > 0 ? oy / heightRatio : oy;
-                    const crossSize = 24 / scale;
-                    const circleR = 18 / scale;
-                    const strokeW = 2.5 / scale;
+                     let ox = defectOriginPoint.x;
+                     let oy = defectOriginPoint.y;
+                     if (needsInverse && rimgW > 0 && rimgH > 0) {
+                       const t = inverseTransformPoint(ox, oy, rimgW, rimgH, corrRotation, corrFlipH);
+                       ox = t.x; oy = t.y;
+                     }
+                     const dox = widthRatio > 0 ? ox / widthRatio : ox;
 
-                    return (
-                      <g key="defect-origin">
-                        {/* 外圆 */}
-                        <circle
-                          cx={dox} cy={doy} r={circleR}
-                          fill="none"
-                          stroke="#00e5ff"
-                          strokeWidth={strokeW}
-                          opacity={0.9}
-                        />
-                        {/* 十字横线 */}
-                        <line
-                          x1={dox - crossSize} y1={doy}
-                          x2={dox + crossSize} y2={doy}
-                          stroke="#00e5ff" strokeWidth={strokeW}
-                          opacity={0.9}
-                          style={{ filter: 'drop-shadow(0 0 3px #005577)' }}
-                        />
-                        {/* 十字竖线 */}
-                        <line
-                          x1={dox} y1={doy - crossSize}
-                          x2={dox} y2={doy + crossSize}
-                          stroke="#00e5ff" strokeWidth={strokeW}
-                          opacity={0.9}
-                          style={{ filter: 'drop-shadow(0 0 3px #005577)' }}
-                        />
-                        {/* 中心小实心圆 */}
-                        <circle
-                          cx={dox} cy={doy} r={3 / scale}
-                          fill="#00e5ff"
-                          opacity={0.95}
-                        />
-                        {/* 标签 */}
-                        {(() => {
-                          const tx = dox + circleR + 4 / scale;
-                          const ty = doy - 4 / scale;
-                          let tfm = '';
-                          if (corrRotation !== 0) tfm += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                          if (corrFlipH === -1) tfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                          // 来源说明：positioningType=0 为十字准心，=1 为边缘数字/字母标记
-                          const originSrc = defectOriginMeta
-                            ? (defectOriginMeta.positioningType === 0
-                                ? '(准心)'
-                                : defectOriginMeta.originText
-                                  ? `(${defectOriginMeta.originText})`
-                                  : '(标记)')
-                            : '';
-                          return (
-                            <text
-                              x={tx}
-                              y={ty}
-                              fill="#00e5ff"
-                              fontSize={12 / scale}
-                              fontWeight="bold"
-                              style={{ filter: 'drop-shadow(0 0 2px #000)' }}
-                              transform={tfm || undefined}
-                            >
-                              0点{originSrc}
-                            </text>
-                          );
-                        })()}
-                      </g>
-                    );
-                  })()}
+                     return (
+                       <g key="defect-origin">
+                         {/* 经过该位置的红色竖线（虚线），标注“原点” */}
+                         <line
+                           x1={dox} y1={0}
+                           x2={dox} y2="100%"
+                           stroke="#f5222d"
+                           strokeWidth={1 / scale}
+                           strokeDasharray="4,4"
+                         />
+                         <text
+                           x={dox + 10}
+                           y={20 / scale}
+                           fill="#f5222d"
+                           fontSize={12 / scale}
+                           fontWeight="bold"
+                           style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
+                         >
+                           原点
+                         </text>
+                       </g>
+                     );
+                   })()}
 
                   {/* 0-C. IQI 丝状像质计线条层（来自 ocr.wire.lines.image_xy，原始图像坐标系）*/}
                   {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiWires && iqiWireLines.length > 0 && (
@@ -3753,17 +3685,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 </svg>
 
                 {/* 3. 坐标原点十字线 */}
-                {activeTool === 'setOrigin' && tempOrigin && (
+                {showPositioningCoords && activeTool === 'setOrigin' && tempOrigin && (
                   <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
-                    <line x1={tempOrigin.x} y1={0} x2={tempOrigin.x} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} />
-                    <line x1={0} y1={tempOrigin.y} x2="100%" y2={tempOrigin.y} stroke="#f5222d" strokeWidth={1 / scale} />
-                    <text x={tempOrigin.x + 10} y={tempOrigin.y - 6} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }}>x</text>
+                    <line x1={tempOrigin.x} y1={0} x2={tempOrigin.x} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
+                    <line x1={0} y1={tempOrigin.y} x2="100%" y2={tempOrigin.y} stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
+                    <text x={tempOrigin.x + 10} y={tempOrigin.y - 6} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }}>x (原点)</text>
                     <text x={tempOrigin.x + 6} y={tempOrigin.y + 14} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }}>y</text>
                   </svg>
                 )}
 
                 {/* 3.5. 坐标原点垂直辅助线（定位标记成像后显示） */}
-                {originPoint && (
+                {showPositioningCoords && originPoint && (
                   <svg
                     viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
                     style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 11 }}
@@ -3786,15 +3718,27 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                       // 90°/270° 时改画水平SVG线，使其在屏幕上仍显示为竖线（垂直x轴）
                       const isSwapped = normR === 90 || normR === 270;
                       return (
-                        <line
-                          x1={isSwapped ? 0 : imageCoords.x}
-                          y1={isSwapped ? imageCoords.y : 0}
-                          x2={isSwapped ? imgSize.w : imageCoords.x}
-                          y2={isSwapped ? imageCoords.y : imgSize.h}
-                          stroke="rgba(245, 34, 45, 1)"
-                          strokeWidth={1 / scale}
-                          strokeDasharray="5 5"
-                        />
+                        <g>
+                          <line
+                            x1={isSwapped ? 0 : imageCoords.x}
+                            y1={isSwapped ? imageCoords.y : 0}
+                            x2={isSwapped ? imgSize.w : imageCoords.x}
+                            y2={isSwapped ? imageCoords.y : imgSize.h}
+                            stroke="rgba(245, 34, 45, 1)"
+                            strokeWidth={1 / scale}
+                            strokeDasharray="5 5"
+                          />
+                          <text
+                            x={isSwapped ? 10 / scale : imageCoords.x + 10 / scale}
+                            y={isSwapped ? imageCoords.y - 10 / scale : 20 / scale}
+                            fill="#f5222d"
+                            fontSize={12 / scale}
+                            fontWeight="bold"
+                            style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
+                          >
+                            原点
+                          </text>
+                        </g>
                       );
                     })()}
                   </svg>
