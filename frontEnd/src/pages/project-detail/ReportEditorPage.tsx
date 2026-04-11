@@ -188,7 +188,6 @@ interface HistorySnapshot {
 const HANDLE_SIZE = 8;
 const ROTATE_HANDLE_OFFSET = 30;
 const FLOATING_ACTION_BAR_MARGIN = 16;
-const FLOATING_ACTION_BAR_BOTTOM_OFFSET = 50;
 
 function clampFloatingActionBarPosition(
   position: { x: number; y: number },
@@ -206,24 +205,6 @@ function clampFloatingActionBarPosition(
     x: Math.min(Math.max(position.x, minX), maxX),
     y: Math.min(Math.max(position.y, minY), maxY),
   };
-}
-
-function getDefaultFloatingActionBarPosition(
-  containerWidth: number,
-  containerHeight: number,
-  barWidth: number,
-  barHeight: number
-) {
-  return clampFloatingActionBarPosition(
-    {
-      x: containerWidth - barWidth - FLOATING_ACTION_BAR_MARGIN,
-      y: containerHeight - barHeight - FLOATING_ACTION_BAR_BOTTOM_OFFSET,
-    },
-    containerWidth,
-    containerHeight,
-    barWidth,
-    barHeight
-  );
 }
 
 function getDefaultFloatingReviewPanelPosition(
@@ -474,14 +455,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- Full Screen Ref ---
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const viewerAreaRef = useRef<HTMLDivElement>(null);
-  const floatingActionBarRef = useRef<HTMLDivElement>(null);
   const floatingReviewPanelRef = useRef<HTMLDivElement>(null);
-  const floatingActionBarDragRef = useRef({
-    active: false,
-    pointerId: -1,
-    startPointer: { x: 0, y: 0 },
-    startPosition: { x: 0, y: 0 },
-  });
   const floatingReviewPanelDragRef = useRef({
     active: false,
     pointerId: -1,
@@ -489,8 +463,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     startPosition: { x: 0, y: 0 },
   });
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [floatingActionBarPosition, setFloatingActionBarPosition] = useState<{ x: number; y: number } | null>(null);
-  const [isFloatingActionBarDragging, setIsFloatingActionBarDragging] = useState(false);
   const [floatingReviewPanelPosition, setFloatingReviewPanelPosition] = useState<{ x: number; y: number } | null>(null);
   const [isFloatingReviewPanelDragging, setIsFloatingReviewPanelDragging] = useState(false);
 
@@ -506,77 +478,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   useEffect(() => {
     if (!selectedFile) {
-      setFloatingActionBarPosition(null);
-      setIsFloatingActionBarDragging(false);
-      floatingActionBarDragRef.current.active = false;
-      floatingActionBarDragRef.current.pointerId = -1;
       setFloatingReviewPanelPosition(null);
       setIsFloatingReviewPanelDragging(false);
       floatingReviewPanelDragRef.current.active = false;
       floatingReviewPanelDragRef.current.pointerId = -1;
     }
   }, [selectedFile]);
-
-  useEffect(() => {
-    if (!selectedFile) return;
-
-    let frameId = 0;
-    const syncFloatingActionBarPosition = () => {
-      cancelAnimationFrame(frameId);
-      frameId = window.requestAnimationFrame(() => {
-        const container = viewerAreaRef.current;
-        const actionBar = floatingActionBarRef.current;
-        if (!container || !actionBar) return;
-
-        const containerRect = container.getBoundingClientRect();
-        const actionBarRect = actionBar.getBoundingClientRect();
-        if (containerRect.width <= 0 || containerRect.height <= 0 || actionBarRect.width <= 0 || actionBarRect.height <= 0) {
-          return;
-        }
-
-        setFloatingActionBarPosition(prev => {
-          const nextPosition = prev
-            ? clampFloatingActionBarPosition(
-                prev,
-                containerRect.width,
-                containerRect.height,
-                actionBarRect.width,
-                actionBarRect.height
-              )
-            : getDefaultFloatingActionBarPosition(
-                containerRect.width,
-                containerRect.height,
-                actionBarRect.width,
-                actionBarRect.height
-              );
-
-          if (prev && prev.x === nextPosition.x && prev.y === nextPosition.y) {
-            return prev;
-          }
-          return nextPosition;
-        });
-      });
-    };
-
-    syncFloatingActionBarPosition();
-
-    const resizeObserver = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => syncFloatingActionBarPosition())
-      : null;
-
-    if (resizeObserver) {
-      if (viewerAreaRef.current) resizeObserver.observe(viewerAreaRef.current);
-      if (floatingActionBarRef.current) resizeObserver.observe(floatingActionBarRef.current);
-    }
-
-    window.addEventListener('resize', syncFloatingActionBarPosition);
-
-    return () => {
-      cancelAnimationFrame(frameId);
-      window.removeEventListener('resize', syncFloatingActionBarPosition);
-      resizeObserver?.disconnect();
-    };
-  }, [selectedFile, isFullScreen]);
 
   useEffect(() => {
     if (!selectedFile) return;
@@ -647,71 +554,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     } else {
       document.exitFullscreen();
     }
-  };
-
-  const handleFloatingActionBarPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !floatingActionBarPosition) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    floatingActionBarDragRef.current = {
-      active: true,
-      pointerId: e.pointerId,
-      startPointer: { x: e.clientX, y: e.clientY },
-      startPosition: floatingActionBarPosition,
-    };
-    setIsFloatingActionBarDragging(true);
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-  };
-
-  const handleFloatingActionBarPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const dragState = floatingActionBarDragRef.current;
-    const container = viewerAreaRef.current;
-    const actionBar = floatingActionBarRef.current;
-    if (!dragState.active || dragState.pointerId !== e.pointerId || !container || !actionBar) return;
-
-    e.preventDefault();
-    const containerRect = container.getBoundingClientRect();
-    const actionBarRect = actionBar.getBoundingClientRect();
-    const nextPosition = clampFloatingActionBarPosition(
-      {
-        x: dragState.startPosition.x + (e.clientX - dragState.startPointer.x),
-        y: dragState.startPosition.y + (e.clientY - dragState.startPointer.y),
-      },
-      containerRect.width,
-      containerRect.height,
-      actionBarRect.width,
-      actionBarRect.height
-    );
-
-    setFloatingActionBarPosition(prev => {
-      if (prev && prev.x === nextPosition.x && prev.y === nextPosition.y) {
-        return prev;
-      }
-      return nextPosition;
-    });
-  };
-
-  const stopFloatingActionBarDrag = (pointerId: number) => {
-    if (floatingActionBarDragRef.current.pointerId !== pointerId) return;
-    floatingActionBarDragRef.current.active = false;
-    floatingActionBarDragRef.current.pointerId = -1;
-    setIsFloatingActionBarDragging(false);
-  };
-
-  const handleFloatingActionBarPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (floatingActionBarDragRef.current.pointerId !== e.pointerId) return;
-    e.currentTarget.releasePointerCapture?.(e.pointerId);
-    stopFloatingActionBarDrag(e.pointerId);
-  };
-
-  const handleFloatingActionBarPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
-    stopFloatingActionBarDrag(e.pointerId);
-  };
-
-  const handleFloatingActionBarLostCapture = (e: React.PointerEvent<HTMLDivElement>) => {
-    stopFloatingActionBarDrag(e.pointerId);
   };
 
   const handleFloatingReviewPanelPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -3063,6 +2905,21 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   }, [defectRects, defectPolygons, defectCircles, pixelRatio, selectedFile]);
 
   const getEditorPopupContainer = () => editorContainerRef.current || document.body;
+  const selectedFileIndex = selectedFile
+    ? files.findIndex(file => file.TaskFileId === selectedFile.TaskFileId)
+    : -1;
+
+  const handleSelectPreviousFile = () => {
+    if (selectedFileIndex > 0) {
+      setSelectedFile(files[selectedFileIndex - 1]);
+    }
+  };
+
+  const handleSelectNextFile = () => {
+    if (selectedFileIndex >= 0 && selectedFileIndex < files.length - 1) {
+      setSelectedFile(files[selectedFileIndex + 1]);
+    }
+  };
 
   // 切换单个缺陷项的展开/收起状态
   const toggleDefectExpand = (key: string) => {
@@ -3496,6 +3353,78 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       </div>
     </Space>
   );
+
+  const renderReviewPanelFooter = () => {
+    if (!selectedFile) return null;
+
+    return (
+      <div
+        style={{
+          padding: '16px 14px',
+          borderTop: '1px solid #f0f0f0',
+          background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, #ffffff 100%)',
+          flexShrink: 0,
+        }}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Button
+            type="primary"
+            block
+            icon={<SaveOutlined />}
+            onClick={handleSave}
+            style={{ height: 40, borderRadius: 6, background: '#1890ff' }}
+          >
+            保存并确认
+          </Button>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr auto 1fr',
+              alignItems: 'center',
+              columnGap: 8,
+            }}
+          >
+            <Button
+              icon={<LeftOutlined />}
+              onClick={handleSelectPreviousFile}
+              disabled={selectedFileIndex <= 0}
+              style={{ width: '100%', height: 36, color: '#8c8c8c' }}
+            >
+              上一个
+            </Button>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 4,
+                padding: '0 8px',
+                whiteSpace: 'nowrap',
+                justifyContent: 'center',
+              }}
+            >
+              <Text strong style={{ fontSize: 16 }}>
+                {selectedFileIndex + 1}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12, margin: '0 2px' }}>
+                /
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {files.length}
+              </Text>
+            </div>
+            <Button
+              onClick={handleSelectNextFile}
+              disabled={selectedFileIndex >= files.length - 1}
+              style={{ width: '100%', height: 36, color: '#1890ff' }}
+            >
+              下一个 <RightOutlined />
+            </Button>
+          </div>
+        </Space>
+      </div>
+    );
+  };
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
@@ -4738,73 +4667,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               </div>
             )}
 
-            {/* 底部悬浮操作栏 */}
-            {selectedFile && (
-              <div
-                ref={floatingActionBarRef}
-                style={{
-                  position: 'absolute',
-                  left: floatingActionBarPosition?.x ?? 0,
-                  top: floatingActionBarPosition?.y ?? 0,
-                  visibility: floatingActionBarPosition ? 'visible' : 'hidden',
-                  background: '#fff',
-                  padding: '8px 16px 8px 12px',
-                  borderRadius: '8px',
-                  boxShadow: isFloatingActionBarDragging ? '0 8px 20px rgba(0,0,0,0.18)' : '0 4px 12px rgba(0,0,0,0.1)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '16px',
-                  border: '1px solid #e8e8e8',
-                  zIndex: 110,
-                  userSelect: isFloatingActionBarDragging ? 'none' : 'auto',
-                }}
-              >
-                <div
-                  role="button"
-                  aria-label="拖动底部操作栏"
-                  title="拖动工具栏"
-                  onPointerDown={handleFloatingActionBarPointerDown}
-                  onPointerMove={handleFloatingActionBarPointerMove}
-                  onPointerUp={handleFloatingActionBarPointerUp}
-                  onPointerCancel={handleFloatingActionBarPointerCancel}
-                  onLostPointerCapture={handleFloatingActionBarLostCapture}
-                  style={{
-                    width: 28,
-                    height: 36,
-                    borderRadius: 6,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: isFloatingActionBarDragging ? 'grabbing' : 'grab',
-                    color: '#8c8c8c',
-                    background: isFloatingActionBarDragging ? '#f0f0f0' : 'transparent',
-                    touchAction: 'none',
-                    flexShrink: 0,
-                  }}
-                >
-                  <DragOutlined />
-                </div>
-                <Divider type="vertical" style={{ height: '24px', margin: 0 }} />
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Button type="text" icon={<LeftOutlined />} onClick={() => {
-                    const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
-                    if (idx > 0) setSelectedFile(files[idx - 1]);
-                  }} disabled={files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) === 0} style={{ color: '#8c8c8c' }}>上一个</Button>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', padding: '0 12px', whiteSpace: 'nowrap', minWidth: '60px', justifyContent: 'center' }}>
-                    <Text strong style={{ fontSize: '16px' }}>{files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) + 1}</Text>
-                    <Text type="secondary" style={{ fontSize: '12px', margin: '0 2px' }}>/</Text>
-                    <Text type="secondary" style={{ fontSize: '12px' }}>{files.length}</Text>
-                  </div>
-                  <Button type="text" onClick={() => {
-                    const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
-                    if (idx < files.length - 1) setSelectedFile(files[idx + 1]);
-                  }} disabled={files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId) === files.length - 1} style={{ color: '#1890ff' }}>下一个 <RightOutlined /></Button>
-                </div>
-                <Divider type="vertical" style={{ height: '24px' }} />
-                <Button type="primary" onClick={handleSave} style={{ borderRadius: '4px', height: '36px', padding: '0 20px', background: '#1890ff' }} icon={<SaveOutlined />}>保存并确认</Button>
-              </div>
-            )}
-
             {selectedFile && (
               <div
                 ref={floatingReviewPanelRef}
@@ -4853,9 +4715,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     拖动面板
                   </Text>
                 </div>
-                <div style={{ padding: '16px 14px', overflowY: 'auto' }}>
+                <div style={{ padding: '16px 14px 0', overflowY: 'auto', flex: 1, minHeight: 0 }}>
                   {renderReviewInfoPanelContent()}
                 </div>
+                {renderReviewPanelFooter()}
               </div>
             )}
           </div>
