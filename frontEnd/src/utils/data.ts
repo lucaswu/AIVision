@@ -122,6 +122,10 @@ export interface TaskFile {
   ManualResult?: string; // 人工修改后的检测结果
   PlateQuality?: string; // 底片质量
   // 新增：底片信息字段
+  FilmPixelValue?: string; // 底片像素值
+  Resolution?: string;    // 分辨率
+  Specification?: string; // 规格
+  InspectionDate?: string; // 检验日期
   WeldId?: string;       // 焊口编号
   FilmNumber?: string;   // 片号
   FilmDensity?: string;  // 底片黑度

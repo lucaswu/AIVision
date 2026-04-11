@@ -562,7 +562,23 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
 
                                   {/* --- 新增：底片信息展示 --- */}
                                   <div style={{ background: '#f9f9f9', padding: '12px', borderRadius: '4px', marginBottom: '16px', border: '1px solid #f0f0f0' }}>
-                                    <Row gutter={24}>
+                                    <Row gutter={[24, 16]}>
+                                      <Col span={6}>
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>底片像素值</Text>
+                                        <div style={{ fontWeight: 500 }}>{file.FilmPixelValue || '-'}</div>
+                                      </Col>
+                                      <Col span={6}>
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>分辨率</Text>
+                                        <div style={{ fontWeight: 500 }}>{file.Resolution || '-'}</div>
+                                      </Col>
+                                      <Col span={6}>
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>规格</Text>
+                                        <div style={{ fontWeight: 500 }}>{file.Specification || '-'}</div>
+                                      </Col>
+                                      <Col span={6}>
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>检验日期</Text>
+                                        <div style={{ fontWeight: 500 }}>{file.InspectionDate || '-'}</div>
+                                      </Col>
                                       <Col span={6}>
                                         <Text type="secondary" style={{ fontSize: '12px' }}>焊口编号</Text>
                                         <div style={{ fontWeight: 500 }}>{file.WeldId || '-'}</div>

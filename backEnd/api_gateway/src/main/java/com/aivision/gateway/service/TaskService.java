@@ -170,6 +170,10 @@ public class TaskService {
             Optional<File> fileOpt = fileRepository.findById(tf.getFileId());
             item.setFileName(fileOpt.map(File::getOriginalName).orElse("unknown"));
             
+            item.setFilmPixelValue(tf.getFilmPixelValue());
+            item.setResolution(tf.getResolution());
+            item.setSpecification(tf.getSpecification());
+            item.setInspectionDate(tf.getInspectionDate());
             item.setWeldNo(tf.getWeldId());
             item.setSliceNo(tf.getFilmNumber());
             item.setFilmDensity(tf.getFilmDensity());

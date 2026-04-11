@@ -72,6 +72,22 @@ public class TaskFile {
     private String plateQuality;
 
     // --- 新增：底片信息字段 ---
+    @Column(name = "film_pixel_value", length = 50)
+    @JsonProperty("FilmPixelValue")
+    private String filmPixelValue;
+
+    @Column(name = "film_resolution", length = 100)
+    @JsonProperty("Resolution")
+    private String resolution;
+
+    @Column(name = "specification", length = 100)
+    @JsonProperty("Specification")
+    private String specification;
+
+    @Column(name = "inspection_date", length = 100)
+    @JsonProperty("InspectionDate")
+    private String inspectionDate;
+
     @Column(name = "weld_id", length = 100)
     @JsonProperty("WeldId")
     private String weldId;
@@ -258,6 +274,42 @@ public class TaskFile {
     }
 
     // --- 新增字段的 Getters and Setters ---
+    public String getFilmPixelValue() {
+        return filmPixelValue;
+    }
+
+    public void setFilmPixelValue(String filmPixelValue) {
+        this.filmPixelValue = filmPixelValue;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getResolution() {
+        return resolution;
+    }
+
+    public void setResolution(String resolution) {
+        this.resolution = resolution;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getSpecification() {
+        return specification;
+    }
+
+    public void setSpecification(String specification) {
+        this.specification = specification;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getInspectionDate() {
+        return inspectionDate;
+    }
+
+    public void setInspectionDate(String inspectionDate) {
+        this.inspectionDate = inspectionDate;
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public String getWeldId() {
         return weldId;
     }

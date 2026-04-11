@@ -101,12 +101,17 @@ public class ReportController {
             String manualResult = (String) body.get("ManualResult");
             String plateQuality = (String) body.get("PlateQuality");
             // 新增：底片信息字段
+            String filmPixelValue = (String) body.get("FilmPixelValue");
+            String resolution = (String) body.get("Resolution");
+            String specification = (String) body.get("Specification");
+            String inspectionDate = (String) body.get("InspectionDate");
             String weldId = (String) body.get("WeldId");
             String filmNumber = (String) body.get("FilmNumber");
             String filmDensity = (String) body.get("FilmDensity");
             String sensitivity = (String) body.get("Sensitivity");
             
             reportService.updateFileReview(taskFileId, manualResult, plateQuality,
+                filmPixelValue, resolution, specification, inspectionDate,
                 weldId, filmNumber, filmDensity, sensitivity);
             return ResponseEntity.ok(ApiResponse.success("保存成功", null));
         } catch (Exception e) {
@@ -154,5 +159,4 @@ public class ReportController {
         }
     }
 }
-
 

@@ -106,6 +106,13 @@ interface ReportEditorPageProps {
   onPreview?: () => void;
 }
 
+type FilmInfoOcrField =
+  | 'specification'
+  | 'inspectionDate'
+  | 'weldId'
+  | 'filmNumber'
+  | 'sensitivity';
+
 // 扩展保存的图形接口，增加 label, color 以及新的业务字段
 interface DefectBase {
   label: string;
@@ -532,7 +539,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [showFilmInfo, setShowFilmInfo] = useState(true); // 底片信息折叠状态
 
   // --- OCR 框选识别状态 ---
-  const [ocrTargetField, setOcrTargetField] = useState<'weldId' | 'filmNumber' | 'filmDensity' | 'sensitivity' | null>(null);
+  const [ocrTargetField, setOcrTargetField] = useState<FilmInfoOcrField | null>(null);
   const [ocrLoadingField, setOcrLoadingField] = useState<string | null>(null);
   const [ocrDrawRect, setOcrDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [ocrDrawStart, setOcrDrawStart] = useState<{ x: number; y: number } | null>(null);
@@ -1892,6 +1899,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
       // 从后端加载底片信息字段
       const initialFilmInfo = {
+        filmPixelValue: selectedFile.FilmPixelValue || '',
+        resolution: selectedFile.Resolution || '',
+        specification: selectedFile.Specification || '',
+        inspectionDate: selectedFile.InspectionDate || '',
         weldId: selectedFile.WeldId || '',
         filmNumber: selectedFile.FilmNumber || '',
         filmDensity: selectedFile.FilmDensity || '',
@@ -2336,6 +2347,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       await reportAPI.reviewFile(selectedFile.TaskFileId, {
         ManualResult: selectedFile.VisionResult || "{}",
         PlateQuality: '',  // 不再使用文件级别的质量评级，改为缺陷级别的等级
+        FilmPixelValue: infoValues.filmPixelValue,
+        Resolution: infoValues.resolution,
+        Specification: infoValues.specification,
+        InspectionDate: infoValues.inspectionDate,
         WeldId: infoValues.weldId,
         FilmNumber: infoValues.filmNumber,
         FilmDensity: infoValues.filmDensity,
@@ -2422,12 +2437,20 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         await reportAPI.reviewFile(selectedFile.TaskFileId, {
           ManualResult: selectedFile.VisionResult || "{}",
           PlateQuality: '',
+          FilmPixelValue: values.filmPixelValue,
+          Resolution: values.resolution,
+          Specification: values.specification,
+          InspectionDate: values.inspectionDate,
           WeldId: values.weldId,
           FilmNumber: values.filmNumber,
           FilmDensity: values.filmDensity,
           Sensitivity: values.sensitivity,
         });
         // 同步更新内存中的对象，避免切换图片后表单被重置为旧值
+        selectedFile.FilmPixelValue = values.filmPixelValue;
+        selectedFile.Resolution = values.resolution;
+        selectedFile.Specification = values.specification;
+        selectedFile.InspectionDate = values.inspectionDate;
         selectedFile.WeldId = values.weldId;
         selectedFile.FilmNumber = values.filmNumber;
         selectedFile.FilmDensity = values.filmDensity;
@@ -2576,7 +2599,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   // --- OCR 框选识别 ---
-  const handleOcrButtonClick = (field: typeof ocrTargetField) => {
+  const handleOcrButtonClick = (field: FilmInfoOcrField) => {
     if (ocrTargetField === field) {
       setOcrTargetField(null);
     } else {
@@ -2587,7 +2610,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const handleOcrRegionSelected = async (
     rect: { x: number; y: number; w: number; h: number },
-    field: 'weldId' | 'filmNumber' | 'filmDensity' | 'sensitivity'
+    field: FilmInfoOcrField
   ) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -4196,6 +4219,88 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   style={{ padding: '0 8px' }}
                   onValuesChange={autoSaveFilmInfo}
                 >
+                  <Form.Item label="底片像素值" style={{ marginBottom: 12 }}>
+                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmPixelValue !== currentValues.filmPixelValue}>
+                      {({ getFieldValue }) => {
+                        const filmPixelValue = getFieldValue('filmPixelValue');
+                        return (
+                          <div
+                            style={{
+                              width: '100%',
+                              minHeight: 24,
+                              padding: '1px 11px',
+                              border: '1px solid #d9d9d9',
+                              borderRadius: 6,
+                              background: '#fafafa',
+                              lineHeight: '22px',
+                            }}
+                          >
+                            {filmPixelValue || <Text type="secondary">暂无结果</Text>}
+                          </div>
+                        );
+                      }}
+                    </Form.Item>
+                    <Form.Item name="filmPixelValue" hidden>
+                      <Input />
+                    </Form.Item>
+                  </Form.Item>
+                  <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
+                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
+                      {({ getFieldValue }) => {
+                        const resolution = getFieldValue('resolution');
+                        return (
+                          <div
+                            style={{
+                              width: '100%',
+                              minHeight: 24,
+                              padding: '1px 11px',
+                              border: '1px solid #d9d9d9',
+                              borderRadius: 6,
+                              background: '#fafafa',
+                              lineHeight: '22px',
+                            }}
+                          >
+                            {resolution || <Text type="secondary">暂无结果</Text>}
+                          </div>
+                        );
+                      }}
+                    </Form.Item>
+                    <Form.Item name="resolution" hidden>
+                      <Input />
+                    </Form.Item>
+                  </Form.Item>
+                  <Form.Item label="规格" style={{ marginBottom: 12 }}>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Tooltip title={ocrTargetField === 'specification' ? '点击取消OCR' : 'OCR框选识别'}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={ocrLoadingField === 'specification'} />}
+                          type={ocrTargetField === 'specification' ? 'primary' : 'default'}
+                          onClick={() => handleOcrButtonClick('specification')}
+                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'specification')}
+                        />
+                      </Tooltip>
+                      <Form.Item name="specification" noStyle>
+                        <Input placeholder="输入规格" />
+                      </Form.Item>
+                    </Space.Compact>
+                  </Form.Item>
+                  <Form.Item label="检验日期" style={{ marginBottom: 12 }}>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Tooltip title={ocrTargetField === 'inspectionDate' ? '点击取消OCR' : 'OCR框选识别'}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={ocrLoadingField === 'inspectionDate'} />}
+                          type={ocrTargetField === 'inspectionDate' ? 'primary' : 'default'}
+                          onClick={() => handleOcrButtonClick('inspectionDate')}
+                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'inspectionDate')}
+                        />
+                      </Tooltip>
+                      <Form.Item name="inspectionDate" noStyle>
+                        <Input placeholder="输入检验日期" />
+                      </Form.Item>
+                    </Space.Compact>
+                  </Form.Item>
                   <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
                     <Space.Compact style={{ width: '100%' }}>
                       <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'}>
@@ -4229,24 +4334,33 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     </Space.Compact>
                   </Form.Item>
                   <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Tooltip title={ocrTargetField === 'filmDensity' ? '点击取消OCR' : 'OCR框选识别'}>
-                        <Button
-                          size="small"
-                          icon={<ScanOutlined spin={ocrLoadingField === 'filmDensity'} />}
-                          type={ocrTargetField === 'filmDensity' ? 'primary' : 'default'}
-                          onClick={() => handleOcrButtonClick('filmDensity')}
-                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'filmDensity')}
-                        />
-                      </Tooltip>
-                      <Form.Item name="filmDensity" noStyle>
-                        <Input placeholder="输入底片黑度" />
-                      </Form.Item>
-                    </Space.Compact>
+                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
+                      {({ getFieldValue }) => {
+                        const filmDensity = getFieldValue('filmDensity');
+                        return (
+                          <div
+                            style={{
+                              width: '100%',
+                              minHeight: 24,
+                              padding: '1px 11px',
+                              border: '1px solid #d9d9d9',
+                              borderRadius: 6,
+                              background: '#fafafa',
+                              lineHeight: '22px',
+                            }}
+                          >
+                            {filmDensity || <Text type="secondary">暂无结果</Text>}
+                          </div>
+                        );
+                      }}
+                    </Form.Item>
+                    <Form.Item name="filmDensity" hidden>
+                      <Input />
+                    </Form.Item>
                   </Form.Item>
                   <Form.Item label="像质计灵敏度" style={{ marginBottom: 8 }}>
                     <Space.Compact style={{ width: '100%' }}>
-                      <Tooltip title={ocrTargetField === 'sensitivity' ? '点击取消OCR' : 'OCR框选识别'}>
+                      {/* <Tooltip title={ocrTargetField === 'sensitivity' ? '点击取消OCR' : 'OCR框选识别'}>
                         <Button
                           size="small"
                           icon={<ScanOutlined spin={ocrLoadingField === 'sensitivity'} />}
@@ -4254,7 +4368,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                           onClick={() => handleOcrButtonClick('sensitivity')}
                           disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'sensitivity')}
                         />
-                      </Tooltip>
+                      </Tooltip> */}
                       <Form.Item name="sensitivity" noStyle>
                         <Input placeholder="输入像质计灵敏度" />
                       </Form.Item>

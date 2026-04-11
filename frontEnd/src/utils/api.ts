@@ -200,6 +200,10 @@ export const reportAPI = {
   reviewFile: (taskFileId: string, data: {
     ManualResult: string;
     PlateQuality: string;
+    FilmPixelValue?: string;
+    Resolution?: string;
+    Specification?: string;
+    InspectionDate?: string;
     WeldId?: string;
     FilmNumber?: string;
     FilmDensity?: string;

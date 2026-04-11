@@ -574,6 +574,7 @@ public class TaskProcessService {
      * 从 IQIdet ocr 节点提取底片信息并更新 TaskFile
      *
      * 读取路径：
+     *   fields.pipe_specs[0].value              → specification
      *   fields.weld_film_pairs[0].weld_no  → weldId
      *   fields.weld_film_pairs[0].film_no  → filmNumber
      *   grade                              → sensitivity
@@ -591,6 +592,12 @@ public class TaskProcessService {
                 if (weldNo != null && !weldNo.isEmpty()) tf.setWeldId(weldNo);
                 if (filmNo != null && !filmNo.isEmpty()) tf.setFilmNumber(filmNo);
             }
+
+            JsonNode pipeSpecs = fieldsNode.path("pipe_specs");
+            if (pipeSpecs.isArray() && pipeSpecs.size() > 0) {
+                String specification = pipeSpecs.get(0).path("value").asText(null);
+                if (specification != null && !specification.isEmpty()) tf.setSpecification(specification);
+            }
         }
 
         JsonNode gradeNode = rootNode.path("grade");
@@ -598,8 +605,8 @@ public class TaskProcessService {
             tf.setSensitivity(gradeNode.asText());
         }
 
-        logger.debug("OCR解析完成: taskFileId={}, weldId={}, filmNumber={}, sensitivity={}",
-                     tf.getTaskFileId(), tf.getWeldId(), tf.getFilmNumber(), tf.getSensitivity());
+        logger.debug("OCR解析完成: taskFileId={}, weldId={}, filmNumber={}, specification={}, sensitivity={}",
+                     tf.getTaskFileId(), tf.getWeldId(), tf.getFilmNumber(), tf.getSpecification(), tf.getSensitivity());
     }
     
 }

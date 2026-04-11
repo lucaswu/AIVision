@@ -39,7 +39,19 @@ public class ReportResultResponse {
         
         @JsonProperty("FileName")
         private String fileName;
-        
+
+        @JsonProperty("FilmPixelValue")
+        private String filmPixelValue;
+
+        @JsonProperty("Resolution")
+        private String resolution;
+
+        @JsonProperty("Specification")
+        private String specification;
+
+        @JsonProperty("InspectionDate")
+        private String inspectionDate;
+
         @JsonProperty("WeldNo")
         private String weldNo;
         
@@ -70,6 +82,18 @@ public class ReportResultResponse {
         
         public String getFileName() { return fileName; }
         public void setFileName(String fileName) { this.fileName = fileName; }
+
+        public String getFilmPixelValue() { return filmPixelValue; }
+        public void setFilmPixelValue(String filmPixelValue) { this.filmPixelValue = filmPixelValue; }
+
+        public String getResolution() { return resolution; }
+        public void setResolution(String resolution) { this.resolution = resolution; }
+
+        public String getSpecification() { return specification; }
+        public void setSpecification(String specification) { this.specification = specification; }
+
+        public String getInspectionDate() { return inspectionDate; }
+        public void setInspectionDate(String inspectionDate) { this.inspectionDate = inspectionDate; }
         
         public String getWeldNo() { return weldNo; }
         public void setWeldNo(String weldNo) { this.weldNo = weldNo; }

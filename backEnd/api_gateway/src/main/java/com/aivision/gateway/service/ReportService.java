@@ -119,13 +119,15 @@ public class ReportService {
  * 更新单文件审核结果
  */
 public void updateFileReview(String taskFileId, String manualResult, String plateQuality) {
-    updateFileReview(taskFileId, manualResult, plateQuality, null, null, null, null);
+    updateFileReview(taskFileId, manualResult, plateQuality,
+        null, null, null, null, null, null, null, null);
 }
 
 /**
  * 更新单文件审核结果（包含底片信息）
  */
 public void updateFileReview(String taskFileId, String manualResult, String plateQuality,
+                              String filmPixelValue, String resolution, String specification, String inspectionDate,
                               String weldId, String filmNumber, String filmDensity, String sensitivity) {
     TaskFile tf = taskFileRepository.findById(taskFileId)
         .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
@@ -141,6 +143,10 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
     tf.setPlateQuality(plateQuality);
     
     // 更新底片信息字段
+    if (filmPixelValue != null) tf.setFilmPixelValue(filmPixelValue);
+    if (resolution != null) tf.setResolution(resolution);
+    if (specification != null) tf.setSpecification(specification);
+    if (inspectionDate != null) tf.setInspectionDate(inspectionDate);
     if (weldId != null) tf.setWeldId(weldId);
     if (filmNumber != null) tf.setFilmNumber(filmNumber);
     if (filmDensity != null) tf.setFilmDensity(filmDensity);
@@ -389,4 +395,3 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
                t.contains("裂纹") || t.contains("未熔合") || t.contains("未焊透");
     }
 }
-
