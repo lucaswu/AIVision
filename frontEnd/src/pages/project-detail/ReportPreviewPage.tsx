@@ -36,6 +36,7 @@ import {
 import { useRequest } from "ahooks";
 import { reportAPI, userAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report, User, DefectRecord } from "../../utils/data";
+import HighBitPreviewImage from "@/components/HighBitPreviewImage";
 
 
 const { Title, Text, Paragraph } = Typography;
@@ -138,6 +139,7 @@ const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects
 
   // 旋转90°/270°时，原始图像宽高互换；img 宽度设为 metaH/metaW 使旋转后恰好填满容器
   const imgWidth = isAxesSwapped ? `${(metaHeight / metaWidth) * 100}%` : '100%';
+  const previewSrc = `/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${userId}`;
 
   return (
     <div style={{
@@ -147,8 +149,9 @@ const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects
       background: '#f5f5f5',
       ...style,
     }}>
-      <img
-        src={`/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${userId}`}
+      <HighBitPreviewImage
+        src={previewSrc}
+        fileName={file.FileName}
         alt="preview"
         style={{
           position: 'absolute',

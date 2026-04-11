@@ -74,6 +74,12 @@ file-upload:
     - gif
     - bmp
     - webp
+    - tif
+    - tiff
+    - dcm
+    - dicom
+    - dic
+    - diconde
   # 文件大小限制
   max-file-size: ${FILE_UPLOAD_MAX_FILE_SIZE:200MB}
   max-total-size: ${FILE_UPLOAD_MAX_TOTAL_SIZE:10GB}

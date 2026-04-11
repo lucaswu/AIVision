@@ -1263,6 +1263,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     resetWindow,
     windowWidth,
     windowLevel,
+    windowWidthMin,
+    windowWidthMax,
+    windowLevelMin,
+    windowLevelMax,
     setManualWindowLevel,
     imageReady, // 从 hook 获取图片渲染完成状态
     resetImageReady, // 重置图片就绪状态的方法
@@ -4710,7 +4714,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
                   <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗宽: {windowWidth}</span>
                   <Slider
-                    min={1} max={512} value={windowWidth}
+                    min={windowWidthMin}
+                    max={windowWidthMax}
+                    value={windowWidth}
                     onChange={(val) => setManualWindowLevel(val, windowLevel)}
                     style={{ flex: 1, margin: 0 }}
                     trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
@@ -4720,7 +4726,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
                   <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗位: {windowLevel}</span>
                   <Slider
-                    min={0} max={255} value={windowLevel}
+                    min={windowLevelMin}
+                    max={windowLevelMax}
+                    value={windowLevel}
                     onChange={(val) => setManualWindowLevel(windowWidth, val)}
                     style={{ flex: 1, margin: 0 }}
                     trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}

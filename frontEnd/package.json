@@ -15,15 +15,19 @@
     "ahooks": "^3.8.5",
     "antd": "^5.26.1",
     "dayjs": "^1.11.13",
+    "dicom-parser": "^1.8.21",
+    "fast-png": "^8.0.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.1",
     "mockjs": "^1.1.0",
+    "pako": "^2.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-quill": "^2.0.0",
     "react-router-dom": "^6.28.0",
     "showdown": "^2.1.0",
-    "turndown": "^7.2.0"
+    "turndown": "^7.2.0",
+    "utif": "^3.1.0"
   },
   "devDependencies": {
     "@types/node": "^20",

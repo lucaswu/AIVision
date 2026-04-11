@@ -39,7 +39,7 @@ public class FileController {
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     @Operation(
         summary = "多文件上传",
-        description = "上传多个图片文件到指定目录，支持jpg, jpeg, png, gif, bmp, webp格式，项目ID和用户ID从header获取"
+        description = "上传多个图片文件到指定目录，支持jpg, jpeg, png, gif, bmp, webp, tif, tiff, dcm等格式，项目ID和用户ID从header获取"
     )
     @ApiResponses(value = {
         @io.swagger.v3.oas.annotations.responses.ApiResponse(

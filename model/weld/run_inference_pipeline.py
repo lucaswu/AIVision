@@ -12,10 +12,12 @@ Features:
 """
 
 import argparse
+import hashlib
 import json
 import sys
 import os
 import ssl
+from dataclasses import dataclass
 
 # Globally disable SSL verification for local dev
 os.environ['CURL_CA_BUNDLE'] = ''
@@ -29,6 +31,8 @@ settings.update({'sync': False})
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import cv2
+import numpy as np
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -54,8 +58,15 @@ except ImportError as _iqi_err:
     _IQI_AVAILABLE = False
     print(f"[警告] IQIInferencer 加载失败，IQI 功能不可用: {_iqi_err}")
 
+try:
+    import pydicom
+except ImportError:
+    pydicom = None
 
-SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
+
+SUPPORTED_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.dcm', '.dicom', '.dic', '.diconde')
+DICOM_EXTS = {'.dcm', '.dicom', '.dic', '.diconde'}
+HIGH_BIT_EXTS = {'.png', '.tif', '.tiff'} | DICOM_EXTS
 
 # 矫正 label (0-7) 到前端 CSS transform 的映射
 # label 表示图片当前状态，矫正操作是其逆操作
@@ -69,6 +80,109 @@ LABEL_TO_FRONTEND_TRANSFORM = {
     6: {"rotation": 180,  "flip": True},   # 镜像+180°
     7: {"rotation": 90,   "flip": True},   # 镜像+逆时90°
 }
+
+
+@dataclass(frozen=True)
+class PreparedImageInput:
+    original_path: Path
+    processing_path: Path
+    converted_to_8bit: bool = False
+
+
+def _normalize_to_uint8(image: np.ndarray,
+                        clip_percent: Optional[Tuple[float, float]] = None,
+                        invert: bool = False) -> np.ndarray:
+    if image is None:
+        raise ValueError("Empty image array")
+
+    arr = image.astype(np.float32)
+    if clip_percent is not None:
+        low, high = np.percentile(arr, clip_percent)
+    else:
+        low, high = float(np.min(arr)), float(np.max(arr))
+
+    if high <= low:
+        out = np.zeros(arr.shape[:2] if arr.ndim == 3 else arr.shape, dtype=np.uint8)
+    else:
+        arr = np.clip(arr, low, high)
+        arr = (arr - low) / (high - low) * 255.0
+        if invert:
+            arr = 255.0 - arr
+        out = arr.astype(np.uint8)
+
+    if out.ndim == 3 and out.shape[2] == 4:
+        out = cv2.cvtColor(out, cv2.COLOR_BGRA2BGR)
+    return out
+
+
+def _read_dicom_for_conversion(path: Path) -> Tuple[np.ndarray, bool]:
+    if pydicom is None:
+        raise RuntimeError("pydicom 未安装，无法读取 DICOM；请在推理镜像中安装 pydicom")
+
+    ds = pydicom.dcmread(str(path), force=True)
+    if not hasattr(ds, "PixelData"):
+        raise RuntimeError("DICOM 缺少 PixelData")
+
+    arr = ds.pixel_array
+    if arr.ndim == 3:
+        arr = arr[0]
+    elif arr.ndim == 4:
+        arr = arr[0, 0]
+
+    arr = arr.astype(np.float32)
+    slope = float(getattr(ds, "RescaleSlope", 1.0))
+    intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+    arr = arr * slope + intercept
+
+    invert = str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1"
+    return arr, invert
+
+
+def _read_image_for_preprocessing(path: Path) -> Tuple[np.ndarray, bool]:
+    ext = path.suffix.lower()
+    if ext in DICOM_EXTS:
+        return _read_dicom_for_conversion(path)
+
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise RuntimeError(f"无法读取图像: {path}")
+
+    invert = False
+    if image.ndim == 3 and image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    return image, invert
+
+
+def _needs_8bit_conversion(path: Path, image: np.ndarray) -> bool:
+    ext = path.suffix.lower()
+    if ext in DICOM_EXTS:
+        return True
+    if ext not in HIGH_BIT_EXTS:
+        return False
+    return image.dtype != np.uint8
+
+
+def _prepare_image_input(image_path: Path, prepared_root: Path) -> PreparedImageInput:
+    image, invert = _read_image_for_preprocessing(image_path)
+    if not _needs_8bit_conversion(image_path, image):
+        return PreparedImageInput(original_path=image_path, processing_path=image_path, converted_to_8bit=False)
+
+    image_8 = _normalize_to_uint8(image, invert=invert)
+    prepared_root.mkdir(parents=True, exist_ok=True)
+    suffix_hash = hashlib.md5(str(image_path).encode("utf-8")).hexdigest()[:8]
+    prepared_path = prepared_root / f"{image_path.stem}__src8__{suffix_hash}.png"
+
+    ok = cv2.imwrite(str(prepared_path), image_8)
+    if not ok:
+        raise RuntimeError(f"写入预处理 8bit 图像失败: {prepared_path}")
+
+    print(f"[预处理] {image_path.name}: {image_path.suffix.lower()} / {image.dtype} -> 8bit PNG")
+
+    return PreparedImageInput(
+        original_path=image_path,
+        processing_path=prepared_path,
+        converted_to_8bit=True,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -288,23 +402,25 @@ class InferencePipelineRunner:
 
         self.primary_model = self._build_primary_model()
 
-    def run(self, image_paths: List[Path]) -> List[Dict[str, Any]]:
+    def run(self, image_inputs: List[PreparedImageInput]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
-        total = len(image_paths)
+        total = len(image_inputs)
 
-        for idx, image_path in enumerate(tqdm(image_paths, desc="推理中")):
+        for idx, image_input in enumerate(tqdm(image_inputs, desc="推理中")):
+            image_path = image_input.original_path
+            processing_path = image_input.processing_path
             try:
-                # A→B/D: weld seam / defect-position detection; A→correction→C: defect type detection
+                # 输入预处理：16bit / DICOM 先转换为 8bit，再进入后续既有流程
                 rois, weld_location, defect_position, width, height, correction_info, corrected_img = \
-                    self._process_image(image_path)
+                    self._process_image(processing_path)
                 label = correction_info.get('label', 0)
                 transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
 
-                # IQI Grade Inference（替换旧版 OCR runner，直接传入原始图像路径）
+                # IQI Grade Inference 也使用预处理后的 8bit 图像，避免 DICOM / 16bit 分支差异
                 iqi_result: Optional[Dict[str, Any]] = None
                 if self.iqi_inferencer is not None:
                     try:
-                        iqi_record, _ = self.iqi_inferencer.infer_image_path(image_path)
+                        iqi_record, _ = self.iqi_inferencer.infer_image_path(processing_path)
                         iqi_result = iqi_record
                     except Exception as iqi_exc:
                         print(f"[警告] IQI 推理失败 ({image_path.name}): {iqi_exc}")
@@ -329,6 +445,7 @@ class InferencePipelineRunner:
                     "width": width,
                     "height": height,
                     "num_rois": len(rois),
+                    "preprocessed_path": str(processing_path) if image_input.converted_to_8bit else "",
                     "correction": {
                         "label": label,
                         "rotation": transform["rotation"],
@@ -673,7 +790,10 @@ def main():
         detector=detector,
         iqi_inferencer=iqi_inferencer,
     )
-    results = runner.run(image_paths)
+    prepared_root = output_dir / "prepared_inputs"
+    image_inputs = [_prepare_image_input(path, prepared_root) for path in image_paths]
+
+    results = runner.run(image_inputs)
 
     # Save weld detection results
     results_path = Path(args.results_json)

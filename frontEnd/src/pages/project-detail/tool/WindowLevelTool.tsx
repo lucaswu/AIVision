@@ -1,109 +1,16 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { message } from 'antd';
+import {
+  applyWindowLevelToRawData,
+  calculateStatsFromRawData,
+  getDecodedImageFromCache,
+  getEditorInitialWindow,
+  preprocessToGrayCache,
+  renderDisplayDataToCanvas,
+  type ImageStats,
+} from '@/utils/highBitImage';
 
-// 模块级灰度数据缓存，key = "filename-filesize"，避免重复解码同一张图
-interface GrayDataCacheEntry {
-  grayData: Uint8Array;
-  width: number;
-  height: number;
-  stats: { mean: number; std: number; min: number; max: number };
-}
-const grayDataCache = new Map<string, GrayDataCacheEntry>();
-const MAX_CACHE_SIZE = 20; // 最多缓存20张图的灰度数据
-
-// 模块级统计计算（无 React 依赖，可被 hook 外调用）
-function calculateStatsFromGrayData(
-  data: Uint8Array,
-  x: number = 0,
-  y: number = 0,
-  w: number = -1,
-  h: number = -1,
-  imgWidth: number = 0,
-  step: number = 1
-): { mean: number; std: number; min: number; max: number } | null {
-  const width = w === -1 ? imgWidth : w;
-  const height = h === -1 ? data.length / imgWidth : h;
-
-  let sum = 0;
-  let count = 0;
-  const values: number[] = [];
-  let min = 255;
-  let max = 0;
-
-  for (let row = y; row < y + height; row += step) {
-    for (let col = x; col < x + width; col += step) {
-      const index = row * imgWidth + col;
-      if (index >= 0 && index < data.length) {
-        const val = data[index];
-        values.push(val);
-        sum += val;
-        if (val < min) min = val;
-        if (val > max) max = val;
-        count++;
-      }
-    }
-  }
-
-  if (count === 0) return null;
-
-  const mean = sum / count;
-  let sumSqDiff = 0;
-  for (const v of values) sumSqDiff += (v - mean) ** 2;
-  const std = Math.sqrt(sumSqDiff / count);
-
-  return { mean, std, min, max };
-}
-
-/**
- * 将 File 解码为灰度数据并存入模块级缓存。
- * 可在后台预加载时调用，下次 hook 加载同一文件时直接命中缓存、跳过解码。
- */
-export async function preprocessToGrayCache(file: File): Promise<void> {
-  const cacheKey = `${file.name}-${file.size}`;
-  if (grayDataCache.has(cacheKey)) return;
-
-  const img = new Image();
-  const url = URL.createObjectURL(file);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = reject;
-      img.src = url;
-    });
-
-    const width = img.naturalWidth;
-    const height = img.naturalHeight;
-
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = width;
-    tempCanvas.height = height;
-    const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
-    if (!tempCtx) return;
-
-    tempCtx.drawImage(img, 0, 0);
-    const { data } = tempCtx.getImageData(0, 0, width, height);
-
-    const grayData = new Uint8Array(width * height);
-    for (let i = 0; i < grayData.length; i++) {
-      const idx = i * 4;
-      grayData[i] = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
-    }
-
-    // 异步完成后再次检查，避免并发写入重复条目
-    if (grayDataCache.has(cacheKey)) return;
-
-    const stats = calculateStatsFromGrayData(grayData, 0, 0, -1, -1, width, 2);
-    if (!stats) return;
-
-    if (grayDataCache.size >= MAX_CACHE_SIZE) {
-      const firstKey = grayDataCache.keys().next().value;
-      if (firstKey) grayDataCache.delete(firstKey);
-    }
-    grayDataCache.set(cacheKey, { grayData, width, height, stats });
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
+export { preprocessToGrayCache } from '@/utils/highBitImage';
 
 // Hook 入参
 interface UseWindowLevelToolProps {
@@ -115,16 +22,9 @@ interface UseWindowLevelToolProps {
   flipV?: number;    // 垂直翻转系数（1 不翻转, -1 翻转）
 }
 
-interface ImageStats {
-  mean: number;
-  std: number;
-  min: number;
-  max: number;
-}
-
 export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0, flipH = 1, flipV = 1 }: UseWindowLevelToolProps) => {
   // 原始灰度数据（真正的原始数据）
-  const [rawGrayData, setRawGrayData] = useState<Uint8Array | null>(null);
+  const [rawGrayData, setRawGrayData] = useState<Float32Array | null>(null);
   const [imageWidth, setImageWidth] = useState(0);
   const [imageHeight, setImageHeight] = useState(0);
 
@@ -162,27 +62,11 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
   // 核心：在原始灰度数据上应用窗宽窗位
   // ==========================================================================
   const applyWindowLevelToGrayData = useCallback((
-    data: Uint8Array,
+    data: Float32Array,
     ww: number,
     wl: number
   ): Uint8Array => {
-    const window_min = wl - ww / 2;
-    const window_max = wl + ww / 2;
-    const result = new Uint8Array(data.length);
-
-    for (let i = 0; i < data.length; i++) {
-      const val = data[i];
-
-      if (val <= window_min) {
-        result[i] = 0;
-      } else if (val >= window_max) {
-        result[i] = 255;
-      } else {
-        result[i] = Math.round(((val - window_min) / ww) * 255);
-      }
-    }
-
-    return result;
+    return applyWindowLevelToRawData(data, ww, wl);
   }, []);
 
   // ==========================================================================
@@ -196,27 +80,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
     if (grayDataVersionRef.current !== loadVersionRef.current) return;
     if (!imageFileRef.current) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // 设置Canvas尺寸
-    canvas.width = imageWidth;
-    canvas.height = imageHeight;
-
-    // 创建RGBA ImageData
-    const imageData = new ImageData(imageWidth, imageHeight);
-    const rgbaData = imageData.data;
-
-    for (let i = 0; i < processedData.length; i++) {
-      const idx = i * 4;
-      const gray = processedData[i];
-      rgbaData[idx] = gray;     // R
-      rgbaData[idx + 1] = gray; // G
-      rgbaData[idx + 2] = gray; // B
-      rgbaData[idx + 3] = 255;  // A
-    }
-
-    ctx.putImageData(imageData, 0, 0);
+    renderDisplayDataToCanvas(canvas, processedData, imageWidth, imageHeight);
 
     // 直接同步标记就绪（不用 rAF），canvas 有 visibility:hidden 保护，
     // 不会在 imageReady=false 期间显示，故无需 rAF 来避免 SVG 提前出现的闪烁
@@ -246,7 +110,9 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
   const updateWindowLevel = useCallback((newWW: number, newWL: number) => {
     const stats = imageStatsRef.current;
 
-    const w = Math.max(1, newWW);
+    const w = stats
+      ? Math.max(1, Math.min(stats.max - stats.min || 1, newWW))
+      : Math.max(1, newWW);
 
     let l: number;
     if (stats) {
@@ -267,6 +133,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
       setImageWidth(0);
       setImageHeight(0);
       setImageReady(false);
+      imageStatsRef.current = null;
 
       // 清空画布
       const canvas = canvasRef.current;
@@ -297,22 +164,25 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
     const loadImage = async () => {
       try {
-        const cacheKey = `${imageFile.name}-${imageFile.size}`;
-
         // 解码并缓存灰度数据（若已有缓存则立即返回，否则在后台完成解码）
         await preprocessToGrayCache(imageFile);
 
         if (cancelled) return;
 
-        const cached = grayDataCache.get(cacheKey);
+        const cached = getDecodedImageFromCache(imageFile);
         if (!cached) return;
 
+        const initialWindow = getEditorInitialWindow(cached);
+
+        imageStatsRef.current = cached.stats;
+        setWindowData({
+          ww: Math.round(initialWindow.ww),
+          wl: Math.round(initialWindow.wl),
+        });
         grayDataVersionRef.current = myVersion;
-        setRawGrayData(cached.grayData);
+        setRawGrayData(cached.rawData);
         setImageWidth(cached.width);
         setImageHeight(cached.height);
-        imageStatsRef.current = cached.stats;
-        updateWindowLevel(255, 128);
       } catch (error) {
         if (!cancelled) {
           console.error('图像加载失败:', error);
@@ -325,7 +195,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
     // effect 清理：标记取消，防止旧请求的异步回调污染新图片的状态
     return () => { cancelled = true; };
-  }, [imageFile, updateWindowLevel]);
+  }, [imageFile]);
 
   // 监听窗宽窗位变化，更新显示
   useEffect(() => {
@@ -375,7 +245,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
     const step = isRealtime ? 3 : 1;
 
-    const stats = calculateStatsFromGrayData(
+    const stats = calculateStatsFromRawData(
       rawGrayData,
       finalX,
       finalY,
@@ -490,6 +360,10 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
     windowWidth: windowData.ww,
     windowLevel: windowData.wl,
     imageStats: imageStatsRef.current,
+    windowWidthMin: 1,
+    windowWidthMax: Math.max(1, Math.round((imageStatsRef.current?.max ?? 255) - (imageStatsRef.current?.min ?? 0))),
+    windowLevelMin: Math.floor(imageStatsRef.current?.min ?? 0),
+    windowLevelMax: Math.ceil(imageStatsRef.current?.max ?? 255),
     imageReady, // 图片是否已加载并渲染完成
     resetImageReady, // 重置图片就绪状态
     imageWidth,

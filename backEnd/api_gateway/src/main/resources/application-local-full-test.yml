@@ -65,6 +65,12 @@ file-upload:
     - gif
     - bmp
     - webp
+    - tif
+    - tiff
+    - dcm
+    - dicom
+    - dic
+    - diconde
   max-file-size: 200MB
   max-total-size: 10GB
 

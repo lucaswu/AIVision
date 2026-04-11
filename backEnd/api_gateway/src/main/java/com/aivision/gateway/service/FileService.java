@@ -396,6 +396,11 @@ public class FileService {
             case "tiff":
             case "tif":
                 return "image/tiff";
+            case "dcm":
+            case "dicom":
+            case "dic":
+            case "diconde":
+                return "application/dicom";
             default:
                 return "image/" + fileExtension.toLowerCase();
         }

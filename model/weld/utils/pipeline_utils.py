@@ -6,6 +6,11 @@ import cv2
 import numpy as np
 
 try:
+    import pydicom
+except ImportError:  # pragma: no cover
+    pydicom = None
+
+try:
     import matplotlib
     from matplotlib import font_manager
     MATPLOTLIB_AVAILABLE = True
@@ -38,14 +43,46 @@ COLOR_PALETTE = [
     (255, 20, 147),
 ]
 
+DICOM_EXTENSIONS = {".dcm", ".dicom", ".dic", ".diconde"}
+
 
 def load_image(image_path: Path) -> np.ndarray:
     """读取图像并标准化通道数"""
+    if image_path.suffix.lower() in DICOM_EXTENSIONS:
+        image = load_dicom_image(image_path)
+        return ensure_color(image)
+
     image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise ValueError(f"无法读取图像: {image_path}")
     image = normalize_input_image(image)
     return ensure_color(image)
+
+
+def load_dicom_image(image_path: Path) -> np.ndarray:
+    """读取 DICOM，并将其归一化为模型可消费的 8bit 灰度图。"""
+    if pydicom is None:
+        raise ValueError("pydicom 未安装，无法读取 DICOM")
+
+    ds = pydicom.dcmread(str(image_path), force=True)
+    if not hasattr(ds, "PixelData"):
+        raise ValueError(f"DICOM 缺少 PixelData: {image_path}")
+
+    image = ds.pixel_array
+    if image.ndim == 3:
+        image = image[0]
+    elif image.ndim == 4:
+        image = image[0, 0]
+
+    image = image.astype(np.float32)
+    slope = float(getattr(ds, "RescaleSlope", 1.0))
+    intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+    image = image * slope + intercept
+
+    if str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
+        image = image.max() + image.min() - image
+
+    return cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
 
 def normalize_input_image(image: np.ndarray) -> np.ndarray:
