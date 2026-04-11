@@ -54,6 +54,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
 
   // 缓存全图统计信息
   const imageStatsRef = useRef<ImageStats | null>(null);
+  const initialWindowRef = useRef<{ ww: number; wl: number }>({ ww: 255, wl: 128 });
 
   // 节流控制
   const lastCalcTime = useRef<number>(0);
@@ -175,9 +176,13 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
         const initialWindow = getEditorInitialWindow(cached);
 
         imageStatsRef.current = cached.stats;
-        setWindowData({
+        initialWindowRef.current = {
           ww: Math.round(initialWindow.ww),
           wl: Math.round(initialWindow.wl),
+        };
+        setWindowData({
+          ww: initialWindowRef.current.ww,
+          wl: initialWindowRef.current.wl,
         });
         grayDataVersionRef.current = myVersion;
         setRawGrayData(cached.rawData);
@@ -338,15 +343,7 @@ export const useWindowLevelTool = ({ activeTool, scale, imageFile, rotation = 0,
   // 重置窗口
   // ==========================================================================
   const resetWindow = useCallback(() => {
-    const stats = imageStatsRef.current;
-
-    if (stats) {
-      const resetWW = stats.max - stats.min;
-      const resetWL = (stats.max + stats.min) / 2;
-      updateWindowLevel(resetWW, resetWL);
-    } else {
-      updateWindowLevel(255, 128);
-    }
+    updateWindowLevel(initialWindowRef.current.ww, initialWindowRef.current.wl);
   }, [updateWindowLevel]);
 
   // ==========================================================================

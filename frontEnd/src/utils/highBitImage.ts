@@ -166,13 +166,7 @@ export function getFullRangeWindowFromStats(stats: ImageStats): WindowLevelValue
 }
 
 export function getEditorInitialWindow(entry: DecodedGrayscaleImage): WindowLevelValue {
-  if (entry.isHighBit || entry.format === "dicom") {
-    return getAutoWindowFromStats(entry.stats);
-  }
-  return {
-    ww: 255,
-    wl: 128,
-  };
+  return getAutoWindowFromStats(entry.stats);
 }
 
 export function getPreviewInitialWindow(entry: DecodedGrayscaleImage): WindowLevelValue {
@@ -253,10 +247,7 @@ function makeDecodedEntry(
     format,
     isHighBit: bitDepth > 8,
     stats,
-    suggestedInitialWindow:
-      bitDepth > 8 || format === "dicom"
-        ? getAutoWindowFromStats(stats)
-        : { ww: 255, wl: 128 },
+    suggestedInitialWindow: getAutoWindowFromStats(stats),
   };
 }
 

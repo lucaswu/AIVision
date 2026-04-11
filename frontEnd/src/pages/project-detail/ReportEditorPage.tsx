@@ -2371,6 +2371,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setRotation(selectedFile.CorrectionRotation ?? 0);
       setFlipH(selectedFile.CorrectionFlip ? -1 : 1);
       setFlipV(1);
+      setIsNegative(true);
       setPosition({ x: 0, y: 0 });
       setCalibrateLine(null);
       setOriginPoint(null);
@@ -2522,7 +2523,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
-  const [isNegative, setIsNegative] = useState(false);
+  const [isNegative, setIsNegative] = useState(true);
 
   const handleSave = async () => {
     if (!selectedFile) return;
@@ -3602,13 +3603,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'windowing' ? '#1890ff' : 'transparent' }}
               />
             </Tooltip>
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="负片">
+            <Tooltip
+              getPopupContainer={() => editorContainerRef.current || document.body}
+              title={isNegative ? '负片（已开启）' : '负片（已关闭）'}
+            >
               <Button
                 type={isNegative ? 'primary' : 'text'}
                 ghost={!isNegative}
                 onClick={() => setIsNegative(!isNegative)}
                 icon={<img src="/negative.svg" alt="negative" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
-                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isNegative ? '#1890ff' : 'transparent' }} /></Tooltip>
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isNegative ? '#1890ff' : 'transparent' }}
+              />
+            </Tooltip>
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
             <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="缺陷标记">
