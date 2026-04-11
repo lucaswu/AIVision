@@ -216,13 +216,31 @@ function getDefaultFloatingActionBarPosition(
 ) {
   return clampFloatingActionBarPosition(
     {
-      x: (containerWidth - barWidth) / 2,
+      x: containerWidth - barWidth - FLOATING_ACTION_BAR_MARGIN,
       y: containerHeight - barHeight - FLOATING_ACTION_BAR_BOTTOM_OFFSET,
     },
     containerWidth,
     containerHeight,
     barWidth,
     barHeight
+  );
+}
+
+function getDefaultFloatingReviewPanelPosition(
+  containerWidth: number,
+  containerHeight: number,
+  panelWidth: number,
+  panelHeight: number
+) {
+  return clampFloatingActionBarPosition(
+    {
+      x: containerWidth - panelWidth - FLOATING_ACTION_BAR_MARGIN,
+      y: FLOATING_ACTION_BAR_MARGIN,
+    },
+    containerWidth,
+    containerHeight,
+    panelWidth,
+    panelHeight
   );
 }
 
@@ -457,7 +475,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const viewerAreaRef = useRef<HTMLDivElement>(null);
   const floatingActionBarRef = useRef<HTMLDivElement>(null);
+  const floatingReviewPanelRef = useRef<HTMLDivElement>(null);
   const floatingActionBarDragRef = useRef({
+    active: false,
+    pointerId: -1,
+    startPointer: { x: 0, y: 0 },
+    startPosition: { x: 0, y: 0 },
+  });
+  const floatingReviewPanelDragRef = useRef({
     active: false,
     pointerId: -1,
     startPointer: { x: 0, y: 0 },
@@ -466,6 +491,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [floatingActionBarPosition, setFloatingActionBarPosition] = useState<{ x: number; y: number } | null>(null);
   const [isFloatingActionBarDragging, setIsFloatingActionBarDragging] = useState(false);
+  const [floatingReviewPanelPosition, setFloatingReviewPanelPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isFloatingReviewPanelDragging, setIsFloatingReviewPanelDragging] = useState(false);
 
   useEffect(() => {
     const handleFullScreenChange = () => {
@@ -483,6 +510,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setIsFloatingActionBarDragging(false);
       floatingActionBarDragRef.current.active = false;
       floatingActionBarDragRef.current.pointerId = -1;
+      setFloatingReviewPanelPosition(null);
+      setIsFloatingReviewPanelDragging(false);
+      floatingReviewPanelDragRef.current.active = false;
+      floatingReviewPanelDragRef.current.pointerId = -1;
     }
   }, [selectedFile]);
 
@@ -543,6 +574,67 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     return () => {
       cancelAnimationFrame(frameId);
       window.removeEventListener('resize', syncFloatingActionBarPosition);
+      resizeObserver?.disconnect();
+    };
+  }, [selectedFile, isFullScreen]);
+
+  useEffect(() => {
+    if (!selectedFile) return;
+
+    let frameId = 0;
+    const syncFloatingReviewPanelPosition = () => {
+      cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        const container = viewerAreaRef.current;
+        const panel = floatingReviewPanelRef.current;
+        if (!container || !panel) return;
+
+        const containerRect = container.getBoundingClientRect();
+        const panelRect = panel.getBoundingClientRect();
+        if (containerRect.width <= 0 || containerRect.height <= 0 || panelRect.width <= 0 || panelRect.height <= 0) {
+          return;
+        }
+
+        setFloatingReviewPanelPosition(prev => {
+          const nextPosition = prev
+            ? clampFloatingActionBarPosition(
+                prev,
+                containerRect.width,
+                containerRect.height,
+                panelRect.width,
+                panelRect.height
+              )
+            : getDefaultFloatingReviewPanelPosition(
+                containerRect.width,
+                containerRect.height,
+                panelRect.width,
+                panelRect.height
+              );
+
+          if (prev && prev.x === nextPosition.x && prev.y === nextPosition.y) {
+            return prev;
+          }
+          return nextPosition;
+        });
+      });
+    };
+
+    syncFloatingReviewPanelPosition();
+
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => syncFloatingReviewPanelPosition())
+      : null;
+
+    if (resizeObserver) {
+      if (viewerAreaRef.current) resizeObserver.observe(viewerAreaRef.current);
+      if (floatingReviewPanelRef.current) resizeObserver.observe(floatingReviewPanelRef.current);
+    }
+
+    window.addEventListener('resize', syncFloatingReviewPanelPosition);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', syncFloatingReviewPanelPosition);
       resizeObserver?.disconnect();
     };
   }, [selectedFile, isFullScreen]);
@@ -620,6 +712,71 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const handleFloatingActionBarLostCapture = (e: React.PointerEvent<HTMLDivElement>) => {
     stopFloatingActionBarDrag(e.pointerId);
+  };
+
+  const handleFloatingReviewPanelPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !floatingReviewPanelPosition) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    floatingReviewPanelDragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startPointer: { x: e.clientX, y: e.clientY },
+      startPosition: floatingReviewPanelPosition,
+    };
+    setIsFloatingReviewPanelDragging(true);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+
+  const handleFloatingReviewPanelPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = floatingReviewPanelDragRef.current;
+    const container = viewerAreaRef.current;
+    const panel = floatingReviewPanelRef.current;
+    if (!dragState.active || dragState.pointerId !== e.pointerId || !container || !panel) return;
+
+    e.preventDefault();
+    const containerRect = container.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const nextPosition = clampFloatingActionBarPosition(
+      {
+        x: dragState.startPosition.x + (e.clientX - dragState.startPointer.x),
+        y: dragState.startPosition.y + (e.clientY - dragState.startPointer.y),
+      },
+      containerRect.width,
+      containerRect.height,
+      panelRect.width,
+      panelRect.height
+    );
+
+    setFloatingReviewPanelPosition(prev => {
+      if (prev && prev.x === nextPosition.x && prev.y === nextPosition.y) {
+        return prev;
+      }
+      return nextPosition;
+    });
+  };
+
+  const stopFloatingReviewPanelDrag = (pointerId: number) => {
+    if (floatingReviewPanelDragRef.current.pointerId !== pointerId) return;
+    floatingReviewPanelDragRef.current.active = false;
+    floatingReviewPanelDragRef.current.pointerId = -1;
+    setIsFloatingReviewPanelDragging(false);
+  };
+
+  const handleFloatingReviewPanelPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (floatingReviewPanelDragRef.current.pointerId !== e.pointerId) return;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    stopFloatingReviewPanelDrag(e.pointerId);
+  };
+
+  const handleFloatingReviewPanelPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    stopFloatingReviewPanelDrag(e.pointerId);
+  };
+
+  const handleFloatingReviewPanelLostCapture = (e: React.PointerEvent<HTMLDivElement>) => {
+    stopFloatingReviewPanelDrag(e.pointerId);
   };
 
   //  坐标原点状态管理
@@ -2901,6 +3058,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     return JSON.stringify(current) === JSON.stringify(originalDefectsRef.current);
   }, [defectRects, defectPolygons, defectCircles, pixelRatio, selectedFile]);
 
+  const getEditorPopupContainer = () => editorContainerRef.current || document.body;
+
   // 切换单个缺陷项的展开/收起状态
   const toggleDefectExpand = (key: string) => {
     setExpandedDefects(prev => {
@@ -3045,6 +3204,294 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       </div>
     );
   };
+
+  const renderReviewInfoPanelContent = () => (
+    <Space direction="vertical" style={{ width: '100%' }} size={24}>
+      <div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            marginBottom: 12,
+            cursor: 'pointer',
+            userSelect: 'none',
+            backgroundColor: '#e6f7ff',
+            padding: '8px 12px',
+            borderRadius: '4px'
+          }}
+          onClick={() => setShowFilmInfo(!showFilmInfo)}
+        >
+          {showFilmInfo ?
+            <UpOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} /> :
+            <DownOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} />
+          }
+          <Title level={5} style={{ margin: 0, fontSize: '15px', flex: 1 }}>底片信息</Title>
+          <Tooltip title="重置底片信息" getPopupContainer={getEditorPopupContainer}>
+            <Button
+              type="text"
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={(e) => { e.stopPropagation(); handleResetFilmInfo(); }}
+            />
+          </Tooltip>
+        </div>
+
+        {showFilmInfo && (
+          <Form
+            form={filmInfoForm}
+            layout="horizontal"
+            size="small"
+            labelCol={{ style: { width: '7em' } }}
+            wrapperCol={{ style: { flex: 1, minWidth: 0 } }}
+            labelAlign="left"
+            style={{ padding: '0 8px' }}
+            onValuesChange={autoSaveFilmInfo}
+          >
+            <Form.Item label="底片像素值" style={{ marginBottom: 12 }}>
+              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmPixelValue !== currentValues.filmPixelValue}>
+                {({ getFieldValue }) => {
+                  const filmPixelValue = getFieldValue('filmPixelValue');
+                  return (
+                    <div
+                      style={{
+                        width: '100%',
+                        minHeight: 24,
+                        padding: '1px 11px',
+                        border: '1px solid #d9d9d9',
+                        borderRadius: 6,
+                        background: '#fafafa',
+                        lineHeight: '22px',
+                      }}
+                    >
+                      {filmPixelValue || <Text type="secondary">暂无结果</Text>}
+                    </div>
+                  );
+                }}
+              </Form.Item>
+              <Form.Item name="filmPixelValue" hidden>
+                <Input />
+              </Form.Item>
+            </Form.Item>
+            <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
+              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
+                {({ getFieldValue }) => {
+                  const resolution = getFieldValue('resolution');
+                  return (
+                    <div
+                      style={{
+                        width: '100%',
+                        minHeight: 24,
+                        padding: '1px 11px',
+                        border: '1px solid #d9d9d9',
+                        borderRadius: 6,
+                        background: '#fafafa',
+                        lineHeight: '22px',
+                      }}
+                    >
+                      {resolution || <Text type="secondary">暂无结果</Text>}
+                    </div>
+                  );
+                }}
+              </Form.Item>
+              <Form.Item name="resolution" hidden>
+                <Input />
+              </Form.Item>
+            </Form.Item>
+            <Form.Item label="规格" style={{ marginBottom: 12 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'specification' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'specification'} />}
+                    type={ocrTargetField === 'specification' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('specification')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'specification')}
+                  />
+                </Tooltip>
+                <Form.Item name="specification" noStyle>
+                  <Input placeholder="输入规格" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="检验日期" style={{ marginBottom: 12 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'inspectionDate' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'inspectionDate'} />}
+                    type={ocrTargetField === 'inspectionDate' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('inspectionDate')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'inspectionDate')}
+                  />
+                </Tooltip>
+                <Form.Item name="inspectionDate" noStyle>
+                  <Input placeholder="输入检验日期" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'weldId'} />}
+                    type={ocrTargetField === 'weldId' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('weldId')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'weldId')}
+                  />
+                </Tooltip>
+                <Form.Item name="weldId" noStyle>
+                  <Input placeholder="输入焊口编号" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="片号" style={{ marginBottom: 12 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'filmNumber' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'filmNumber'} />}
+                    type={ocrTargetField === 'filmNumber' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('filmNumber')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'filmNumber')}
+                  />
+                </Tooltip>
+                <Form.Item name="filmNumber" noStyle>
+                  <Input placeholder="输入片号" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
+              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
+                {({ getFieldValue }) => {
+                  const filmDensity = getFieldValue('filmDensity');
+                  return (
+                    <div
+                      style={{
+                        width: '100%',
+                        minHeight: 24,
+                        padding: '1px 11px',
+                        border: '1px solid #d9d9d9',
+                        borderRadius: 6,
+                        background: '#fafafa',
+                        lineHeight: '22px',
+                      }}
+                    >
+                      {filmDensity || <Text type="secondary">暂无结果</Text>}
+                    </div>
+                  );
+                }}
+              </Form.Item>
+              <Form.Item name="filmDensity" hidden>
+                <Input />
+              </Form.Item>
+            </Form.Item>
+            <Form.Item label="像质计灵敏度" style={{ marginBottom: 8 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Form.Item name="sensitivity" noStyle>
+                  <Input placeholder="输入像质计灵敏度" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label=" " colon={false} style={{ marginBottom: 0 }}>
+              <Button
+                size="small"
+                type={showIqiWires ? 'primary' : 'default'}
+                disabled={!selectedFile || iqiWireLines.length === 0}
+                onClick={() => setShowIqiWires(v => !v)}
+              >
+                {showIqiWires ? '隐藏结果' : '显示结果'}
+              </Button>
+            </Form.Item>
+          </Form>
+        )}
+      </div>
+
+      <Divider style={{ margin: '0' }} />
+
+      <div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            marginBottom: 12,
+            cursor: 'pointer',
+            userSelect: 'none',
+            backgroundColor: '#e6f7ff',
+            padding: '8px 12px',
+            borderRadius: '4px'
+          }}
+          onClick={() => setShowDefectList(!showDefectList)}
+        >
+          {showDefectList ?
+            <UpOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} /> :
+            <DownOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} />
+          }
+          <Title level={5} style={{ margin: 0, fontSize: '15px', flex: 1 }}>缺陷信息</Title>
+          <Space size={2}>
+            <Tooltip title="撤销 (Undo)" getPopupContainer={getEditorPopupContainer}>
+              <Button
+                type="text"
+                size="small"
+                icon={<UndoOutlined />}
+                disabled={historyIndex <= 0}
+                onClick={(e) => { e.stopPropagation(); handleUndo(); }}
+              />
+            </Tooltip>
+            <Tooltip title="重做 (Redo)" getPopupContainer={getEditorPopupContainer}>
+              <Button
+                type="text"
+                size="small"
+                icon={<RedoOutlined />}
+                disabled={historyIndex >= history.length - 1}
+                onClick={(e) => { e.stopPropagation(); handleRedo(); }}
+              />
+            </Tooltip>
+            <Tooltip title="重置缺陷信息" getPopupContainer={getEditorPopupContainer}>
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined />}
+                disabled={isResetDisabled}
+                onClick={(e) => { e.stopPropagation(); handleResetDefects(); }}
+              />
+            </Tooltip>
+          </Space>
+        </div>
+
+        {showDefectList && (
+          <div style={{ display: 'flex', flexDirection: 'column', padding: '0 4px' }}>
+            {(() => {
+              let globalCount = 0;
+              return (
+                <>
+                  {defectRects.map((rect, idx) => {
+                    const comp = renderDefectCard(rect, idx, 'rect', globalCount);
+                    globalCount++;
+                    return comp;
+                  })}
+                  {defectPolygons.map((poly, idx) => {
+                    const comp = renderDefectCard(poly, idx, 'polygon', globalCount);
+                    globalCount++;
+                    return comp;
+                  })}
+                  {defectCircles.map((circle, idx) => {
+                    const comp = renderDefectCard(circle, idx, 'circle', globalCount);
+                    globalCount++;
+                    return comp;
+                  })}
+
+                  {globalCount === 0 && (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无缺陷标注" />
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+    </Space>
+  );
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
@@ -4349,6 +4796,60 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <Button type="primary" onClick={handleSave} style={{ borderRadius: '4px', height: '36px', padding: '0 20px', background: '#1890ff' }} icon={<SaveOutlined />}>保存并确认</Button>
               </div>
             )}
+
+            {selectedFile && (
+              <div
+                ref={floatingReviewPanelRef}
+                style={{
+                  position: 'absolute',
+                  left: floatingReviewPanelPosition?.x ?? 0,
+                  top: floatingReviewPanelPosition?.y ?? 0,
+                  visibility: floatingReviewPanelPosition ? 'visible' : 'hidden',
+                  width: 'min(340px, calc(100% - 32px))',
+                  maxHeight: 'calc(100% - 32px)',
+                  background: 'rgba(255, 255, 255, 0.98)',
+                  border: '1px solid #e8e8e8',
+                  borderRadius: 12,
+                  boxShadow: isFloatingReviewPanelDragging ? '0 12px 28px rgba(0,0,0,0.22)' : '0 8px 24px rgba(0,0,0,0.16)',
+                  zIndex: 120,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  backdropFilter: 'blur(8px)',
+                }}
+              >
+                <div
+                  onPointerDown={handleFloatingReviewPanelPointerDown}
+                  onPointerMove={handleFloatingReviewPanelPointerMove}
+                  onPointerUp={handleFloatingReviewPanelPointerUp}
+                  onPointerCancel={handleFloatingReviewPanelPointerCancel}
+                  onLostPointerCapture={handleFloatingReviewPanelLostCapture}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 14px',
+                    borderBottom: '1px solid #f0f0f0',
+                    cursor: isFloatingReviewPanelDragging ? 'grabbing' : 'grab',
+                    userSelect: 'none',
+                    touchAction: 'none',
+                    background: 'linear-gradient(180deg, #ffffff 0%, #fafafa 100%)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Space size={8}>
+                    <DragOutlined style={{ color: '#8c8c8c' }} />
+                    <Text strong style={{ color: '#262626' }}>审核信息</Text>
+                  </Space>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    拖动面板
+                  </Text>
+                </div>
+                <div style={{ padding: '16px 14px', overflowY: 'auto' }}>
+                  {renderReviewInfoPanelContent()}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 悬浮工具条 */}
@@ -4391,322 +4892,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
       </Content >
-
-      {/* 右侧审核信息 (重构区域) */}
-      < Sider width={256} theme="light" style={{ borderLeft: "1px solid #f0f0f0", display: 'flex', flexDirection: 'column', background: '#fff' }}>
-        {/* 设置 height: 100% 和 overflowY: auto，
-            确保内容超出时，这个容器内部出现滚动条，而不是把页面撑开。
-           */}
-        < div style={{ flex: 1, padding: '20px 16px', overflowY: 'auto', height: '100%' }}>
-          <Space direction="vertical" style={{ width: '100%' }} size={24}>
-
-            {/* 1. 底片信息 (垂直布局，可编辑，带折叠) */}
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  marginBottom: 12,
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  backgroundColor: '#e6f7ff', // 与左侧选中背景色一致
-                  padding: '8px 12px',
-                  borderRadius: '4px'
-                }}
-                onClick={() => setShowFilmInfo(!showFilmInfo)}
-              >
-                {/* 图标在前 */}
-                {showFilmInfo ?
-                  <UpOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} /> :
-                  <DownOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} />
-                }
-                <Title level={5} style={{ margin: 0, fontSize: '15px', flex: 1 }}>底片信息</Title>
-                <Tooltip title="重置底片信息">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    onClick={(e) => { e.stopPropagation(); handleResetFilmInfo(); }}
-                  />
-                </Tooltip>
-              </div>
-
-              {/* 内容根据状态显示或隐藏 */}
-              {showFilmInfo && (
-                // 布局改为 horizontal，并设置 labelCol 和 wrapperCol
-                <Form
-                  form={filmInfoForm}
-                  layout="horizontal"
-                  size="small"
-                  labelCol={{ style: { width: '7em' } }}
-                  wrapperCol={{ style: { flex: 1, minWidth: 0 } }}
-                  labelAlign="left"
-                  style={{ padding: '0 8px' }}
-                  onValuesChange={autoSaveFilmInfo}
-                >
-                  <Form.Item label="底片像素值" style={{ marginBottom: 12 }}>
-                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmPixelValue !== currentValues.filmPixelValue}>
-                      {({ getFieldValue }) => {
-                        const filmPixelValue = getFieldValue('filmPixelValue');
-                        return (
-                          <div
-                            style={{
-                              width: '100%',
-                              minHeight: 24,
-                              padding: '1px 11px',
-                              border: '1px solid #d9d9d9',
-                              borderRadius: 6,
-                              background: '#fafafa',
-                              lineHeight: '22px',
-                            }}
-                          >
-                            {filmPixelValue || <Text type="secondary">暂无结果</Text>}
-                          </div>
-                        );
-                      }}
-                    </Form.Item>
-                    <Form.Item name="filmPixelValue" hidden>
-                      <Input />
-                    </Form.Item>
-                  </Form.Item>
-                  <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
-                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
-                      {({ getFieldValue }) => {
-                        const resolution = getFieldValue('resolution');
-                        return (
-                          <div
-                            style={{
-                              width: '100%',
-                              minHeight: 24,
-                              padding: '1px 11px',
-                              border: '1px solid #d9d9d9',
-                              borderRadius: 6,
-                              background: '#fafafa',
-                              lineHeight: '22px',
-                            }}
-                          >
-                            {resolution || <Text type="secondary">暂无结果</Text>}
-                          </div>
-                        );
-                      }}
-                    </Form.Item>
-                    <Form.Item name="resolution" hidden>
-                      <Input />
-                    </Form.Item>
-                  </Form.Item>
-                  <Form.Item label="规格" style={{ marginBottom: 12 }}>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Tooltip title={ocrTargetField === 'specification' ? '点击取消OCR' : 'OCR框选识别'}>
-                        <Button
-                          size="small"
-                          icon={<ScanOutlined spin={ocrLoadingField === 'specification'} />}
-                          type={ocrTargetField === 'specification' ? 'primary' : 'default'}
-                          onClick={() => handleOcrButtonClick('specification')}
-                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'specification')}
-                        />
-                      </Tooltip>
-                      <Form.Item name="specification" noStyle>
-                        <Input placeholder="输入规格" />
-                      </Form.Item>
-                    </Space.Compact>
-                  </Form.Item>
-                  <Form.Item label="检验日期" style={{ marginBottom: 12 }}>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Tooltip title={ocrTargetField === 'inspectionDate' ? '点击取消OCR' : 'OCR框选识别'}>
-                        <Button
-                          size="small"
-                          icon={<ScanOutlined spin={ocrLoadingField === 'inspectionDate'} />}
-                          type={ocrTargetField === 'inspectionDate' ? 'primary' : 'default'}
-                          onClick={() => handleOcrButtonClick('inspectionDate')}
-                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'inspectionDate')}
-                        />
-                      </Tooltip>
-                      <Form.Item name="inspectionDate" noStyle>
-                        <Input placeholder="输入检验日期" />
-                      </Form.Item>
-                    </Space.Compact>
-                  </Form.Item>
-                  <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'}>
-                        <Button
-                          size="small"
-                          icon={<ScanOutlined spin={ocrLoadingField === 'weldId'} />}
-                          type={ocrTargetField === 'weldId' ? 'primary' : 'default'}
-                          onClick={() => handleOcrButtonClick('weldId')}
-                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'weldId')}
-                        />
-                      </Tooltip>
-                      <Form.Item name="weldId" noStyle>
-                        <Input placeholder="输入焊口编号" />
-                      </Form.Item>
-                    </Space.Compact>
-                  </Form.Item>
-                  <Form.Item label="片号" style={{ marginBottom: 12 }}>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Tooltip title={ocrTargetField === 'filmNumber' ? '点击取消OCR' : 'OCR框选识别'}>
-                        <Button
-                          size="small"
-                          icon={<ScanOutlined spin={ocrLoadingField === 'filmNumber'} />}
-                          type={ocrTargetField === 'filmNumber' ? 'primary' : 'default'}
-                          onClick={() => handleOcrButtonClick('filmNumber')}
-                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'filmNumber')}
-                        />
-                      </Tooltip>
-                      <Form.Item name="filmNumber" noStyle>
-                        <Input placeholder="输入片号" />
-                      </Form.Item>
-                    </Space.Compact>
-                  </Form.Item>
-                  <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
-                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
-                      {({ getFieldValue }) => {
-                        const filmDensity = getFieldValue('filmDensity');
-                        return (
-                          <div
-                            style={{
-                              width: '100%',
-                              minHeight: 24,
-                              padding: '1px 11px',
-                              border: '1px solid #d9d9d9',
-                              borderRadius: 6,
-                              background: '#fafafa',
-                              lineHeight: '22px',
-                            }}
-                          >
-                            {filmDensity || <Text type="secondary">暂无结果</Text>}
-                          </div>
-                        );
-                      }}
-                    </Form.Item>
-                    <Form.Item name="filmDensity" hidden>
-                      <Input />
-                    </Form.Item>
-                  </Form.Item>
-                  <Form.Item label="像质计灵敏度" style={{ marginBottom: 8 }}>
-                    <Space.Compact style={{ width: '100%' }}>
-                      {/* <Tooltip title={ocrTargetField === 'sensitivity' ? '点击取消OCR' : 'OCR框选识别'}>
-                        <Button
-                          size="small"
-                          icon={<ScanOutlined spin={ocrLoadingField === 'sensitivity'} />}
-                          type={ocrTargetField === 'sensitivity' ? 'primary' : 'default'}
-                          onClick={() => handleOcrButtonClick('sensitivity')}
-                          disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'sensitivity')}
-                        />
-                      </Tooltip> */}
-                      <Form.Item name="sensitivity" noStyle>
-                        <Input placeholder="输入像质计灵敏度" />
-                      </Form.Item>
-                    </Space.Compact>
-                  </Form.Item>
-                  <Form.Item label=" " colon={false} style={{ marginBottom: 0 }}>
-                    <Button
-                      size="small"
-                      type={showIqiWires ? 'primary' : 'default'}
-                      disabled={!selectedFile || iqiWireLines.length === 0}
-                      onClick={() => setShowIqiWires(v => !v)}
-                    >
-                      {showIqiWires ? '隐藏结果' : '显示结果'}
-                    </Button>
-                  </Form.Item>
-                </Form>
-              )}
-            </div>
-
-            <Divider style={{ margin: '0' }} />
-
-            {/* 2. 缺陷信息 (卡片列表布局，带折叠功能) */}
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  marginBottom: 12,
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                  backgroundColor: '#e6f7ff', // 与左侧选中背景色一致
-                  padding: '8px 12px',
-                  borderRadius: '4px'
-                }}
-                onClick={() => setShowDefectList(!showDefectList)}
-              >
-                {/* 图标在前 */}
-                {showDefectList ?
-                  <UpOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} /> :
-                  <DownOutlined style={{ fontSize: '12px', color: '#1890ff', marginRight: 8 }} />
-                }
-                <Title level={5} style={{ margin: 0, fontSize: '15px', flex: 1 }}>缺陷信息</Title>
-                <Space size={2}>
-                  <Tooltip title="撤销 (Undo)">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<UndoOutlined />}
-                      disabled={historyIndex <= 0}
-                      onClick={(e) => { e.stopPropagation(); handleUndo(); }}
-                    />
-                  </Tooltip>
-                  <Tooltip title="重做 (Redo)">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<RedoOutlined />}
-                      disabled={historyIndex >= history.length - 1}
-                      onClick={(e) => { e.stopPropagation(); handleRedo(); }}
-                    />
-                  </Tooltip>
-                  <Tooltip title="重置缺陷信息">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<ReloadOutlined />}
-                      disabled={isResetDisabled}
-                      onClick={(e) => { e.stopPropagation(); handleResetDefects(); }}
-                    />
-                  </Tooltip>
-                </Space>
-              </div>
-
-              {showDefectList && (
-                <div style={{ display: 'flex', flexDirection: 'column', padding: '0 4px' }}>
-                  {/* 渲染所有类型的缺陷 */}
-                  {(() => {
-                    let globalCount = 0;
-                    return (
-                      <>
-                        {/* 矩形 */}
-                        {defectRects.map((rect, idx) => {
-                          const comp = renderDefectCard(rect, idx, 'rect', globalCount);
-                          globalCount++;
-                          return comp;
-                        })}
-                        {/* 多边形 */}
-                        {defectPolygons.map((poly, idx) => {
-                          const comp = renderDefectCard(poly, idx, 'polygon', globalCount);
-                          globalCount++;
-                          return comp;
-                        })}
-                        {/* 圆形 */}
-                        {defectCircles.map((circle, idx) => {
-                          const comp = renderDefectCard(circle, idx, 'circle', globalCount);
-                          globalCount++;
-                          return comp;
-                        })}
-
-                        {globalCount === 0 && (
-                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无缺陷标注" />
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-
-
-          </Space>
-        </div >
-      </Sider >
 
       {/* 测量距离前的尺寸定标确认弹窗 */}
       < Modal
