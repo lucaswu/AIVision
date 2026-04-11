@@ -7,6 +7,7 @@ interface GeometricMeasureToolProps {
   width: number;
   height: number;
   pixelRatio?: number;
+  hasCalibration?: boolean;
   scale?: number;
   rotation?: number; 
   flipH?: number;    
@@ -21,7 +22,8 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
   imageUrl,
   width,
   height,
-  pixelRatio = 1,
+  pixelRatio = 0,
+  hasCalibration = false,
   scale = 1,
   rotation = 0,
   flipH = 1,    
@@ -111,7 +113,9 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
     if (imageRatioY !== undefined) dy *= imageRatioY;
 
     const distPx = Math.sqrt(dx * dx + dy * dy);
-    const lengthMm = (distPx * pixelRatio).toFixed(2);
+    const lengthValue = hasCalibration
+      ? (distPx * pixelRatio).toFixed(2)
+      : distPx.toFixed(2);
     // 角度计算使用原始的 dx dy 以反映屏幕上的角度
     const screenDx = currPoint.x - startPoint.x;
     const screenDy = currPoint.y - startPoint.y;
@@ -119,10 +123,11 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
     if (isNaN(angleVal)) angleVal = 0;
 
     return {
-      length: lengthMm,
+      length: lengthValue,
+      unit: hasCalibration ? 'mm' : 'px',
       angle: angleVal.toFixed(2),
     };
-  }, [startPoint, currPoint, pixelRatio, imageRatioX, imageRatioY]);
+  }, [startPoint, currPoint, pixelRatio, hasCalibration, imageRatioX, imageRatioY]);
 
   // 文字位置计算
   const textLayout = useMemo(() => {
@@ -205,7 +210,7 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
                 style={{ textShadow: '1px 1px 2px #000' }}
                 transform={textLayout.transform}
               >
-                <tspan x={textLayout.x} dy={-1.2 * (12 / scale) + "px"}>长度: {measureData.length}mm</tspan>
+                <tspan x={textLayout.x} dy={-1.2 * (12 / scale) + "px"}>长度: {measureData.length}{measureData.unit}</tspan>
                 <tspan x={textLayout.x} dy={2.4 * (12 / scale) + "px"}>角度: {measureData.angle}°</tspan>
               </text>
             )}

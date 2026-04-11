@@ -314,17 +314,17 @@ function forwardTransformPoint(
  * 根据缺陷框X轴范围和原点位置，生成位置描述字符串。
  * 格式: +->左边距离~右边距离{px|mm}
  * 左右距离 = 边到原点的像素差，向右为正，向左为负。
- * 若 pixelRatio > 0 且 !== 1，则乘以 pixelRatio 并以 mm 为单位；否则以 px 为单位。
+ * 若 pixelRatio > 0，则乘以 pixelRatio 并以 mm 为单位；否则以 px 为单位。
  * @param minX   缺陷框最小 X 像素坐标（矫正后坐标系）
  * @param maxX   缺陷框最大 X 像素坐标（矫正后坐标系）
  * @param originX 0点的 X 像素坐标（矫正后坐标系）
- * @param pixelRatio 物理标定比例（mm/px），未标定时传 1
+ * @param pixelRatio 物理标定比例（mm/px），未标定时传 0
  * @param originLabel 0点来源标签：十字准心传 '+'，边缘标记传识别到的字母/数字（如 'C'、'1'）
  */
 function formatDefectPosition(minX: number, maxX: number, originX: number, pixelRatio: number, originLabel = '+'): string {
   const rawLeft = minX - originX;
   const rawRight = maxX - originX;
-  const calibrated = pixelRatio > 0 && pixelRatio !== 1;
+  const calibrated = pixelRatio > 0;
   if (calibrated) {
     const leftMm = (rawLeft * pixelRatio).toFixed(2);
     const rightMm = (rawRight * pixelRatio).toFixed(2);
@@ -627,7 +627,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [tempOrigin, setTempOrigin] = useState<{ x: number, y: number } | null>(null);
 
   // 标定相关状态
-  const [pixelRatio, setPixelRatio] = useState<number>(1);
+  const [pixelRatio, setPixelRatio] = useState<number>(0);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [calibrateLine, setCalibrateLine] = useState<{ x1: number, y1: number, x2: number, y2: number } | null>(null);
   const [calibrateModalVisible, setCalibrateModalVisible] = useState(false);
@@ -635,6 +635,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [actualLength, setActualLength] = useState<number | null>(null);
   // 测量距离前的尺寸定标确认弹窗
   const [calibratePromptModalVisible, setCalibratePromptModalVisible] = useState(false);
+  const [recalibratePromptModalVisible, setRecalibratePromptModalVisible] = useState(false);
   const [measureAfterCalibrate, setMeasureAfterCalibrate] = useState(false);
 
   // --- 缺陷绘制相关状态 ---
@@ -742,7 +743,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 原始数据引用 (用于不可用的Reset状态判断) ---
   const originalFilmInfoRef = useRef<any>({});
   const originalDefectsRef = useRef<HistorySnapshot>({
-    rects: [], polygons: [], circles: [], pixelRatio: 1
+    rects: [], polygons: [], circles: [], pixelRatio: 0
   });
 
   // --- 历史记录状态 ---
@@ -795,6 +796,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       updateHistoryState(nextHistory, nextHistory.length - 1);
     }
   };
+
+  const hasPixelCalibration = pixelRatio > 0;
 
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
@@ -1763,7 +1766,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   const handleCalibrateConfirm = () => {
-    if (actualLength && measuredPixelDistance > 0) {
+    if (actualLength && actualLength > 0 && measuredPixelDistance > 0) {
       const ratio = actualLength / measuredPixelDistance;
       const newPixelRatio = parseFloat(ratio.toFixed(4));
       
@@ -1773,6 +1776,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       message.success(`标定成功：1px ≈ ${newPixelRatio}mm`);
       setCalibrateModalVisible(false);
       setCalibrateLine(null);
+      setActualLength(null);
+      setMeasuredPixelDistance(0);
       // 如果是从测量距离触发的标定，标定完成后进入测量模式
       if (measureAfterCalibrate) {
         setActiveTool('measure');
@@ -1783,6 +1788,51 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     } else {
       message.warning('请输入有效的实际长度');
     }
+  };
+
+  const startCalibration = () => {
+    setCalibratePromptModalVisible(false);
+    setRecalibratePromptModalVisible(false);
+    setCalibrateModalVisible(false);
+    setMeasureAfterCalibrate(false);
+    setActualLength(null);
+    setMeasuredPixelDistance(0);
+    setCalibrateLine(null);
+    setActiveTool('calibrate');
+  };
+
+  const handleMeasureToolClick = () => {
+    if (activeTool === 'measure') {
+      setActiveTool('pan');
+      return;
+    }
+
+    setMeasureAfterCalibrate(false);
+    setCalibrateLine(null);
+    if (hasPixelCalibration) {
+      setMeasureAfterCalibrate(false);
+      setCalibratePromptModalVisible(false);
+      setActiveTool('measure');
+      return;
+    }
+
+    setCalibratePromptModalVisible(true);
+  };
+
+  const handleCalibrateToolClick = () => {
+    if (activeTool === 'calibrate') {
+      setActiveTool('pan');
+      setCalibrateLine(null);
+      return;
+    }
+
+    setMeasureAfterCalibrate(false);
+    if (hasPixelCalibration) {
+      setRecalibratePromptModalVisible(true);
+      return;
+    }
+
+    startCalibration();
   };
 
   // --- 位置和尺寸工具关闭：将手动标注的椭圆/原点保存到 DB 并更新本地状态 ---
@@ -1921,7 +1971,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       const trueW = rx2 - rx1;
       const trueH = ry2 - ry1;
       
-      const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+      const hasScale = hasPixelCalibration;
       let sizeStr = '';
       if (hasScale) {
         // px面积 * (mm/px)^2 = 真实面积 (mm^2)
@@ -1973,7 +2023,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         }
         areaPx = Math.abs(areaPx) / 2;
         
-        const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+        const hasScale = hasPixelCalibration;
         if (hasScale) {
           const areaMm2 = (areaPx * pixelRatio * pixelRatio).toFixed(2);
           sizeStr = `${areaMm2}mm²`;
@@ -2015,7 +2065,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       
       let sizeStr = '';
       const areaPx = Math.PI * trueR * trueR;
-      const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+      const hasScale = hasPixelCalibration;
       
       if (hasScale) {
         // 圆形真实面积 (mm^2)
@@ -2116,8 +2166,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       setDefectCircles([]);
       setDefectPolygons([]);
 
-      // 切换图片时，如果当前是测量距离工具，则重置为平移工具
-      if (activeTool === 'measure') {
+      // 切换图片时，定标和测量都回到初始化状态
+      if (activeTool === 'measure' || activeTool === 'calibrate') {
         setActiveTool('pan');
       }
 
@@ -2171,7 +2221,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               
               if (!sizeStr && geometry) {
                 try {
-                  const hasScale = (pixelRatio && pixelRatio > 0 && pixelRatio !== 1);
+                  const hasScale = hasPixelCalibration;
                   if (geometry.type === 'rect' && geometry.w && geometry.h) {
                     const areaPx = geometry.w * geometry.h;
                     if (hasScale) {
@@ -2288,7 +2338,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             rects: JSON.parse(JSON.stringify(loadedRects)),
             polygons: JSON.parse(JSON.stringify(loadedPolygons)),
             circles: JSON.parse(JSON.stringify(loadedCircles)),
-            pixelRatio: 1
+            pixelRatio: 0
           };
           originalDefectsRef.current = initialSnapshot;
 
@@ -2298,6 +2348,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           setDefectRects([]);
           setDefectCircles([]);
           setDefectPolygons([]);
+          const emptySnapshot = {
+            rects: [],
+            polygons: [],
+            circles: [],
+            pixelRatio: 0
+          };
+          originalDefectsRef.current = emptySnapshot;
+          updateHistoryState([emptySnapshot], 0);
         }
         // 加载完成后延迟标记，允许后续用户操作触发自动保存
         setTimeout(() => { isInitialLoadRef.current = false; }, 100);
@@ -2305,6 +2363,14 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         setDefectRects([]);
         setDefectCircles([]);
         setDefectPolygons([]);
+        const emptySnapshot = {
+          rects: [],
+          polygons: [],
+          circles: [],
+          pixelRatio: 0
+        };
+        originalDefectsRef.current = emptySnapshot;
+        updateHistoryState([emptySnapshot], 0);
         setTimeout(() => { isInitialLoadRef.current = false; }, 100);
       });
 
@@ -2366,13 +2432,19 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       autoFitFileIdRef.current = null; // 重置，允许新图片触发自动适配
       resetWindow();
       setScale(1);
-      setPixelRatio(1); // 每次切换图片，重置物理尺寸定标比例
+      setPixelRatio(0); // 每次切换图片，重置物理尺寸定标比例
       // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
       setRotation(selectedFile.CorrectionRotation ?? 0);
       setFlipH(selectedFile.CorrectionFlip ? -1 : 1);
       setFlipV(1);
       setIsNegative(true);
       setPosition({ x: 0, y: 0 });
+      setCalibratePromptModalVisible(false);
+      setRecalibratePromptModalVisible(false);
+      setCalibrateModalVisible(false);
+      setMeasureAfterCalibrate(false);
+      setMeasuredPixelDistance(0);
+      setActualLength(null);
       setCalibrateLine(null);
       setOriginPoint(null);
       setTempOrigin(null);
@@ -2402,7 +2474,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     const effectiveOriginLabel = originPoint
       ? '+'
       : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
-    const calibrated = pixelRatio > 0 && pixelRatio !== 1;
+    const calibrated = hasPixelCalibration;
     let changed = false;
 
     // 辅助：从 weldLocationShapes 取最近椭圆时钟位置
@@ -3654,14 +3726,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <Button
                 type={activeTool === 'measure' ? 'primary' : 'text'}
                 ghost={activeTool !== 'measure'} icon={<img src="/ruler.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
-                onClick={() => {
-                  if (activeTool === 'measure') {
-                    setActiveTool('pan');
-                  } else {
-                    // 弹出确认框询问是否需要尺寸定标
-                    setCalibratePromptModalVisible(true);
-                  }
-                }}
+                onClick={handleMeasureToolClick}
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'measure' ? '#1890ff' : 'transparent' }} /></Tooltip>
 
 
@@ -3709,10 +3774,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               type={activeTool === 'calibrate' ? 'primary' : 'text'}
               ghost={activeTool !== 'calibrate'}
               icon={<ColumnWidthOutlined />}
-              onClick={() => {
-                setActiveTool(activeTool === 'calibrate' ? 'pan' : 'calibrate');
-                setCalibrateLine(null);
-              }}
+              onClick={handleCalibrateToolClick}
               style={{
                 color: '#fff', fontSize: '12px', height: 28, padding: '0 12px',
                 background: activeTool === 'calibrate' ? '#1890ff' : '#303030',
@@ -3735,13 +3797,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <LinkOutlined style={{ transform: 'rotate(-45deg)', marginRight: 4 }} />
-              <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
-                <div>1px</div>
-                <div style={{ borderTop: '1px solid #595959', marginTop: 1 }}>
-                  {pixelRatio ? `${pixelRatio}mm` : '未标定'}
+                <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
+                  <div>1px</div>
+                  <div style={{ borderTop: '1px solid #595959', marginTop: 1 }}>
+                  {hasPixelCalibration ? `${pixelRatio}mm` : '未标定'}
+                  </div>
                 </div>
               </div>
-            </div>
 
             <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
               <AimOutlined style={{ color: '#1890ff', marginRight: 4 }} />
@@ -4625,6 +4687,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   width={imgSize.w}
                   height={imgSize.h}
                   pixelRatio={pixelRatio}
+                  hasCalibration={hasPixelCalibration}
                   scale={scale}
                   rotation={rotation}
                   flipH={flipH}
@@ -4774,7 +4837,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       < Modal
         title="尺寸定标确认"
         open={calibratePromptModalVisible}
-        onCancel={() => setCalibratePromptModalVisible(false)}
+        onCancel={() => {
+          setCalibratePromptModalVisible(false);
+          setMeasureAfterCalibrate(false);
+        }}
         footer={null}
         width={360}
         centered
@@ -4788,6 +4854,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           <Button
             onClick={() => {
               setCalibratePromptModalVisible(false);
+              setMeasureAfterCalibrate(false);
               setActiveTool('measure');
             }}
           >
@@ -4796,16 +4863,42 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           <Button
             type="primary"
             onClick={() => {
-              setCalibratePromptModalVisible(false);
               setMeasureAfterCalibrate(true);
-              setActiveTool('calibrate');
-              setCalibrateLine(null);
+              startCalibration();
             }}
           >
             是，先定标
           </Button>
         </div>
       </Modal >
+
+      <Modal
+        title="尺寸已定标"
+        open={recalibratePromptModalVisible}
+        onCancel={() => setRecalibratePromptModalVisible(false)}
+        footer={null}
+        width={360}
+        centered
+        maskClosable={false}
+        getContainer={() => editorContainerRef.current || document.body}
+      >
+        <div style={{ marginBottom: 24 }}>
+          <Text>当前图片已完成尺寸定标，是否重新定标？</Text>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={() => setRecalibratePromptModalVisible(false)}>
+            取消
+          </Button>
+          <Button
+            type="primary"
+            onClick={() => {
+              startCalibration();
+            }}
+          >
+            重新定标
+          </Button>
+        </div>
+      </Modal>
 
       {/* 4. 像素标定弹窗 */}
       < Modal
