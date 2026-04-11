@@ -187,6 +187,44 @@ interface HistorySnapshot {
 // --- 数学工具函数 ---
 const HANDLE_SIZE = 8;
 const ROTATE_HANDLE_OFFSET = 30;
+const FLOATING_ACTION_BAR_MARGIN = 16;
+const FLOATING_ACTION_BAR_BOTTOM_OFFSET = 50;
+
+function clampFloatingActionBarPosition(
+  position: { x: number; y: number },
+  containerWidth: number,
+  containerHeight: number,
+  barWidth: number,
+  barHeight: number
+) {
+  const minX = FLOATING_ACTION_BAR_MARGIN;
+  const minY = FLOATING_ACTION_BAR_MARGIN;
+  const maxX = Math.max(minX, containerWidth - barWidth - FLOATING_ACTION_BAR_MARGIN);
+  const maxY = Math.max(minY, containerHeight - barHeight - FLOATING_ACTION_BAR_MARGIN);
+
+  return {
+    x: Math.min(Math.max(position.x, minX), maxX),
+    y: Math.min(Math.max(position.y, minY), maxY),
+  };
+}
+
+function getDefaultFloatingActionBarPosition(
+  containerWidth: number,
+  containerHeight: number,
+  barWidth: number,
+  barHeight: number
+) {
+  return clampFloatingActionBarPosition(
+    {
+      x: (containerWidth - barWidth) / 2,
+      y: containerHeight - barHeight - FLOATING_ACTION_BAR_BOTTOM_OFFSET,
+    },
+    containerWidth,
+    containerHeight,
+    barWidth,
+    barHeight
+  );
+}
 
 function rotateVector(dx: number, dy: number, angle: number) {
   const cos = Math.cos(angle);
@@ -417,7 +455,17 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // --- Full Screen Ref ---
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const viewerAreaRef = useRef<HTMLDivElement>(null);
+  const floatingActionBarRef = useRef<HTMLDivElement>(null);
+  const floatingActionBarDragRef = useRef({
+    active: false,
+    pointerId: -1,
+    startPointer: { x: 0, y: 0 },
+    startPosition: { x: 0, y: 0 },
+  });
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [floatingActionBarPosition, setFloatingActionBarPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isFloatingActionBarDragging, setIsFloatingActionBarDragging] = useState(false);
 
   useEffect(() => {
     const handleFullScreenChange = () => {
@@ -429,6 +477,76 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (!selectedFile) {
+      setFloatingActionBarPosition(null);
+      setIsFloatingActionBarDragging(false);
+      floatingActionBarDragRef.current.active = false;
+      floatingActionBarDragRef.current.pointerId = -1;
+    }
+  }, [selectedFile]);
+
+  useEffect(() => {
+    if (!selectedFile) return;
+
+    let frameId = 0;
+    const syncFloatingActionBarPosition = () => {
+      cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        const container = viewerAreaRef.current;
+        const actionBar = floatingActionBarRef.current;
+        if (!container || !actionBar) return;
+
+        const containerRect = container.getBoundingClientRect();
+        const actionBarRect = actionBar.getBoundingClientRect();
+        if (containerRect.width <= 0 || containerRect.height <= 0 || actionBarRect.width <= 0 || actionBarRect.height <= 0) {
+          return;
+        }
+
+        setFloatingActionBarPosition(prev => {
+          const nextPosition = prev
+            ? clampFloatingActionBarPosition(
+                prev,
+                containerRect.width,
+                containerRect.height,
+                actionBarRect.width,
+                actionBarRect.height
+              )
+            : getDefaultFloatingActionBarPosition(
+                containerRect.width,
+                containerRect.height,
+                actionBarRect.width,
+                actionBarRect.height
+              );
+
+          if (prev && prev.x === nextPosition.x && prev.y === nextPosition.y) {
+            return prev;
+          }
+          return nextPosition;
+        });
+      });
+    };
+
+    syncFloatingActionBarPosition();
+
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => syncFloatingActionBarPosition())
+      : null;
+
+    if (resizeObserver) {
+      if (viewerAreaRef.current) resizeObserver.observe(viewerAreaRef.current);
+      if (floatingActionBarRef.current) resizeObserver.observe(floatingActionBarRef.current);
+    }
+
+    window.addEventListener('resize', syncFloatingActionBarPosition);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', syncFloatingActionBarPosition);
+      resizeObserver?.disconnect();
+    };
+  }, [selectedFile, isFullScreen]);
+
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
       editorContainerRef.current?.requestFullscreen().catch(err => {
@@ -437,6 +555,71 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     } else {
       document.exitFullscreen();
     }
+  };
+
+  const handleFloatingActionBarPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !floatingActionBarPosition) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    floatingActionBarDragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startPointer: { x: e.clientX, y: e.clientY },
+      startPosition: floatingActionBarPosition,
+    };
+    setIsFloatingActionBarDragging(true);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+
+  const handleFloatingActionBarPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = floatingActionBarDragRef.current;
+    const container = viewerAreaRef.current;
+    const actionBar = floatingActionBarRef.current;
+    if (!dragState.active || dragState.pointerId !== e.pointerId || !container || !actionBar) return;
+
+    e.preventDefault();
+    const containerRect = container.getBoundingClientRect();
+    const actionBarRect = actionBar.getBoundingClientRect();
+    const nextPosition = clampFloatingActionBarPosition(
+      {
+        x: dragState.startPosition.x + (e.clientX - dragState.startPointer.x),
+        y: dragState.startPosition.y + (e.clientY - dragState.startPointer.y),
+      },
+      containerRect.width,
+      containerRect.height,
+      actionBarRect.width,
+      actionBarRect.height
+    );
+
+    setFloatingActionBarPosition(prev => {
+      if (prev && prev.x === nextPosition.x && prev.y === nextPosition.y) {
+        return prev;
+      }
+      return nextPosition;
+    });
+  };
+
+  const stopFloatingActionBarDrag = (pointerId: number) => {
+    if (floatingActionBarDragRef.current.pointerId !== pointerId) return;
+    floatingActionBarDragRef.current.active = false;
+    floatingActionBarDragRef.current.pointerId = -1;
+    setIsFloatingActionBarDragging(false);
+  };
+
+  const handleFloatingActionBarPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (floatingActionBarDragRef.current.pointerId !== e.pointerId) return;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    stopFloatingActionBarDrag(e.pointerId);
+  };
+
+  const handleFloatingActionBarPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    stopFloatingActionBarDrag(e.pointerId);
+  };
+
+  const handleFloatingActionBarLostCapture = (e: React.PointerEvent<HTMLDivElement>) => {
+    stopFloatingActionBarDrag(e.pointerId);
   };
 
   //  坐标原点状态管理
@@ -3188,7 +3371,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         </div>
 
         {/* 图片容器 */}
-        <div style={{
+        <div
+          ref={viewerAreaRef}
+          style={{
           flex: 1,
           position: 'relative',
           overflow: 'hidden',
@@ -4100,11 +4285,51 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
             {/* 底部悬浮操作栏 */}
             {selectedFile && (
-              <div style={{
-                position: 'absolute', bottom: 50, left: '50%', transform: 'translateX(-50%)',
-                background: '#fff', padding: '8px 24px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                display: 'flex', alignItems: 'center', gap: '24px', border: '1px solid #e8e8e8', zIndex: 90
-              }}>
+              <div
+                ref={floatingActionBarRef}
+                style={{
+                  position: 'absolute',
+                  left: floatingActionBarPosition?.x ?? 0,
+                  top: floatingActionBarPosition?.y ?? 0,
+                  visibility: floatingActionBarPosition ? 'visible' : 'hidden',
+                  background: '#fff',
+                  padding: '8px 16px 8px 12px',
+                  borderRadius: '8px',
+                  boxShadow: isFloatingActionBarDragging ? '0 8px 20px rgba(0,0,0,0.18)' : '0 4px 12px rgba(0,0,0,0.1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '16px',
+                  border: '1px solid #e8e8e8',
+                  zIndex: 110,
+                  userSelect: isFloatingActionBarDragging ? 'none' : 'auto',
+                }}
+              >
+                <div
+                  role="button"
+                  aria-label="拖动底部操作栏"
+                  title="拖动工具栏"
+                  onPointerDown={handleFloatingActionBarPointerDown}
+                  onPointerMove={handleFloatingActionBarPointerMove}
+                  onPointerUp={handleFloatingActionBarPointerUp}
+                  onPointerCancel={handleFloatingActionBarPointerCancel}
+                  onLostPointerCapture={handleFloatingActionBarLostCapture}
+                  style={{
+                    width: 28,
+                    height: 36,
+                    borderRadius: 6,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: isFloatingActionBarDragging ? 'grabbing' : 'grab',
+                    color: '#8c8c8c',
+                    background: isFloatingActionBarDragging ? '#f0f0f0' : 'transparent',
+                    touchAction: 'none',
+                    flexShrink: 0,
+                  }}
+                >
+                  <DragOutlined />
+                </div>
+                <Divider type="vertical" style={{ height: '24px', margin: 0 }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Button type="text" icon={<LeftOutlined />} onClick={() => {
                     const idx = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
