@@ -2613,7 +2613,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     console.log('[OCR] 开始识别, field:', field, '裁剪区域:', { sx, sy, sw, sh }, 'canvas尺寸:', { w: canvas.width, h: canvas.height });
     setOcrLoadingField(field);
     try {
-      const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64);
+      const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64, taskId, field);
       console.log('[OCR] 后端返回结果:', result);
       const recognized = result?.text?.trim();
       console.log('[OCR] 识别文本 (trim后):', JSON.stringify(recognized), '准备写入字段:', field);

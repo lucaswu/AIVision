@@ -29,7 +29,9 @@ public class OcrController {
                 return ResponseEntity.badRequest()
                     .body(ApiResponse.error(400, "base64参数不能为空"));
             }
-            Map<String, Object> result = aiServiceClient.recognizeImageRegion(base64);
+            String taskId = request.get("task_id");       // 可选，用于调试图片命名
+            String fieldName = request.get("field_name"); // 可选，用于调试图片命名
+            Map<String, Object> result = aiServiceClient.recognizeImageRegion(base64, taskId, fieldName);
             return ResponseEntity.ok(ApiResponse.success("识别成功", result));
         } catch (Exception e) {
             return ResponseEntity.status(500)

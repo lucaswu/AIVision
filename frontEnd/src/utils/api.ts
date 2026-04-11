@@ -346,13 +346,20 @@ export interface OcrRecognizeResult {
 
 // OCR 识别API
 export const ocrAPI = {
-  recognizeRegion: async (base64WithPrefix: string): Promise<OcrRecognizeResult> => {
+  recognizeRegion: async (
+    base64WithPrefix: string,
+    taskId?: string,
+    fieldName?: string,
+  ): Promise<OcrRecognizeResult> => {
     const base64 = base64WithPrefix.startsWith('data:')
       ? base64WithPrefix.split(',')[1]
       : base64WithPrefix;
+    const body: Record<string, string> = { base64 };
+    if (taskId) body['task_id'] = taskId;
+    if (fieldName) body['field_name'] = fieldName;
     const result = await request<OcrRecognizeResult>(
       '/api/v1/ocr/recognize',
-      { method: 'POST', body: JSON.stringify({ base64 }) }
+      { method: 'POST', body: JSON.stringify(body) }
     );
     return result.Data;
   },

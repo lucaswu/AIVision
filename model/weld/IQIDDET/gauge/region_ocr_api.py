@@ -60,6 +60,7 @@ executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="region-ocr")
 
 
 def init_region_ocr_api(
+    ocr_det_model_dir: str = "models/PP-OCRv5_server_det",
     ocr_rec_model_dir: str = "models/OCR_rec_inference_best_accuracy",
     ocr_rec_model_name: str = "en_PP-OCRv5_mobile_rec",
     ocr_device: str = "gpu",
@@ -74,6 +75,7 @@ def init_region_ocr_api(
     if _region_ocr_service is not None:
         _region_ocr_service.close()
     _region_ocr_service = RegionOCRService(
+        ocr_det_model_dir=ocr_det_model_dir,
         ocr_rec_model_dir=ocr_rec_model_dir,
         ocr_rec_model_name=ocr_rec_model_name,
         ocr_device=ocr_device,

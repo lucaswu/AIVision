@@ -21,6 +21,7 @@ class RegionOCRService:
 
     def __init__(
         self,
+        ocr_det_model_dir: str = "models/PP-OCRv5_server_det",
         ocr_rec_model_dir: str = "models/OCR_rec_inference_best_accuracy",
         ocr_rec_model_name: str = "en_PP-OCRv5_mobile_rec",
         ocr_device: str = "gpu",
@@ -38,6 +39,7 @@ class RegionOCRService:
         self.ocr_backend = PaddleOCRSubprocessClient(
             device=ocr_device,
             det_model_name="PP-OCRv5_server_det",
+            det_model_dir=str(self._resolve_path(ocr_det_model_dir)),
             rec_model_name=ocr_rec_model_name,
             rec_model_dir=str(self._resolve_path(ocr_rec_model_dir)),
             python_bin=python_bin or sys.executable,

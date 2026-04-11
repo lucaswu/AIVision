@@ -257,11 +257,114 @@ if str(_IQIDDET_ROOT) not in sys.path:
     sys.path.insert(0, str(_IQIDDET_ROOT))
 
 from gauge.region_ocr_api import (
-    RecognizeRequest,
+    RecognizeRequest as _BaseRecognizeRequest,
     RecognizeResponse,
+    close_region_ocr_api,
     recognize_region as _recognize_region,
     init_region_ocr_api,
 )
+
+
+class RecognizeRequest(_BaseRecognizeRequest):
+    """扩展的 OCR 识别请求，增加调试上下文字段。"""
+    task_id: Optional[str] = Field(default=None, description="任务ID，用于调试图片文件命名")
+    field_name: Optional[str] = Field(default=None, description="识别字段名称，如 film_no、weld_no 等")
+
+
+# OCR 调试图片存储目录
+_OCR_DEBUG_DIR = Path("/app/data/results/ocr_debug")
+_OCR_DEBUG_RETENTION_DAYS = 7
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+        if value <= 0:
+            raise ValueError
+        return value
+    except ValueError:
+        print(f"[OCR debug] 环境变量 {name}={raw_value!r} 非法，回退到默认值 {default}")
+        return default
+
+
+_OCR_DEBUG_CLEANUP_INTERVAL_SECONDS = _get_positive_int_env(
+    "OCR_DEBUG_CLEANUP_INTERVAL_SECONDS",
+    24 * 60 * 60,
+)
+
+
+def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
+    """将 OCR 框选的 base64 图片保存为 PNG 文件，用于后期分析。"""
+    import base64
+    import re
+    try:
+        _OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 去除 data URL 前缀
+        b64_data = str(image_base64 or "")
+        if "," in b64_data:
+            b64_data = b64_data.split(",", 1)[1]
+
+        img_bytes = base64.b64decode(b64_data)
+
+        # 构造文件名：时间戳_taskid_fieldname.png
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        safe_task = re.sub(r"[^\w-]", "_", task_id or "unknown")
+        safe_field = re.sub(r"[^\w-]", "_", field_name or "field")
+        filename = f"{ts}_{safe_task}_{safe_field}.png"
+        out_path = _OCR_DEBUG_DIR / filename
+
+        # 验证并重新编码为 PNG（确保格式正确）
+        import numpy as np
+        import cv2
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is not None:
+            cv2.imwrite(str(out_path), img)
+            print(f"[OCR debug] 已保存调试图片: {out_path}")
+        else:
+            # 解码失败时直接写入原始字节
+            out_path.write_bytes(img_bytes)
+            print(f"[OCR debug] 已保存原始调试图片（解码异常）: {out_path}")
+    except Exception as exc:
+        print(f"[OCR debug] 保存调试图片失败（不影响识别结果）: {exc}")
+
+
+def _cleanup_ocr_debug_images() -> None:
+    """清理超过 {_OCR_DEBUG_RETENTION_DAYS} 天的 OCR 调试图片。"""
+    try:
+        if not _OCR_DEBUG_DIR.exists():
+            return
+        cutoff = time.time() - _OCR_DEBUG_RETENTION_DAYS * 86400
+        removed = 0
+        for f in _OCR_DEBUG_DIR.glob("*.png"):
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        if removed:
+            print(f"[OCR debug] 已清理 {removed} 张超过 {_OCR_DEBUG_RETENTION_DAYS} 天的调试图片")
+    except Exception as exc:
+        print(f"[OCR debug] 清理调试图片失败: {exc}")
+
+
+async def _periodic_ocr_debug_cleanup() -> None:
+    """后台定时清理 OCR 调试图片。"""
+    loop = asyncio.get_running_loop()
+    interval = _OCR_DEBUG_CLEANUP_INTERVAL_SECONDS
+    print(
+        f"[OCR debug] 定时清理任务已启动: interval={interval}s, retention={_OCR_DEBUG_RETENTION_DAYS}d"
+    )
+    try:
+        await loop.run_in_executor(None, _cleanup_ocr_debug_images)
+        while True:
+            await asyncio.sleep(interval)
+            await loop.run_in_executor(None, _cleanup_ocr_debug_images)
+    except asyncio.CancelledError:
+        print("[OCR debug] 定时清理任务已停止")
+        raise
 
 
 def _abs_model_path(rel_or_abs: str) -> str:
@@ -274,15 +377,20 @@ def _abs_model_path(rel_or_abs: str) -> str:
 
 def _init_ocr_cpu() -> None:
     """以 CPU 模式初始化区域 OCR，使用 env var 中的模型路径（解析为绝对路径）。"""
+    det_model_dir = _abs_model_path(
+        os.environ.get("OCR_DET_MODEL_DIR", "IQIDDET/models/PP-OCRv5_server_det")
+    )
     rec_model_dir = _abs_model_path(
         os.environ.get("OCR_REC_MODEL_DIR", "IQIDDET/models/OCR_rec_inference_best_accuracy")
     )
     orientation_model = _abs_model_path(
         os.environ.get("OCR_ORIENTATION_MODEL", "IQIDDET/models/ocr_orientation_model.pth")
     )
+    print(f"[OCR init] det_model_dir={det_model_dir}")
     print(f"[OCR init] rec_model_dir={rec_model_dir}")
     print(f"[OCR init] orientation_model={orientation_model}")
     init_region_ocr_api(
+        ocr_det_model_dir=det_model_dir,
         ocr_rec_model_dir=rec_model_dir,
         ocr_device="cpu",
         ocr_orientation_model=orientation_model,
@@ -296,7 +404,21 @@ async def recognize_region_endpoint(request: RecognizeRequest):
     # 若 warmup 尚未完成，保证懒加载时也使用 CPU，不触发默认的 gpu 初始化
     if _ocr_mod._region_ocr_service is None:
         _init_ocr_cpu()
-    return await _recognize_region(request)
+
+    # 保存调试图片（异步、非阻塞；失败不影响识别结果）
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(
+        None,
+        _save_ocr_debug_image,
+        request.image_base64,
+        request.task_id,
+        request.field_name,
+    )
+
+    # 构造基础请求（只传 image_base64，避免底层 model 字段校验问题）
+    from gauge.region_ocr_api import RecognizeRequest as _BaseReq
+    base_req = _BaseReq(image_base64=request.image_base64)
+    return await _recognize_region(base_req)
 
 
 # ==============================================================================
@@ -509,7 +631,27 @@ async def startup_event():
     print(f"Primary weights: {primary_weights}")
     print("=" * 60)
     # 后台预热 OCR，不阻塞 health check
-    asyncio.create_task(_warmup_ocr())
+    app.state.ocr_warmup_task = asyncio.create_task(_warmup_ocr())
+    app.state.ocr_debug_cleanup_task = asyncio.create_task(_periodic_ocr_debug_cleanup())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """服务关闭时释放后台任务和 OCR 资源。"""
+    for task_name in ("ocr_warmup_task", "ocr_debug_cleanup_task"):
+        task = getattr(app.state, task_name, None)
+        if task is None:
+            continue
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            print(f"[shutdown] 关闭后台任务 {task_name} 失败: {exc}")
+        finally:
+            setattr(app.state, task_name, None)
+    close_region_ocr_api()
 
 
 if __name__ == "__main__":
