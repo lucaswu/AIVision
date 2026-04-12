@@ -15,7 +15,7 @@ class RegionSNRService:
 
     RESULT_TABLE = {
         0: ("ok", "计算成功"),
-        4001: ("region_area_invalid", "输入区域面积必须大于 20 像素 × 55 像素"),
+        4001: ("region_area_invalid", "输入区域面积必须不小于 20 像素 × 55 像素"),
         4002: ("gray_std_zero", "输入区域灰度标准差为 0，无法计算信噪比"),
     }
 
@@ -102,7 +102,7 @@ class RegionSNRService:
         height, width = int(gray.shape[0]), int(gray.shape[1])
         area_pixels = int(width * height)
 
-        if area_pixels <= self.max_region_area_px:
+        if area_pixels < self.max_region_area_px:
             total_ms = (time.perf_counter() - total_start) * 1000.0
             return self._build_payload(
                 4001,
@@ -114,7 +114,7 @@ class RegionSNRService:
                 snr_m=None,
                 snr_n=None,
                 message=(
-                    "输入区域面积必须大于 20 像素 × 55 像素，"
+                    "输入区域面积必须不小于 20 像素 × 55 像素，"
                     f"当前区域为 {width} × {height} 像素（面积 {area_pixels}）"
                 ),
                 timings_ms={

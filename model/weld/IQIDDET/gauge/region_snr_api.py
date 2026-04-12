@@ -57,7 +57,7 @@ class SNRResponse(BaseModel):
     width: int = Field(..., description="输入区域宽度。")
     height: int = Field(..., description="输入区域高度。")
     area_pixels: int = Field(..., description="输入区域像素面积。")
-    area_limit_pixels: int = Field(..., description="允许的最大区域面积上限（像素）。")
+    area_limit_pixels: int = Field(..., description="区域面积阈值（当前要求输入区域面积不小于该值）。")
     timings_ms: Dict[str, float] = Field(..., description="各子阶段耗时。")
 
 

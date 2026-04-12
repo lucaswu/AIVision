@@ -174,23 +174,29 @@ def main() -> None:
             want_vis = vis_dir is not None
             full_record, artifacts = inferencer.infer_image_path(image_path, return_debug_artifacts=want_vis)
             full_results.append(full_record)
-            delivery_results.append(build_delivery_record(full_record))
 
             if want_vis and artifacts is not None and artifacts.get("image") is not None:
                 rel_path = _get_rel_path(image_path, image_root).with_suffix("")
                 sample_dir = vis_dir / str(full_record.get("result_name", "unknown")) / rel_path
-                save_debug_visualizations(
-                    output_dir=vis_dir,
-                    sample_dir=sample_dir,
-                    image=artifacts["image"],
-                    full_ocr_result=full_record.get("full_image_ocr") or full_record.get("ocr") or {},
-                    full_ocr_image=artifacts.get("full_ocr_input"),
-                    roi_info=full_record.get("roi") or {},
-                    roi_image=artifacts.get("roi_image"),
-                    roi_gray=artifacts.get("roi_gray"),
-                    roi_ocr_result=full_record.get("roi_ocr") or {},
-                    wire_result=full_record.get("wire") or {},
+                full_record.update(
+                    save_debug_visualizations(
+                        output_dir=vis_dir,
+                        sample_dir=sample_dir,
+                        image=artifacts["image"],
+                        full_ocr_result=full_record.get("full_image_ocr") or full_record.get("ocr") or {},
+                        full_ocr_image=artifacts.get("full_ocr_input"),
+                        roi_info=full_record.get("roi") or {},
+                        roi_image=artifacts.get("roi_image"),
+                        roi_gray=artifacts.get("roi_gray"),
+                        roi_ocr_result=full_record.get("roi_ocr") or {},
+                        wire_result=full_record.get("wire") or {},
+                        visualization=full_record.get("visualization") or {},
+                        plate_code=full_record.get("plate_code"),
+                        grade=full_record.get("grade"),
+                        wire_count=full_record.get("wire_count"),
+                    )
                 )
+            delivery_results.append(build_delivery_record(full_record))
     finally:
         inferencer.close()
 

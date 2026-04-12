@@ -11,7 +11,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-from gauge.fclip_stage import FClipInferencer, invert_perspective_matrix
+from gauge.fclip_stage import (
+    FClipInferencer,
+    invert_perspective_matrix,
+    perspective_transform_points,
+    undo_ccw90_points,
+)
 from gauge.iqi_rules import (
     build_result_status,
     choose_primary_result_code,
@@ -19,6 +24,8 @@ from gauge.iqi_rules import (
     extract_general_fields_from_ocr_items,
     format_allowed_numbers_spec,
     infer_plate_from_ocr_items,
+    infer_plate_from_texts,
+    normalize_text,
     parse_allowed_numbers_spec,
     summarize_result_codes,
     summarize_result_codes_named,
@@ -240,6 +247,190 @@ class IQIInferencer:
         return mapped
 
     @staticmethod
+    def _is_usable_ocr_item(item: Dict[str, Any]) -> bool:
+        return bool(
+            str(item.get("text", "")).strip()
+            and item.get("status") != "error"
+            and item.get("accepted_by_score", True)
+        )
+
+    @staticmethod
+    def _box_points_to_bbox(box: Any) -> Optional[List[float]]:
+        if box is None:
+            return None
+        try:
+            pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
+        except Exception:
+            return None
+        if pts.size == 0:
+            return None
+        return [
+            float(np.min(pts[:, 0])),
+            float(np.min(pts[:, 1])),
+            float(np.max(pts[:, 0])),
+            float(np.max(pts[:, 1])),
+        ]
+
+    @staticmethod
+    def _project_roi_box_to_image(
+        box: Any,
+        crop_inverse_matrix: Optional[np.ndarray],
+        pre_rotate_size: Optional[Sequence[int]],
+        rotated: bool,
+    ) -> Tuple[Any, Any]:
+        if box is None:
+            return None, None
+        try:
+            roi_points = np.asarray(box, dtype=np.float32).reshape(-1, 2)
+        except Exception:
+            return None, None
+        if roi_points.size == 0:
+            return None, None
+
+        roi_unrotated = roi_points
+        if rotated:
+            if pre_rotate_size is None:
+                return roi_points.tolist(), None
+            roi_unrotated = undo_ccw90_points(roi_points, pre_rotate_size=pre_rotate_size)
+
+        if crop_inverse_matrix is None:
+            return roi_points.tolist(), roi_unrotated.tolist()
+
+        image_points = perspective_transform_points(roi_unrotated, crop_inverse_matrix)
+        return image_points.tolist(), roi_unrotated.tolist()
+
+    @classmethod
+    def _project_ocr_items_to_image(
+        cls,
+        items: Sequence[Dict[str, Any]],
+        crop_inverse_matrix: Optional[np.ndarray],
+        pre_rotate_size: Optional[Sequence[int]],
+        rotated: bool,
+    ) -> List[Dict[str, Any]]:
+        projected_items: List[Dict[str, Any]] = []
+        for item in items:
+            projected = dict(item)
+            box_image, box_unrotated = cls._project_roi_box_to_image(
+                item.get("box"),
+                crop_inverse_matrix=crop_inverse_matrix,
+                pre_rotate_size=pre_rotate_size,
+                rotated=rotated,
+            )
+            projected["box_image"] = box_image
+            projected["box_roi_unrotated"] = box_unrotated
+            projected_items.append(projected)
+        return projected_items
+
+    @classmethod
+    def _build_plate_visualization_items(
+        cls,
+        items: Sequence[Dict[str, Any]],
+        source: str,
+    ) -> List[Dict[str, Any]]:
+        vis_items: List[Dict[str, Any]] = []
+        text_index = 0
+        for item in items:
+            if not cls._is_usable_ocr_item(item):
+                continue
+            box_image = item.get("box_image")
+            if box_image is None:
+                box_image = item.get("box")
+            vis_items.append(
+                {
+                    "text_index": int(text_index),
+                    "crop_index": item.get("crop_index"),
+                    "source": str(source),
+                    "text": str(item.get("text", "")),
+                    "normalized_text": normalize_text(item.get("text", "")),
+                    "score": item.get("score"),
+                    "det_score": item.get("det_score"),
+                    "status": item.get("status"),
+                    "accepted_by_score": bool(item.get("accepted_by_score", True)),
+                    "box_image_xy": box_image,
+                    "bbox_image": cls._box_points_to_bbox(box_image),
+                    "box_roi_xy": item.get("box") if source == "roi" else None,
+                    "bbox_roi": cls._box_points_to_bbox(item.get("box")) if source == "roi" else None,
+                }
+            )
+            text_index += 1
+        return vis_items
+
+    @staticmethod
+    def _select_plate_visualization_items(
+        items: Sequence[Dict[str, Any]],
+        plate_code: Optional[str],
+        allowed_numbers: Optional[Sequence[int]],
+    ) -> List[Dict[str, Any]]:
+        target_code = normalize_text(plate_code)
+        if not target_code:
+            return []
+
+        selected: List[Dict[str, Any]] = []
+        for item in items:
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            parsed = infer_plate_from_texts(
+                [text],
+                require_jb=True,
+                allowed_numbers=allowed_numbers,
+            )
+            candidates = [normalize_text(code) for code in (parsed.get("candidate_codes") or [])]
+            if target_code in candidates:
+                selected.append(item)
+        return selected
+
+    def _attach_visualization_payload(
+        self,
+        record: Dict[str, Any],
+        *,
+        roi_plate_vis_items: Optional[Sequence[Dict[str, Any]]] = None,
+        full_plate_vis_items: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> None:
+        roi = record.get("roi") or {}
+        plate = record.get("plate") or {}
+        wire = record.get("wire") or {}
+        plate_source = str(record.get("plate_source") or "")
+
+        if plate_source == "roi":
+            plate_items = list(roi_plate_vis_items or [])
+        elif plate_source == "full_image":
+            plate_items = list(full_plate_vis_items or [])
+        else:
+            plate_items = []
+
+        plate_items_selected = self._select_plate_visualization_items(
+            plate_items,
+            plate_code=plate.get("plate_code"),
+            allowed_numbers=self.ocr_allowed_numbers,
+        )
+
+        wire_lines = []
+        for line in wire.get("lines") or []:
+            image_xy = line.get("image_xy")
+            if not image_xy:
+                continue
+            wire_lines.append(
+                {
+                    "index": line.get("index"),
+                    "score": line.get("score"),
+                    "image_xy": image_xy,
+                }
+            )
+
+        record["visualization"] = {
+            "roi_polygon_xy": roi.get("polygon"),
+            "roi_bbox": roi.get("bbox"),
+            "plate_source": plate_source,
+            "plate_code": plate.get("plate_code"),
+            "candidate_codes": plate.get("candidate_codes") or [],
+            "raw_texts": plate.get("raw_texts") or [],
+            "plate_text_items": plate_items,
+            "plate_text_items_selected": plate_items_selected,
+            "wire_lines": wire_lines,
+        }
+
+    @staticmethod
     def _merge_prefixed_ocr_timings(
         step_timings: Dict[str, float],
         prefix: str,
@@ -423,6 +614,10 @@ class IQIInferencer:
             self._merge_prefixed_ocr_timings(step_timings, "full", full_ocr_result)
 
             full_items_original = self._scale_ocr_items_to_original(full_ocr_result.get("all_items") or [], resize_scale)
+            full_plate_vis_items = self._build_plate_visualization_items(full_items_original, source="full_image")
+            full_ocr_result = dict(full_ocr_result)
+            full_ocr_result["all_items_original"] = full_items_original
+            full_ocr_result["items_original"] = [item for item in full_items_original if self._is_usable_ocr_item(item)]
 
             step_start = time.perf_counter()
             general_fields = extract_general_fields_from_ocr_items(full_items_original)
@@ -435,6 +630,8 @@ class IQIInferencer:
                 allowed_numbers=self.ocr_allowed_numbers,
             )
             _mark("full_marker_match_ms", step_start)
+            full_plate_result = dict(full_plate_result)
+            full_plate_result["raw_text_items"] = full_plate_vis_items
 
             warnings: List[str] = []
             if full_ocr_result.get("item_errors"):
@@ -459,6 +656,7 @@ class IQIInferencer:
             roi_gray = None
             roi_ocr_result: Optional[Dict[str, Any]] = None
             roi_plate_result: Optional[Dict[str, Any]] = None
+            roi_plate_vis_items: List[Dict[str, Any]] = []
             roi_error_code: Optional[int] = None
             roi_error_message: Optional[str] = None
 
@@ -530,6 +728,19 @@ class IQIInferencer:
                             allowed_numbers=self.ocr_allowed_numbers,
                         )
                         _mark("roi_marker_match_ms", step_start)
+                        roi_projected_items = self._project_ocr_items_to_image(
+                            roi_ocr_result.get("all_items") or [],
+                            crop_inverse_matrix=crop_inverse_matrix,
+                            pre_rotate_size=pre_rotate_size,
+                            rotated=bool(rotated),
+                        )
+                        roi_plate_vis_items = self._build_plate_visualization_items(roi_projected_items, source="roi")
+                        roi_ocr_result = dict(roi_ocr_result)
+                        roi_ocr_result["all_items_image"] = roi_projected_items
+                        roi_ocr_result["items_image"] = [item for item in roi_projected_items if self._is_usable_ocr_item(item)]
+                        if roi_plate_result is not None:
+                            roi_plate_result = dict(roi_plate_result)
+                            roi_plate_result["raw_text_items"] = roi_plate_vis_items
 
                         if roi_ocr_result.get("item_errors"):
                             warnings.append("ROI OCR存在部分文本框识别异常")
@@ -577,6 +788,13 @@ class IQIInferencer:
             record["field_statistics"] = field_statistics
             record["general_fields_found"] = bool(field_statistics.get("general_fields_found", False))
             record["iqi_marker_found"] = bool(selected_plate.get("ok"))
+            selected_plate = dict(selected_plate)
+            if plate_source == "roi":
+                selected_plate["raw_text_items"] = roi_plate_vis_items
+            elif plate_source == "full_image":
+                selected_plate["raw_text_items"] = full_plate_vis_items
+            else:
+                selected_plate.setdefault("raw_text_items", [])
             record["plate"] = selected_plate
             record["plate_source"] = plate_source
 
@@ -593,6 +811,11 @@ class IQIInferencer:
                     error_entries.append({"stage": "roi", **build_result_status(roi_error_code, roi_error_message)})
                 marker_result = roi_plate_result if roi_plate_result is not None and roi_error_code is None else full_plate_result
                 error_entries.append({"stage": "marker", **build_result_status(int(marker_result.get("result_code", 9001)))})
+                self._attach_visualization_payload(
+                    record,
+                    roi_plate_vis_items=roi_plate_vis_items,
+                    full_plate_vis_items=full_plate_vis_items,
+                )
                 final_record = self._finalize_record(record, error_entries, warnings)
                 _attach_timing(final_record)
                 return final_record, debug_artifacts
@@ -603,6 +826,11 @@ class IQIInferencer:
                     roi_error_message,
                 )
                 error_entries = [{"stage": "roi", **build_result_status(roi_error_code, roi_error_message)}]
+                self._attach_visualization_payload(
+                    record,
+                    roi_plate_vis_items=roi_plate_vis_items,
+                    full_plate_vis_items=full_plate_vis_items,
+                )
                 final_record = self._finalize_record(record, error_entries, warnings)
                 _attach_timing(final_record)
                 return final_record, debug_artifacts
@@ -649,6 +877,11 @@ class IQIInferencer:
 
             final_record = self._finalize_record(record, error_entries, warnings, grade=grade_result.get("grade"))
             final_record["plate_source"] = plate_source
+            self._attach_visualization_payload(
+                final_record,
+                roi_plate_vis_items=roi_plate_vis_items,
+                full_plate_vis_items=full_plate_vis_items,
+            )
             _attach_timing(final_record)
             return final_record, debug_artifacts
         except FileNotFoundError as exc:
@@ -681,6 +914,104 @@ def build_wire_vis_image(roi_image: np.ndarray, wire_result: Dict[str, Any]) -> 
     return vis
 
 
+def build_final_result_vis_image(
+    image: np.ndarray,
+    visualization: Optional[Dict[str, Any]] = None,
+    plate_code: Optional[str] = None,
+    grade: Optional[int] = None,
+    wire_count: Optional[int] = None,
+) -> np.ndarray:
+    vis = image.copy()
+    if vis.ndim == 2:
+        vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+    elif vis.ndim == 3 and vis.shape[2] == 1:
+        vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+
+    visualization = dict(visualization or {})
+
+    roi_polygon = visualization.get("roi_polygon_xy") or []
+    try:
+        roi_pts = np.asarray(roi_polygon, dtype=np.float32).reshape(-1, 2)
+    except Exception:
+        roi_pts = np.zeros((0, 2), dtype=np.float32)
+    if roi_pts.shape[0] >= 3:
+        cv2.polylines(
+            vis,
+            [roi_pts.astype(np.int32).reshape(-1, 1, 2)],
+            isClosed=True,
+            color=(0, 255, 0),
+            thickness=3,
+            lineType=cv2.LINE_AA,
+        )
+
+    plate_text_items = (
+        visualization.get("plate_text_items_selected")
+        or visualization.get("plate_text_items")
+        or []
+    )
+    for item in plate_text_items:
+        box = item.get("box_image_xy") or []
+        try:
+            pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
+        except Exception:
+            continue
+        if pts.shape[0] < 3:
+            continue
+        cv2.polylines(
+            vis,
+            [pts.astype(np.int32).reshape(-1, 1, 2)],
+            isClosed=True,
+            color=(0, 215, 255),
+            thickness=2,
+            lineType=cv2.LINE_AA,
+        )
+        label = str(item.get("text", "")).strip() or "[empty]"
+        score = item.get("score")
+        if score is not None:
+            label = f"{label} ({float(score):.2f})"
+        x = int(np.min(pts[:, 0]))
+        y = max(20, int(np.min(pts[:, 1])) - 8)
+        cv2.putText(
+            vis,
+            label,
+            (x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 215, 255),
+            2,
+            lineType=cv2.LINE_AA,
+        )
+
+    for line in visualization.get("wire_lines") or []:
+        points = line.get("image_xy") or []
+        if len(points) != 2:
+            continue
+        p0 = (int(round(points[0][0])), int(round(points[0][1])))
+        p1 = (int(round(points[1][0])), int(round(points[1][1])))
+        cv2.line(vis, p0, p1, (0, 0, 255), 2, lineType=cv2.LINE_AA)
+
+    summary_lines = []
+    if plate_code:
+        summary_lines.append(f"plate={plate_code}")
+    if grade is not None:
+        summary_lines.append(f"grade={grade}")
+    if wire_count is not None:
+        summary_lines.append(f"wire_count={wire_count}")
+    if summary_lines:
+        cv2.putText(
+            vis,
+            "  ".join(summary_lines),
+            (10, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 0),
+            2,
+            lineType=cv2.LINE_AA,
+        )
+
+    return vis
+
+
 def save_debug_visualizations(
     output_dir: Path,
     sample_dir: Path,
@@ -692,6 +1023,10 @@ def save_debug_visualizations(
     roi_gray: Optional[np.ndarray] = None,
     roi_ocr_result: Optional[Dict[str, Any]] = None,
     wire_result: Optional[Dict[str, Any]] = None,
+    visualization: Optional[Dict[str, Any]] = None,
+    plate_code: Optional[str] = None,
+    grade: Optional[int] = None,
+    wire_count: Optional[int] = None,
 ) -> Dict[str, Any]:
     ensure_dir(sample_dir)
 
@@ -797,6 +1132,18 @@ def save_debug_visualizations(
         cv2.imwrite(str(wire_vis_path), wire_vis)
         payload["wire_vis_path"] = str(wire_vis_path.relative_to(output_dir))
 
+    if visualization:
+        final_result_vis = build_final_result_vis_image(
+            image=image,
+            visualization=visualization,
+            plate_code=plate_code,
+            grade=grade,
+            wire_count=wire_count,
+        )
+        final_result_path = sample_dir / "finalresult.png"
+        cv2.imwrite(str(final_result_path), final_result_vis)
+        payload["final_result_vis_path"] = str(final_result_path.relative_to(output_dir))
+
     return payload
 
 
@@ -849,11 +1196,18 @@ def build_iqi_statistics(results: Sequence[Dict[str, Any]], topk: int = 200) -> 
 
 
 def build_delivery_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    plate = record.get("plate") or {}
-    wire = record.get("wire") or {}
-    roi = record.get("roi") or {}
+    visualization = record.get("visualization") or {}
     fields = record.get("fields") or {}
-    return {
+    plate_text_items_selected = []
+    for item in visualization.get("plate_text_items_selected") or []:
+        plate_text_items_selected.append(
+            {
+                "text": item.get("text"),
+                "score": item.get("score"),
+                "box_image_xy": item.get("box_image_xy"),
+            }
+        )
+    payload = {
         "image_path": record.get("image_path"),
         "ok": bool(record.get("ok", False)),
         "result_code": int(record.get("result_code", 9001)),
@@ -867,17 +1221,10 @@ def build_delivery_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "wire_count": record.get("wire_count"),
         "general_fields_found": bool(record.get("general_fields_found", False)),
         "iqi_marker_found": bool(record.get("iqi_marker_found", False)),
-        "roi": {
-            "polygon_xy": roi.get("polygon"),
-            "bbox": roi.get("bbox"),
-            "confidence": roi.get("conf"),
-            "class_id": roi.get("class_id"),
-        },
-        "plate": {
-            "raw_texts": plate.get("raw_texts") or [],
-            "normalized_texts": plate.get("normalized_texts") or [],
-            "candidate_codes": plate.get("candidate_codes") or [],
-            "corrections": plate.get("corrections") or [],
+        "visualization": {
+            "roi_polygon_xy": visualization.get("roi_polygon_xy"),
+            "plate_text_items_selected": plate_text_items_selected,
+            "wire_lines": visualization.get("wire_lines") or [],
         },
         "fields": {
             "component_codes": fields.get("component_codes") or [],
@@ -887,15 +1234,14 @@ def build_delivery_record(record: Dict[str, Any]) -> Dict[str, Any]:
             "pipe_specs": fields.get("pipe_specs") or [],
         },
         "field_statistics": record.get("field_statistics") or {},
-        "wire": {
-            "status": wire.get("status"),
-            "wire_count": wire.get("wire_count"),
-            "parsed_line_count": wire.get("parsed_line_count"),
-            "lines": wire.get("lines") or [],
-        },
         "warnings": record.get("warnings") or [],
         "errors": record.get("errors") or [],
     }
+    if record.get("final_result_vis_path"):
+        payload["final_result_vis_path"] = record.get("final_result_vis_path")
+    if record.get("status_vis_dir"):
+        payload["status_vis_dir"] = record.get("status_vis_dir")
+    return payload
 
 
 def collect_input_images(
