@@ -23,7 +23,7 @@ export default function ProjectDetail() {
   const navigate = useNavigate();
   const [isProjectSidebarCollapsed, setIsProjectSidebarCollapsed] = useState(false);
 
-  const projectSidebarWidth = 150;
+  const projectSidebarWidth = 180;
   const collapsedProjectSidebarWidth = 24;
   const actualProjectSidebarWidth = isProjectSidebarCollapsed
     ? collapsedProjectSidebarWidth

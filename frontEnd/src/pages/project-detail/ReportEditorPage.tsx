@@ -846,7 +846,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   useEffect(() => {
     if (reportTitleRef.current) {
       // 测量标题的实际宽度，并加上左右内边距（16px * 2 = 32px）
-      const measuredWidth = reportTitleRef.current.offsetWidth + 40; 
+      const measuredWidth = reportTitleRef.current.offsetWidth + 40;
       setLeftSidebarWidth(Math.max(measuredWidth, 240)); // 最小不低于 240
     }
   }, [report?.ReportName, taskId, reportResp]);
@@ -3274,7 +3274,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <Input />
               </Form.Item>
             </Form.Item>
-            <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
+            {/* <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
               <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
                 {({ getFieldValue }) => {
                   const resolution = getFieldValue('resolution');
@@ -3298,7 +3298,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <Form.Item name="resolution" hidden>
                 <Input />
               </Form.Item>
-            </Form.Item>
+            </Form.Item> */}
             <Form.Item label="规格" style={{ marginBottom: 12 }}>
               <Space.Compact style={{ width: '100%' }}>
                 <Tooltip title={ocrTargetField === 'specification' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
@@ -3407,7 +3407,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 </Button>
               </div>
             </Form.Item>
-            <Form.Item label="区域归一化信噪比" style={{ marginBottom: 8 }}>
+            {/* <Form.Item label="区域归一化信噪比" style={{ marginBottom: 8 }}>
               <Space.Compact style={{ width: '100%' }}>
                 <Tooltip title={ocrTargetField === 'normalizedSnr' ? '点击取消框选' : '框选计算区域归一化信噪比'} getPopupContainer={getEditorPopupContainer}>
                   <Button
@@ -3422,12 +3422,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   <Input placeholder="框选后识别区域归一化信噪比" readOnly />
                 </Form.Item>
               </Space.Compact>
-            </Form.Item>
+            </Form.Item> */}
           </Form>
         )}
       </div>
 
-      <Divider style={{ margin: '0' }} />
+      {/* <Divider style={{ margin: '0' }} /> */}
 
       <div>
         <div
