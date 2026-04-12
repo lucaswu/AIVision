@@ -104,6 +104,8 @@ interface ReportEditorPageProps {
   projectName?: string;
   onBack: () => void;
   onPreview?: () => void;
+  projectSidebarCollapsed?: boolean;
+  onProjectSidebarCollapseChange?: (collapsed: boolean) => void;
 }
 
 type FilmInfoOcrField =
@@ -445,6 +447,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   projectName,
   onBack,
   onPreview,
+  projectSidebarCollapsed = false,
+  onProjectSidebarCollapseChange,
 }) => {
   const [selectedFile, setSelectedFile] = useState<TaskFile | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -766,6 +770,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // --- 左侧栏宽度动态计算 ---
   const reportTitleRef = useRef<HTMLDivElement>(null);
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(280);
+  const [isLeftSidebarCollapsed, setIsLeftSidebarCollapsed] = useState(false);
 
   // --- 标记是否为初始加载（防止自动保存时触发） ---
   const isInitialLoadRef = useRef(true);
@@ -3044,6 +3049,16 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     }
   };
 
+  const collapsedLeftSidebarWidth = 24;
+  const actualLeftSidebarWidth = isLeftSidebarCollapsed ? collapsedLeftSidebarWidth : leftSidebarWidth;
+  const areBothSidebarsCollapsed = isLeftSidebarCollapsed && projectSidebarCollapsed;
+
+  const handleToggleBothSidebars = () => {
+    const nextCollapsed = !areBothSidebarsCollapsed;
+    setIsLeftSidebarCollapsed(nextCollapsed);
+    onProjectSidebarCollapseChange?.(nextCollapsed);
+  };
+
   // 切换单个缺陷项的展开/收起状态
   const toggleDefectExpand = (key: string) => {
     setExpandedDefects(prev => {
@@ -3569,19 +3584,134 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   return (
     <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
-      {/* 左侧文件列表 (保持不变) */}
-      <Sider width={leftSidebarWidth} theme="light" style={{ borderRight: "1px solid #f0f0f0", overflow: 'hidden', transition: 'width 0.2s' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: leftSidebarWidth }}>
+      {/* 左侧文件列表 */}
+      <Sider
+        width={actualLeftSidebarWidth}
+        theme="light"
+        style={{
+          borderRight: "1px solid #f0f0f0",
+          overflow: 'hidden',
+          transition: 'all 0.2s ease',
+          position: 'relative',
+          background: isLeftSidebarCollapsed ? '#fafafa' : '#fff',
+          flex: `0 0 ${actualLeftSidebarWidth}px`,
+          maxWidth: actualLeftSidebarWidth,
+          minWidth: actualLeftSidebarWidth,
+        }}
+      >
+        {isLeftSidebarCollapsed ? (
+          <div
+            style={{
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Tooltip
+              title="展开左侧列表"
+              placement="right"
+              getPopupContainer={() => editorContainerRef.current || document.body}
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<CollapseRightOutlined />}
+                onClick={() => setIsLeftSidebarCollapsed(false)}
+                style={{
+                  width: 18,
+                  height: 72,
+                  padding: 0,
+                  borderRadius: 999,
+                  color: '#8c8c8c',
+                  background: 'transparent',
+                }}
+              />
+            </Tooltip>
+          </div>
+        ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: leftSidebarWidth, overflow: 'hidden' }}>
         <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
           <Space direction="vertical" style={{ width: "100%" }} size={12}>
-            <Button
-              icon={<LeftOutlined />}
-              onClick={onBack}
-              type="text"
-              style={{ padding: 0, height: 'auto', color: '#8c8c8c' }}
-            >
-              返回列表
-            </Button>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <Button
+                icon={<LeftOutlined />}
+                onClick={onBack}
+                type="text"
+                style={{ padding: 0, height: 'auto', color: '#8c8c8c' }}
+              >
+                返回列表
+              </Button>
+              <Space size={4}>
+                {onProjectSidebarCollapseChange && (
+                  <Tooltip
+                    title={projectSidebarCollapsed ? '展开项目列表' : '收起项目列表'}
+                    placement="right"
+                    getPopupContainer={() => editorContainerRef.current || document.body}
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DoubleRightOutlined style={{ transform: projectSidebarCollapsed ? 'none' : 'rotate(180deg)' }} />}
+                      onClick={() => onProjectSidebarCollapseChange(!projectSidebarCollapsed)}
+                      style={{
+                        color: '#8c8c8c',
+                        width: 24,
+                        minWidth: 24,
+                        height: 24,
+                        padding: 0,
+                        borderRadius: 12,
+                        flexShrink: 0,
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                {onProjectSidebarCollapseChange && (
+                  <Tooltip
+                    title={areBothSidebarsCollapsed ? '展开项目列表和返回列表' : '同时折叠项目列表和返回列表'}
+                    placement="right"
+                    getPopupContainer={() => editorContainerRef.current || document.body}
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<SwapOutlined />}
+                      onClick={handleToggleBothSidebars}
+                      style={{
+                        color: areBothSidebarsCollapsed ? '#1890ff' : '#8c8c8c',
+                        width: 24,
+                        minWidth: 24,
+                        height: 24,
+                        padding: 0,
+                        borderRadius: 12,
+                        flexShrink: 0,
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                <Tooltip
+                  title="收起左侧列表"
+                  placement="right"
+                  getPopupContainer={() => editorContainerRef.current || document.body}
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<LeftOutlined />}
+                    onClick={() => setIsLeftSidebarCollapsed(true)}
+                    style={{
+                      color: '#8c8c8c',
+                      width: 24,
+                      minWidth: 24,
+                      height: 24,
+                      padding: 0,
+                      borderRadius: 12,
+                      flexShrink: 0,
+                    }}
+                  />
+                </Tooltip>
+              </Space>
+            </div>
             <Title level={4} style={{ margin: 0, fontSize: '18px', whiteSpace: 'nowrap', display: 'inline-block' }}>
               <div ref={reportTitleRef}>
                 {report?.ReportName || `检测报告_${taskId.slice(-6)}`}
@@ -3701,6 +3831,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           </Button>
         </div>
         </div>
+        )}
       </Sider>
 
       {/* 中间编辑区 */}

@@ -7,12 +7,16 @@ interface ReportsContainerProps {
   projectId: string;
   projectName?: string;
   permission?: string;
+  projectSidebarCollapsed?: boolean;
+  onProjectSidebarCollapseChange?: (collapsed: boolean) => void;
 }
 
 const ReportsContainer: React.FC<ReportsContainerProps> = ({
   projectId,
   projectName,
   permission,
+  projectSidebarCollapsed,
+  onProjectSidebarCollapseChange,
 }) => {
   const [view, setView] = useState<"list" | "editor" | "preview">("list");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -40,6 +44,8 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
         projectName={projectName}
         onBack={handleBack}
         onPreview={() => setView("preview")}
+        projectSidebarCollapsed={projectSidebarCollapsed}
+        onProjectSidebarCollapseChange={onProjectSidebarCollapseChange}
       />
     );
   }
@@ -67,5 +73,4 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
 };
 
 export default ReportsContainer;
-
 

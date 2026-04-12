@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Routes,
   Route,
@@ -6,7 +7,8 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { Layout, Menu, Typography, Card, Spin, Alert } from "antd";
+import { LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { Layout, Menu, Typography, Card, Spin, Alert, Button, Tooltip } from "antd";
 import { useRequest } from "ahooks";
 import { projectSidebarItems } from "../utils/constans";
 import { projectAPI } from "../utils/api";
@@ -19,6 +21,13 @@ export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  const [isProjectSidebarCollapsed, setIsProjectSidebarCollapsed] = useState(false);
+
+  const projectSidebarWidth = 150;
+  const collapsedProjectSidebarWidth = 24;
+  const actualProjectSidebarWidth = isProjectSidebarCollapsed
+    ? collapsedProjectSidebarWidth
+    : projectSidebarWidth;
 
   // 获取项目信息
   const {
@@ -84,16 +93,78 @@ export default function ProjectDetail() {
   return (
     <Layout style={{ height: "calc(100vh - 64px)", overflow: "hidden" }}>
       <Sider
-        width="max-content"
-        style={{ background: "#fff", borderRight: "1px solid #f0f0f0" }}
+        width={actualProjectSidebarWidth}
+        style={{
+          background: isProjectSidebarCollapsed ? "#fafafa" : "#fff",
+          borderRight: "1px solid #f0f0f0",
+          overflow: "hidden",
+          transition: "all 0.2s ease",
+          flex: `0 0 ${actualProjectSidebarWidth}px`,
+          maxWidth: actualProjectSidebarWidth,
+          minWidth: actualProjectSidebarWidth,
+        }}
       >
-        <Menu
-          mode="inline"
-          selectedKeys={getSelectedKeys()}
-          style={{ height: "100%", borderRight: 0 }}
-          items={projectSidebarItems}
-          onClick={handleMenuClick}
-        />
+        {isProjectSidebarCollapsed ? (
+          <div
+            style={{
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Tooltip title="展开项目列表" placement="right">
+              <Button
+                type="text"
+                size="small"
+                icon={<RightOutlined />}
+                onClick={() => setIsProjectSidebarCollapsed(false)}
+                style={{
+                  width: 18,
+                  height: 72,
+                  padding: 0,
+                  borderRadius: 999,
+                  color: "#8c8c8c",
+                }}
+              />
+            </Tooltip>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                padding: "8px 8px 0 8px",
+                flexShrink: 0,
+              }}
+            >
+              <Tooltip title="收起项目列表" placement="right">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<LeftOutlined />}
+                  onClick={() => setIsProjectSidebarCollapsed(true)}
+                  style={{
+                    color: "#8c8c8c",
+                    width: 24,
+                    minWidth: 24,
+                    height: 24,
+                    padding: 0,
+                    borderRadius: 12,
+                  }}
+                />
+              </Tooltip>
+            </div>
+            <Menu
+              mode="inline"
+              selectedKeys={getSelectedKeys()}
+              style={{ height: "100%", borderRight: 0 }}
+              items={projectSidebarItems}
+              onClick={handleMenuClick}
+            />
+          </div>
+        )}
       </Sider>
 
       <Layout style={{ height: "100%", overflow: "hidden" }}>
@@ -119,7 +190,13 @@ export default function ProjectDetail() {
             <Route
               path="/reports"
               element={
-                <ReportsPage projectId={id!} projectName={project.Name} permission={project.Permission} />
+                <ReportsPage
+                  projectId={id!}
+                  projectName={project.Name}
+                  permission={project.Permission}
+                  projectSidebarCollapsed={isProjectSidebarCollapsed}
+                  onProjectSidebarCollapseChange={setIsProjectSidebarCollapsed}
+                />
               }
             />
           </Routes>
