@@ -109,10 +109,11 @@ public class ReportController {
             String filmNumber = (String) body.get("FilmNumber");
             String filmDensity = (String) body.get("FilmDensity");
             String sensitivity = (String) body.get("Sensitivity");
+            String normalizedSnr = (String) body.get("NormalizedSnr");
             
             reportService.updateFileReview(taskFileId, manualResult, plateQuality,
                 filmPixelValue, resolution, specification, inspectionDate,
-                weldId, filmNumber, filmDensity, sensitivity);
+                weldId, filmNumber, filmDensity, sensitivity, normalizedSnr);
             return ResponseEntity.ok(ApiResponse.success("保存成功", null));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
@@ -159,4 +160,3 @@ public class ReportController {
         }
     }
 }
-

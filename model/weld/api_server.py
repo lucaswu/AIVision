@@ -263,12 +263,24 @@ from gauge.region_ocr_api import (
     recognize_region as _recognize_region,
     init_region_ocr_api,
 )
+from gauge.region_snr_api import (
+    SNRRequest as _BaseSNRRequest,
+    SNRResponse,
+    close_region_snr_api,
+    compute_region_snr as _compute_region_snr,
+)
 
 
 class RecognizeRequest(_BaseRecognizeRequest):
     """扩展的 OCR 识别请求，增加调试上下文字段。"""
     task_id: Optional[str] = Field(default=None, description="任务ID，用于调试图片文件命名")
     field_name: Optional[str] = Field(default=None, description="识别字段名称，如 film_no、weld_no 等")
+
+
+class RegionSNRRequest(_BaseSNRRequest):
+    """扩展的区域归一化信噪比请求，增加调试上下文字段。"""
+    task_id: Optional[str] = Field(default=None, description="任务ID，用于调试图片文件命名")
+    field_name: Optional[str] = Field(default=None, description="识别字段名称，如 normalizedSnr")
 
 
 # OCR 调试图片存储目录
@@ -419,6 +431,22 @@ async def recognize_region_endpoint(request: RecognizeRequest):
     from gauge.region_ocr_api import RecognizeRequest as _BaseReq
     base_req = _BaseReq(image_base64=request.image_base64)
     return await _recognize_region(base_req)
+
+
+@app.post("/inference/region-snr", response_model=SNRResponse)
+async def compute_region_snr_endpoint(request: RegionSNRRequest):
+    """同步计算单张图片区域的归一化信噪比（base64输入），用于前端实时框选功能。"""
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(
+        None,
+        _save_ocr_debug_image,
+        request.image_base64,
+        request.task_id,
+        request.field_name or "normalizedSnr",
+    )
+
+    base_req = _BaseSNRRequest(image_base64=request.image_base64)
+    return await _compute_region_snr(base_req)
 
 
 # ==============================================================================
@@ -637,7 +665,7 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """服务关闭时释放后台任务和 OCR 资源。"""
+    """服务关闭时释放后台任务和 OCR / SNR 资源。"""
     for task_name in ("ocr_warmup_task", "ocr_debug_cleanup_task"):
         task = getattr(app.state, task_name, None)
         if task is None:
@@ -652,6 +680,7 @@ async def shutdown_event():
         finally:
             setattr(app.state, task_name, None)
     close_region_ocr_api()
+    close_region_snr_api()
 
 
 if __name__ == "__main__":

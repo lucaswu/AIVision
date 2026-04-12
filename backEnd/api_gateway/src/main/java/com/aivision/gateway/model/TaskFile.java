@@ -104,6 +104,10 @@ public class TaskFile {
     @JsonProperty("Sensitivity")
     private String sensitivity;
 
+    @Column(name = "normalized_snr", length = 50)
+    @JsonProperty("NormalizedSnr")
+    private String normalizedSnr;
+
     // --- 新增：缺陷记录列表（一对多关系）---
     @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     @JoinColumn(name = "task_file_id", referencedColumnName = "task_file_id", insertable = false, updatable = false)
@@ -343,6 +347,15 @@ public class TaskFile {
 
     public void setSensitivity(String sensitivity) {
         this.sensitivity = sensitivity;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getNormalizedSnr() {
+        return normalizedSnr;
+    }
+
+    public void setNormalizedSnr(String normalizedSnr) {
+        this.normalizedSnr = normalizedSnr;
         this.updatedAt = LocalDateTime.now();
     }
 

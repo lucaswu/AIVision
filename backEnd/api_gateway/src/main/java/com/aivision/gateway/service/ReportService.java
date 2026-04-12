@@ -120,7 +120,7 @@ public class ReportService {
  */
 public void updateFileReview(String taskFileId, String manualResult, String plateQuality) {
     updateFileReview(taskFileId, manualResult, plateQuality,
-        null, null, null, null, null, null, null, null);
+        null, null, null, null, null, null, null, null, null);
 }
 
 /**
@@ -128,7 +128,8 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
  */
 public void updateFileReview(String taskFileId, String manualResult, String plateQuality,
                               String filmPixelValue, String resolution, String specification, String inspectionDate,
-                              String weldId, String filmNumber, String filmDensity, String sensitivity) {
+                              String weldId, String filmNumber, String filmDensity, String sensitivity,
+                              String normalizedSnr) {
     TaskFile tf = taskFileRepository.findById(taskFileId)
         .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
     
@@ -151,6 +152,7 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
     if (filmNumber != null) tf.setFilmNumber(filmNumber);
     if (filmDensity != null) tf.setFilmDensity(filmDensity);
     if (sensitivity != null) tf.setSensitivity(sensitivity);
+    if (normalizedSnr != null) tf.setNormalizedSnr(normalizedSnr);
     
     tf.setReviewStatus(TaskFile.ReviewStatus.CONFIRMED);
     taskFileRepository.save(tf);

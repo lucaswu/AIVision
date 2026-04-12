@@ -178,6 +178,7 @@ public class TaskService {
             item.setSliceNo(tf.getFilmNumber());
             item.setFilmDensity(tf.getFilmDensity());
             item.setIqiSensitivity(tf.getSensitivity());
+            item.setNormalizedSnr(tf.getNormalizedSnr());
             item.setQualityLevel(tf.getPlateQuality());
             
             // 评定结果逻辑：优先取人工结果，没有则取 ReviewStatus，最后取 VisionStatus

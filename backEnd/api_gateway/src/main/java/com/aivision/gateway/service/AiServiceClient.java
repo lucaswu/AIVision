@@ -708,6 +708,48 @@ public class AiServiceClient {
     }
 
     /**
+     * 同步计算单张图片区域的归一化信噪比（base64输入），用于前端实时框选功能
+     * @param base64Image base64编码的图片
+     * @param taskId      可选，任务ID，用于调试图片文件命名
+     * @param fieldName   可选，字段名称，用于调试图片文件命名
+     */
+    public Map<String, Object> computeImageRegionSnr(String base64Image, String taskId, String fieldName) {
+        String url = ocrInferenceServiceUrl + "/inference/region-snr";
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("image_base64", base64Image);
+        if (taskId != null && !taskId.isBlank()) {
+            body.put("task_id", taskId);
+        }
+        if (fieldName != null && !fieldName.isBlank()) {
+            body.put("field_name", fieldName);
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+
+        logger.info("调用区域归一化信噪比接口: taskId={}, fieldName={}", taskId, fieldName);
+        try {
+            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("区域归一化信噪比计算失败: " + response.getStatusCode());
+            }
+            return objectMapper.readValue(response.getBody(), Map.class);
+        } catch (Exception e) {
+            logger.error("区域归一化信噪比计算失败: {}", e.getMessage());
+            throw new RuntimeException("区域归一化信噪比计算失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 兼容旧签名：无 taskId/fieldName 的调用
+     */
+    public Map<String, Object> computeImageRegionSnr(String base64Image) {
+        return computeImageRegionSnr(base64Image, null, null);
+    }
+
+    /**
      * 健康检查 - OCR AI 服务
      */
     public boolean checkOcrAiHealth() {

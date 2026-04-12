@@ -130,6 +130,7 @@ export interface TaskFile {
   FilmNumber?: string;   // 片号
   FilmDensity?: string;  // 底片黑度
   Sensitivity?: string;  // 像质计灵敏度
+  NormalizedSnr?: string; // 区域归一化信噪比
   // 新增：缺陷记录列表
   DefectRecords?: DefectRecord[];
   ProcessingStartTime?: string;

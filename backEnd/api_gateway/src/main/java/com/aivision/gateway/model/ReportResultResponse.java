@@ -63,6 +63,9 @@ public class ReportResultResponse {
         
         @JsonProperty("IQISensitivity")
         private String iqiSensitivity;
+
+        @JsonProperty("NormalizedSnr")
+        private String normalizedSnr;
         
         @JsonProperty("QualityLevel")
         private String qualityLevel;
@@ -106,6 +109,9 @@ public class ReportResultResponse {
         
         public String getIqiSensitivity() { return iqiSensitivity; }
         public void setIqiSensitivity(String iqiSensitivity) { this.iqiSensitivity = iqiSensitivity; }
+
+        public String getNormalizedSnr() { return normalizedSnr; }
+        public void setNormalizedSnr(String normalizedSnr) { this.normalizedSnr = normalizedSnr; }
         
         public String getQualityLevel() { return qualityLevel; }
         public void setQualityLevel(String qualityLevel) { this.qualityLevel = qualityLevel; }

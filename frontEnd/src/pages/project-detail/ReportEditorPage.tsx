@@ -70,7 +70,7 @@ import {
   ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, type OcrRecognizeResult } from "../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, type OcrRecognizeResult, type RegionSnrResult } from "../../utils/api";
 import { fileThumbnailPath } from "../../utils/constans";
 
 // 移除本地 Mock defectRecordAPI
@@ -112,6 +112,8 @@ type FilmInfoOcrField =
   | 'weldId'
   | 'filmNumber'
   | 'sensitivity';
+
+type FilmInfoRegionField = FilmInfoOcrField | 'normalizedSnr';
 
 // 扩展保存的图形接口，增加 label, color 以及新的业务字段
 interface DefectBase {
@@ -250,6 +252,34 @@ function hitTestEllipse(x: number, y: number, shape: EllipseShape) {
   const lx = dx * cos - dy * sin;
   const ly = dx * sin + dy * cos;
   return (lx * lx) / (shape.rx * shape.rx) + (ly * ly) / (shape.ry * shape.ry) <= 1;
+}
+
+const REGION_SNR_ERROR_MESSAGES: Record<number, string> = {
+  4001: '输入区域面积不满足要求，请缩小框选范围后重试',
+  4002: '区域灰度标准差为 0，无法计算归一化信噪比，请重新框选',
+};
+
+function getRegionSelectionPrompt(field: FilmInfoRegionField) {
+  if (field === 'normalizedSnr') {
+    return '请在图像上框选要计算区域归一化信噪比的区域';
+  }
+  return '请在图像上框选要识别的区域';
+}
+
+function formatNormalizedSnrValue(value: number) {
+  const normalized = value.toFixed(4);
+  return normalized.replace(/\.?0+$/, '');
+}
+
+function getRegionSnrErrorMessage(result: RegionSnrResult) {
+  const mapped = REGION_SNR_ERROR_MESSAGES[result.result_code];
+  if (mapped && result.message && result.message !== '未知错误') {
+    return `${mapped}：${result.message}`;
+  }
+  if (mapped) {
+    return mapped;
+  }
+  return result.message || '区域归一化信噪比计算失败';
 }
 
 /**
@@ -722,8 +752,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [showFilmInfo, setShowFilmInfo] = useState(true); // 底片信息折叠状态
 
   // --- OCR 框选识别状态 ---
-  const [ocrTargetField, setOcrTargetField] = useState<FilmInfoOcrField | null>(null);
-  const [ocrLoadingField, setOcrLoadingField] = useState<string | null>(null);
+  const [ocrTargetField, setOcrTargetField] = useState<FilmInfoRegionField | null>(null);
+  const [ocrLoadingField, setOcrLoadingField] = useState<FilmInfoRegionField | null>(null);
   const [ocrDrawRect, setOcrDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [ocrDrawStart, setOcrDrawStart] = useState<{ x: number; y: number } | null>(null);
 
@@ -2143,6 +2173,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         filmNumber: selectedFile.FilmNumber || '',
         filmDensity: selectedFile.FilmDensity || '',
         sensitivity: selectedFile.Sensitivity || '',
+        normalizedSnr: selectedFile.NormalizedSnr || '',
       };
       filmInfoForm.setFieldsValue(initialFilmInfo);
       originalFilmInfoRef.current = initialFilmInfo;
@@ -2614,6 +2645,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         FilmNumber: infoValues.filmNumber,
         FilmDensity: infoValues.filmDensity,
         Sensitivity: infoValues.sensitivity,
+        NormalizedSnr: infoValues.normalizedSnr,
       });
 
       // 2. 保存缺陷记录（替换式更新）
@@ -2704,6 +2736,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
           FilmNumber: values.filmNumber,
           FilmDensity: values.filmDensity,
           Sensitivity: values.sensitivity,
+          NormalizedSnr: values.normalizedSnr,
         });
         // 同步更新内存中的对象，避免切换图片后表单被重置为旧值
         selectedFile.FilmPixelValue = values.filmPixelValue;
@@ -2714,6 +2747,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         selectedFile.FilmNumber = values.filmNumber;
         selectedFile.FilmDensity = values.filmDensity;
         selectedFile.Sensitivity = values.sensitivity;
+        selectedFile.NormalizedSnr = values.normalizedSnr;
         console.log('底片信息已自动保存');
       } catch (err) {
         console.error('自动保存底片信息失败:', err);
@@ -2858,18 +2892,18 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   // --- OCR 框选识别 ---
-  const handleOcrButtonClick = (field: FilmInfoOcrField) => {
+  const handleOcrButtonClick = (field: FilmInfoRegionField) => {
     if (ocrTargetField === field) {
       setOcrTargetField(null);
     } else {
       setOcrTargetField(field);
-      message.info('请在图像上框选要识别的区域');
+      message.info(getRegionSelectionPrompt(field));
     }
   };
 
   const handleOcrRegionSelected = async (
     rect: { x: number; y: number; w: number; h: number },
-    field: FilmInfoOcrField
+    field: FilmInfoRegionField
   ) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2895,6 +2929,22 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     console.log('[OCR] 开始识别, field:', field, '裁剪区域:', { sx, sy, sw, sh }, 'canvas尺寸:', { w: canvas.width, h: canvas.height });
     setOcrLoadingField(field);
     try {
+      if (field === 'normalizedSnr') {
+        const result: RegionSnrResult = await snrAPI.computeRegion(base64, taskId, field);
+        console.log('[SNR] 后端返回结果:', result);
+        if (result.result_code === 0 && typeof result.snr_n === 'number') {
+          const snrValue = formatNormalizedSnrValue(result.snr_n);
+          filmInfoForm.setFieldValue('normalizedSnr', snrValue);
+          autoSaveFilmInfo();
+          message.success(`区域归一化信噪比计算成功: ${snrValue}`);
+        } else if (result.result_code === 0) {
+          message.error('区域归一化信噪比计算成功，但未返回 snr_n');
+        } else {
+          message.error(getRegionSnrErrorMessage(result));
+        }
+        return;
+      }
+
       const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64, taskId, field);
       console.log('[OCR] 后端返回结果:', result);
       const recognized = result?.text?.trim();
@@ -2910,7 +2960,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       }
     } catch (err) {
       console.error('[OCR] 请求失败:', err);
-      message.error('OCR识别失败');
+      message.error(field === 'normalizedSnr' ? '区域归一化信噪比计算失败' : 'OCR识别失败');
     } finally {
       setOcrLoadingField(null);
     }
@@ -3320,22 +3370,40 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <Input />
               </Form.Item>
             </Form.Item>
-            <Form.Item label="像质计灵敏度" style={{ marginBottom: 8 }}>
-              <Space.Compact style={{ width: '100%' }}>
+            <Form.Item label="像质计灵敏度" style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', width: '100%' }}>
                 <Form.Item name="sensitivity" noStyle>
-                  <Input placeholder="输入像质计灵敏度" />
+                  <Input
+                    placeholder="输入像质计灵敏度"
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={showIqiWires ? 'primary' : 'default'}
+                  disabled={!selectedFile || iqiWireLines.length === 0}
+                  onClick={() => setShowIqiWires(v => !v)}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {showIqiWires ? '隐藏结果' : '显示结果'}
+                </Button>
+              </div>
+            </Form.Item>
+            <Form.Item label="区域归一化信噪比" style={{ marginBottom: 8 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'normalizedSnr' ? '点击取消框选' : '框选计算区域归一化信噪比'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'normalizedSnr'} />}
+                    type={ocrTargetField === 'normalizedSnr' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('normalizedSnr')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'normalizedSnr')}
+                  />
+                </Tooltip>
+                <Form.Item name="normalizedSnr" noStyle>
+                  <Input placeholder="框选后识别区域归一化信噪比" readOnly />
                 </Form.Item>
               </Space.Compact>
-            </Form.Item>
-            <Form.Item label=" " colon={false} style={{ marginBottom: 0 }}>
-              <Button
-                size="small"
-                type={showIqiWires ? 'primary' : 'default'}
-                disabled={!selectedFile || iqiWireLines.length === 0}
-                onClick={() => setShowIqiWires(v => !v)}
-              >
-                {showIqiWires ? '隐藏结果' : '显示结果'}
-              </Button>
             </Form.Item>
           </Form>
         )}

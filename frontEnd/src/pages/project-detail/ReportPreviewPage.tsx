@@ -598,6 +598,10 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                         <Text type="secondary" style={{ fontSize: '12px' }}>灵敏度</Text>
                                         <div style={{ fontWeight: 500 }}>{file.Sensitivity || '-'}</div>
                                       </Col>
+                                      <Col span={6}>
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>区域归一化信噪比</Text>
+                                        <div style={{ fontWeight: 500 }}>{file.NormalizedSnr || '-'}</div>
+                                      </Col>
                                     </Row>
                                   </div>
 

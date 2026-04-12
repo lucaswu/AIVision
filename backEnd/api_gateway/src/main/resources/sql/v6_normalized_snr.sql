@@ -1,0 +1,1 @@
+ALTER TABLE task_file ADD COLUMN IF NOT EXISTS normalized_snr VARCHAR(50);

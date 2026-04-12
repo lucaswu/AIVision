@@ -208,6 +208,7 @@ export const reportAPI = {
     FilmNumber?: string;
     FilmDensity?: string;
     Sensitivity?: string;
+    NormalizedSnr?: string;
   }) =>
     request<void>(`/api/v1/reports/files/${taskFileId}/review`, {
       method: "PUT",
@@ -348,6 +349,24 @@ export interface OcrRecognizeResult {
   raw_results: { text: string; confidence: number }[];
 }
 
+export interface RegionSnrResult {
+  ok: boolean;
+  status: "ok" | "error";
+  result_code: number;
+  result_name: string;
+  message: string;
+  snr_m: number | null;
+  snr_n: number | null;
+  sr_b_um: number;
+  gray_mean: number | null;
+  gray_std: number | null;
+  width: number;
+  height: number;
+  area_pixels: number;
+  area_limit_pixels: number;
+  timings_ms: Record<string, number>;
+}
+
 // OCR 识别API
 export const ocrAPI = {
   recognizeRegion: async (
@@ -363,6 +382,26 @@ export const ocrAPI = {
     if (fieldName) body['field_name'] = fieldName;
     const result = await request<OcrRecognizeResult>(
       '/api/v1/ocr/recognize',
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+    return result.Data;
+  },
+};
+
+export const snrAPI = {
+  computeRegion: async (
+    base64WithPrefix: string,
+    taskId?: string,
+    fieldName?: string,
+  ): Promise<RegionSnrResult> => {
+    const base64 = base64WithPrefix.startsWith('data:')
+      ? base64WithPrefix.split(',')[1]
+      : base64WithPrefix;
+    const body: Record<string, string> = { base64 };
+    if (taskId) body['task_id'] = taskId;
+    if (fieldName) body['field_name'] = fieldName;
+    const result = await request<RegionSnrResult>(
+      '/api/v1/ocr/region-snr',
       { method: 'POST', body: JSON.stringify(body) }
     );
     return result.Data;
