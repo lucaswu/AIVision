@@ -301,7 +301,8 @@ def compute_grayscale_density(image_bgr: np.ndarray,
         (x*20%, y/2),  (x/2, y/2),  (x*80%, y/2)
 
     Args:
-        image_bgr: Input BGR image (corrected original).
+        image_bgr: Corrected original image used for sampling. May be uint8,
+            uint16, float32 grayscale, or multi-channel image.
         region_w: Width of the sampling region in pixels (default 20).
         region_h: Height of the sampling region in pixels (default 50).
 

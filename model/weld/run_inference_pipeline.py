@@ -124,15 +124,17 @@ def _read_dicom_for_conversion(path: Path) -> Tuple[np.ndarray, bool]:
         raise RuntimeError("DICOM 缺少 PixelData")
 
     arr = ds.pixel_array
-    if arr.ndim == 3:
+    samples_per_pixel = int(getattr(ds, "SamplesPerPixel", 1) or 1)
+    if arr.ndim == 4:
         arr = arr[0]
-    elif arr.ndim == 4:
-        arr = arr[0, 0]
+    if arr.ndim == 3 and samples_per_pixel == 1:
+        arr = arr[0]
 
     arr = arr.astype(np.float32)
     slope = float(getattr(ds, "RescaleSlope", 1.0))
     intercept = float(getattr(ds, "RescaleIntercept", 0.0))
-    arr = arr * slope + intercept
+    if samples_per_pixel == 1:
+        arr = arr * slope + intercept
 
     invert = str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1"
     return arr, invert
@@ -183,6 +185,65 @@ def _prepare_image_input(image_path: Path, prepared_root: Path) -> PreparedImage
         processing_path=prepared_path,
         converted_to_8bit=True,
     )
+
+
+def _apply_correction_label(image: np.ndarray, label_idx: int) -> np.ndarray:
+    """
+    Apply the same orientation-restoration transform implied by correction label.
+
+    This mirrors ``WeldOrientationCorrector._restore_image`` but works for
+    raw grayscale / 16-bit arrays as well, so we can compute film density on
+    the original high-bit image while keeping coordinates aligned with the
+    corrected 8-bit inference image.
+    """
+    img = image.copy()
+    rot_state = label_idx % 4
+
+    if rot_state == 1:
+        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    elif rot_state == 2:
+        img = cv2.rotate(img, cv2.ROTATE_180)
+    elif rot_state == 3:
+        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+
+    if label_idx >= 4:
+        img = cv2.flip(img, 1)
+
+    return img
+
+
+def _invert_density_image(image: np.ndarray) -> np.ndarray:
+    """
+    Invert grayscale polarity while preserving the original value range.
+
+    For MONOCHROME1 DICOM, larger raw values represent brighter display values.
+    Film density sampling should follow the same visual polarity as the
+    downstream 8-bit display conversion, but without compressing to 8-bit.
+    """
+    if image is None or image.size == 0:
+        return image
+
+    arr = image.astype(np.float32, copy=False)
+    img_min = float(np.min(arr))
+    img_max = float(np.max(arr))
+    return (img_max + img_min) - arr
+
+
+def _load_density_image(image_path: Path, correction_label: int) -> np.ndarray:
+    """
+    Load the original source image for film-density measurement.
+
+    Unlike the inference branch, this keeps the native precision (e.g. uint16 /
+    float32 DICOM values) and only applies polarity correction plus the same
+    orientation correction label so the sampling coordinates still line up with
+    weld_location / defect_position outputs.
+    """
+    image, invert = _read_image_for_preprocessing(image_path)
+    if invert:
+        image = _invert_density_image(image)
+    if correction_label != 0:
+        image = _apply_correction_label(image, correction_label)
+    return image
 
 
 def parse_args() -> argparse.Namespace:
@@ -425,17 +486,26 @@ class InferencePipelineRunner:
                     except Exception as iqi_exc:
                         print(f"[警告] IQI 推理失败 ({image_path.name}): {iqi_exc}")
 
-                # Compute grayscale density (film blackness) from the inference results
-                # corrected_img is orientation-corrected image matching weld_location keypoints
+                # Compute grayscale density (film blackness) from the original source image.
+                # Detection still runs on the preprocessed 8-bit branch, but density sampling
+                # should use native high-bit data after applying the same correction label so
+                # coordinates remain aligned with weld_location keypoints.
                 grayscale_density: Optional[str] = None
-                if corrected_img is not None:
+                density_image = None
+                try:
+                    density_image = _load_density_image(image_path, label)
+                except Exception as density_exc:
+                    print(f"[警告] 原始灰度图加载失败，回退使用推理图 ({image_path.name}): {density_exc}")
+                    density_image = corrected_img
+
+                if density_image is not None:
                     try:
                         if weld_location:
                             # B path detected: use ellipse/vertical clock positions
-                            grayscale_density = compute_grayscale_loc0(corrected_img, weld_location)
+                            grayscale_density = compute_grayscale_loc0(density_image, weld_location)
                         if grayscale_density is None:
                             # Fallback to linear sampling (D path or no location detection)
-                            grayscale_density = compute_grayscale_loc1(corrected_img)
+                            grayscale_density = compute_grayscale_loc1(density_image)
                     except Exception as gs_exc:
                         print(f"[警告] 灰度值计算失败 ({image_path.name}): {gs_exc}")
 

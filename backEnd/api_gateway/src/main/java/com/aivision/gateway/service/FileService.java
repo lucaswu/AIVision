@@ -101,10 +101,10 @@ public class FileService {
         }
         
         // 4. 逐个处理文件，收集需要生成缩略图的 fileId
-        List<String> bmpFileIds = new ArrayList<>();
+        List<String> thumbnailFileIds = new ArrayList<>();
         for (MultipartFile file : files) {
             try {
-                processFile(file, projectId, userId, directoryId, directory, successFiles, failedFiles, bmpFileIds);
+                processFile(file, projectId, userId, directoryId, directory, successFiles, failedFiles, thumbnailFileIds);
             } catch (Exception e) {
                 failedFiles.add(new FileUploadResponse.FailedFileInfo(
                     file.getOriginalFilename(), "文件处理失败: " + e.getMessage()));
@@ -113,11 +113,11 @@ public class FileService {
 
         // 5. 注册事务提交后回调，确保 DB 记录已可见再触发缩略图生成
         //    （批量上传时若在事务内触发，缩略图线程会因 findById 查不到记录而失败）
-        if (!bmpFileIds.isEmpty()) {
+        if (!thumbnailFileIds.isEmpty()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    bmpFileIds.forEach(fileId -> {
+                    thumbnailFileIds.forEach(fileId -> {
                         thumbnailService.generateAndStore(fileId);
                         logger.info("已触发异步缩略图生成（事务提交后）: fileId={}", fileId);
                     });
@@ -187,11 +187,11 @@ public class FileService {
     
     /**
      * 处理单个文件
-     * @param bmpFileIds 收集 BMP 文件的 fileId，用于事务提交后触发缩略图生成
+     * @param thumbnailFileIds 收集需要生成缩略图的 fileId，用于事务提交后触发缩略图生成
      */
     private void processFile(MultipartFile file, String projectId, String userId, String directoryId,
                             Directory directory, List<FileUploadResponse.SuccessFileInfo> successFiles,
-                            List<FileUploadResponse.FailedFileInfo> failedFiles, List<String> bmpFileIds) {
+                            List<FileUploadResponse.FailedFileInfo> failedFiles, List<String> thumbnailFileIds) {
         
         String originalFilename = file.getOriginalFilename();
         
@@ -222,9 +222,9 @@ public class FileService {
             
             fileRepository.save(fileEntity);
 
-            // 5. BMP 文件记录到待处理列表（在事务提交后统一触发，避免竞态）
-            if ("bmp".equals(fileExtension)) {
-                bmpFileIds.add(fileId);
+            // 5. 支持渐进式预览的文件记录到待处理列表（在事务提交后统一触发，避免竞态）
+            if (thumbnailService.supportsThumbnailGeneration(fileExtension)) {
+                thumbnailFileIds.add(fileId);
             }
             
             // 6. 添加到成功列表

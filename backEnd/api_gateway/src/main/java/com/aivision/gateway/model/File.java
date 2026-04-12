@@ -44,7 +44,7 @@ public class File {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    /** JPEG 预览图在 Storage 中的路径；NULL 表示尚未生成（非 BMP 文件或转换进行中） */
+    /** JPEG 预览图在 Storage 中的路径；NULL 表示尚未生成或转换仍在进行中 */
     @Column(name = "thumbnail_path", length = 500)
     private String thumbnailPath;
     

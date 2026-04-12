@@ -249,7 +249,8 @@ def locate_weld_seam(image_bgr: np.ndarray,
     Convenience function to run weld seam location on a single image.
 
     Args:
-        image_bgr: Input BGR image (corrected original).
+        image_bgr: Corrected original image used for sampling. May be uint8,
+            uint16, float32 grayscale, or multi-channel image.
         model_path: Path to model weights (uses default if None).
         conf_threshold: Minimum detection confidence.
 
@@ -277,7 +278,8 @@ def compute_grayscale_density(image_bgr: np.ndarray,
     sampling at x*20%, x/2, x*80% along the image mid-height.
 
     Args:
-        image_bgr: Input BGR image (corrected original).
+        image_bgr: Corrected original image used for sampling. May be uint8,
+            uint16, float32 grayscale, or multi-channel image.
         detections: List of detection dicts from WeldSeamLocator.predict().
         region_w: Width of the sampling region in pixels (default 20).
         region_h: Height of the sampling region in pixels (default 50).

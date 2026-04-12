@@ -1176,7 +1176,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // ─── 两阶段渐进式加载 ────────────────────────────────────────────────────────
   // Phase-1: 先尝试获取 JPEG 缩略图（~0.5MB），命中则立即显示（视觉占位）
-  // Phase-2: 后台同时拉取原始 BMP，完成后无缝替换，并写入 LRU 缓存
+  // Phase-2: 后台同时拉取原始文件，完成后无缝替换，并写入 LRU 缓存
   // 规则：原图写入 LRU 缓存 + 灰度预处理；JPEG 仅用于视觉占位，不写入缓存
   useEffect(() => {
     if (!selectedFile || !previewUrl) {
@@ -1199,6 +1199,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     // 用 fileId 快照防止异步竞态（切换文件时忽略过期响应）
     const targetFileId = selectedFile.FileId;
     const targetFileName = selectedFile.FileName || 'image.png';
+    const thumbnailFileName = targetFileName.includes('.')
+      ? targetFileName.replace(/\.[^.]+$/i, '.jpg')
+      : `${targetFileName}.jpg`;
     let originalFetchAborted = false;
 
     const thumbnailUrl = `${fileThumbnailPath}?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`;
@@ -1208,7 +1211,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       .then(async res => {
         if (!res.ok) return; // 404 = 缩略图未就绪，静默忽略，等原图
         const blob = await res.blob();
-        const jpegFile = new File([blob], targetFileName.replace(/\.bmp$/i, '.jpg'), { type: 'image/jpeg' });
+        const jpegFile = new File([blob], thumbnailFileName, { type: 'image/jpeg' });
         if (originalFetchAborted) return;
         // 只在原图尚未到达时才设置 JPEG（防止原图先到被 JPEG 覆盖）
         if (!getBlobCache(targetFileId)) {
@@ -1222,7 +1225,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       })
       .catch(() => { /* 缩略图网络错误静默忽略 */ });
 
-    // ── Phase-2：后台并行拉取原始 BMP ─────────────────────────────────────────
+    // ── Phase-2：后台并行拉取原始文件 ─────────────────────────────────────────
     fetch(previewUrl)
       .then(res => res.blob())
       .then(blob => {
@@ -1232,7 +1235,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         // 原图到达后立即替换（无论当前显示的是 JPEG 还是空）
         setImageFile(originalFile);
         setIsPreviewQuality(false); // 标记：原图已就位
-        console.log('[Progressive] Phase-2: Original BMP loaded, replaced JPEG');
+        console.log('[Progressive] Phase-2: Original file loaded, replaced JPEG');
         // 灰度预处理仅对原图执行（JPEG 有损，不用于窗宽窗位计算）
         preprocessToGrayCache(originalFile).catch(() => {});
       })

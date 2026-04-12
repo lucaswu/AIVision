@@ -9,6 +9,7 @@ AIVision 推理服务 API 入口
 """
 
 import json
+import io
 import os
 import subprocess
 import sys
@@ -18,7 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import cv2
+import numpy as np
+from fastapi import FastAPI, HTTPException, BackgroundTasks, File as FastAPIFile, Form, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -62,6 +65,90 @@ app.add_middleware(
 # 全局状态存储
 inference_tasks: Dict[str, Dict[str, Any]] = {}
 executor = ThreadPoolExecutor(max_workers=2)
+THUMBNAIL_DICOM_EXTENSIONS = {".dcm", ".dicom", ".dic", ".diconde"}
+THUMBNAIL_TIFF_EXTENSIONS = {".tif", ".tiff"}
+
+
+def _normalize_thumbnail_image(image: np.ndarray, invert: bool = False) -> np.ndarray:
+    if image is None:
+        raise ValueError("空图像无法生成缩略图")
+
+    if image.ndim == 3 and image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+    if image.dtype == np.uint8 and not invert:
+        return image
+
+    arr = image.astype(np.float32, copy=False)
+    low = float(np.min(arr))
+    high = float(np.max(arr))
+
+    if high <= low:
+        out = np.zeros(arr.shape, dtype=np.uint8)
+    else:
+        arr = np.clip(arr, low, high)
+        arr = (arr - low) / (high - low) * 255.0
+        if invert:
+            arr = 255.0 - arr
+        out = arr.astype(np.uint8)
+
+    if out.ndim == 3 and out.shape[2] == 4:
+        out = cv2.cvtColor(out, cv2.COLOR_BGRA2BGR)
+    return out
+
+
+def _decode_tiff_bytes(content: bytes) -> np.ndarray:
+    image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError("无法解码 TIFF 图像")
+    return image
+
+
+def _decode_dicom_bytes(content: bytes) -> tuple[np.ndarray, bool]:
+    try:
+        import pydicom
+    except Exception as exc:
+        raise RuntimeError("pydicom 未安装，无法生成 DICOM 缩略图") from exc
+
+    ds = pydicom.dcmread(io.BytesIO(content), force=True)
+    if not hasattr(ds, "PixelData"):
+        raise ValueError("DICOM 缺少 PixelData")
+
+    image = ds.pixel_array
+    samples_per_pixel = int(getattr(ds, "SamplesPerPixel", 1) or 1)
+
+    if image.ndim == 4:
+        image = image[0]
+    if image.ndim == 3 and samples_per_pixel == 1:
+        image = image[0]
+
+    image = image.astype(np.float32)
+
+    if samples_per_pixel == 1:
+        slope = float(getattr(ds, "RescaleSlope", 1.0))
+        intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+        image = image * slope + intercept
+
+    invert = str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1"
+    return image, invert
+
+
+def _convert_to_thumbnail_jpeg(content: bytes, filename: str, quality: int) -> bytes:
+    suffix = Path(filename or "image").suffix.lower()
+
+    if suffix in THUMBNAIL_DICOM_EXTENSIONS:
+        image, invert = _decode_dicom_bytes(content)
+    elif suffix in THUMBNAIL_TIFF_EXTENSIONS:
+        image = _decode_tiff_bytes(content)
+        invert = False
+    else:
+        raise ValueError(f"不支持的缩略图源格式: {suffix or 'unknown'}")
+
+    display_image = _normalize_thumbnail_image(image, invert=invert)
+    ok, encoded = cv2.imencode(".jpg", display_image, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if not ok:
+        raise RuntimeError("JPEG 编码失败")
+    return encoded.tobytes()
 
 
 # ==============================================================================
@@ -140,6 +227,28 @@ async def health_check():
 async def root():
     """根路径"""
     return {"service": "AIVision Inference Service", "version": "1.0.0"}
+
+
+@app.post("/thumbnail/convert")
+async def convert_thumbnail(
+    file: UploadFile = FastAPIFile(...),
+    quality: int = Form(85),
+):
+    """将 TIFF/DICOM 原图同步转换为 JPEG 缩略图字节流。"""
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="上传文件为空")
+
+        safe_quality = max(1, min(100, int(quality)))
+        jpeg_bytes = _convert_to_thumbnail_jpeg(content, file.filename or "", safe_quality)
+        return Response(content=jpeg_bytes, media_type="image/jpeg")
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"缩略图转换失败: {exc}") from exc
 
 
 @app.post("/inference/submit", response_model=InferenceResponse)
