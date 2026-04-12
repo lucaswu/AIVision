@@ -52,7 +52,12 @@ IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
 if str(IQIDDET_ROOT) not in sys.path:
     sys.path.insert(0, str(IQIDDET_ROOT))
 try:
-    from gauge.iqi_inferencer import IQIInferencer, build_delivery_record, build_iqi_statistics  # noqa: E402
+    from gauge.iqi_inferencer import (  # noqa: E402
+        IQIInferencer,
+        build_delivery_record,
+        build_iqi_statistics,
+        save_debug_visualizations,
+    )
     _IQI_AVAILABLE = True
 except ImportError as _iqi_err:
     _IQI_AVAILABLE = False
@@ -407,6 +412,21 @@ def collect_images(image_dir: Optional[Path], file_list_path: Optional[Path], ma
     return image_paths
 
 
+def _get_rel_path(image_path: Path, image_root: Optional[Path]) -> Path:
+    if image_root is None:
+        return Path(image_path.name)
+    try:
+        return image_path.relative_to(image_root)
+    except ValueError:
+        return Path(image_path.name)
+
+
+def _build_iqi_sample_dir(vis_dir: Path, image_path: Path, image_root: Optional[Path], result_name: str) -> Path:
+    rel_path = _get_rel_path(image_path, image_root)
+    safe_name = str(result_name or "unknown")
+    return vis_dir / safe_name / rel_path.with_suffix("")
+
+
 def build_roi_detector(args: argparse.Namespace) -> Optional[WeldROIDetector]:
     if not args.roi_weights:
         return None
@@ -449,6 +469,12 @@ class InferencePipelineRunner:
         self.locator = locator
         self.detector = detector
         self.iqi_inferencer = iqi_inferencer
+        self.iqi_image_root = Path(args.image_dir).resolve() if args.image_dir else None
+        self.iqi_vis_dir = (
+            self.output_dir / "iqi_vis"
+            if self.output_dir is not None and self.iqi_inferencer is not None
+            else None
+        )
 
         self.det_model_cls = rfdet_pipeline.RFDetrDetectionModel
         self.seg_model_cls = rfdet_pipeline.RFDetrSegmentationModel
@@ -481,7 +507,40 @@ class InferencePipelineRunner:
                 iqi_result: Optional[Dict[str, Any]] = None
                 if self.iqi_inferencer is not None:
                     try:
-                        iqi_record, _ = self.iqi_inferencer.infer_image_path(processing_path)
+                        want_iqi_vis = self.iqi_vis_dir is not None
+                        iqi_record, artifacts = self.iqi_inferencer.infer_image_path(
+                            processing_path,
+                            return_debug_artifacts=want_iqi_vis,
+                        )
+                        iqi_record["image_path"] = str(image_path)
+                        if want_iqi_vis and artifacts is not None and artifacts.get("image") is not None:
+                            try:
+                                sample_dir = _build_iqi_sample_dir(
+                                    self.iqi_vis_dir,
+                                    image_path,
+                                    self.iqi_image_root,
+                                    str(iqi_record.get("result_name", "unknown")),
+                                )
+                                iqi_record.update(
+                                    save_debug_visualizations(
+                                        output_dir=self.output_dir,
+                                        sample_dir=sample_dir,
+                                        image=artifacts["image"],
+                                        full_ocr_result=iqi_record.get("full_image_ocr") or iqi_record.get("ocr") or {},
+                                        full_ocr_image=artifacts.get("full_ocr_input"),
+                                        roi_info=iqi_record.get("roi") or {},
+                                        roi_image=artifacts.get("roi_image"),
+                                        roi_gray=artifacts.get("roi_gray"),
+                                        roi_ocr_result=iqi_record.get("roi_ocr") or {},
+                                        wire_result=iqi_record.get("wire") or {},
+                                        visualization=iqi_record.get("visualization") or {},
+                                        plate_code=iqi_record.get("plate_code"),
+                                        grade=iqi_record.get("grade"),
+                                        wire_count=iqi_record.get("wire_count"),
+                                    )
+                                )
+                            except Exception as iqi_vis_exc:
+                                print(f"[警告] IQI 调试图保存失败 ({image_path.name}): {iqi_vis_exc}")
                         iqi_result = iqi_record
                     except Exception as iqi_exc:
                         print(f"[警告] IQI 推理失败 ({image_path.name}): {iqi_exc}")
@@ -911,6 +970,7 @@ def main():
                     "enable_ocr_orientation": args.enable_ocr_orientation,
                     "ocr_orientation_model": args.ocr_orientation_model,
                     "ocr_orientation_device": args.ocr_orientation_device,
+                    "vis_dir": "iqi_vis" if iqi_inferencer is not None else None,
                 },
                 "summary": {
                     "images_total": summary["images_total"],

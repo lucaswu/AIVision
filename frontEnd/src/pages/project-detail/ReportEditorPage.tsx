@@ -141,6 +141,26 @@ interface WeldLocationRect {
   keypoints: { x: number; y: number }[];
 }
 
+type IqiPoint = [number, number];
+
+interface IqiVisualizationTextItem {
+  text: string;
+  score?: number;
+  box_image_xy: IqiPoint[];
+}
+
+interface IqiVisualizationLine {
+  index: number;
+  score?: number;
+  image_xy: [IqiPoint, IqiPoint];
+}
+
+interface IqiVisualizationData {
+  roi_polygon_xy: IqiPoint[];
+  plate_text_items_selected: IqiVisualizationTextItem[];
+  wire_lines: IqiVisualizationLine[];
+}
+
 // --- 椭圆工具相关接口 ---
 interface EllipseShape {
   cx: number;
@@ -227,6 +247,89 @@ function getDefaultFloatingReviewPanelPosition(
     panelWidth,
     panelHeight
   );
+}
+
+function createEmptyIqiVisualization(): IqiVisualizationData {
+  return {
+    roi_polygon_xy: [],
+    plate_text_items_selected: [],
+    wire_lines: [],
+  };
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function parseIqiPoint(value: unknown): IqiPoint | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const x = toFiniteNumber(value[0]);
+  const y = toFiniteNumber(value[1]);
+  if (x === null || y === null) return null;
+  return [x, y];
+}
+
+function parseIqiPointList(value: unknown): IqiPoint[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(parseIqiPoint)
+    .filter((point): point is IqiPoint => point !== null);
+}
+
+function parseIqiVisualization(visionResult?: string | null): IqiVisualizationData {
+  const empty = createEmptyIqiVisualization();
+  if (!visionResult) return empty;
+
+  try {
+    const parsed = JSON.parse(visionResult);
+    const ocr = parsed?.ocr ?? {};
+    const visualization = ocr?.visualization ?? {};
+
+    const roiPolygon = parseIqiPointList(visualization?.roi_polygon_xy);
+
+    const textItems = Array.isArray(visualization?.plate_text_items_selected)
+      ? visualization.plate_text_items_selected
+          .map((item: any): IqiVisualizationTextItem | null => {
+            const box = parseIqiPointList(item?.box_image_xy);
+            const text = typeof item?.text === 'string' ? item.text : '';
+            const score = toFiniteNumber(item?.score) ?? undefined;
+            if (box.length === 0 && !text) return null;
+            return {
+              text,
+              score,
+              box_image_xy: box,
+            };
+          })
+          .filter((item: IqiVisualizationTextItem | null): item is IqiVisualizationTextItem => item !== null)
+      : [];
+
+    const wireSource = Array.isArray(visualization?.wire_lines)
+      ? visualization.wire_lines
+      : Array.isArray(ocr?.wire?.lines)
+        ? ocr.wire.lines
+        : [];
+
+    const wireLines = wireSource
+      .map((line: any, index: number): IqiVisualizationLine | null => {
+        const points = parseIqiPointList(line?.image_xy);
+        if (points.length < 2) return null;
+        return {
+          index: Number.isFinite(Number(line?.index)) ? Number(line.index) : index,
+          score: toFiniteNumber(line?.score) ?? undefined,
+          image_xy: [points[0], points[1]],
+        };
+      })
+      .filter((line: IqiVisualizationLine | null): line is IqiVisualizationLine => line !== null);
+
+    return {
+      roi_polygon_xy: roiPolygon,
+      plate_text_items_selected: textItems,
+      wire_lines: wireLines,
+    };
+  } catch {
+    return empty;
+  }
 }
 
 function rotateVector(dx: number, dy: number, angle: number) {
@@ -747,9 +850,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [pendingShape, setPendingShape] = useState<any>(null);
   const [pendingShapeType, setPendingShapeType] = useState<DrawingType>('rect');
 
-  // --- IQI 丝状像质计线条（来自 VisionResult.ocr.wire.lines，原始图像坐标系）---
-  const [iqiWireLines, setIqiWireLines] = useState<Array<{ index: number; image_xy: [[number, number], [number, number]] }>>([]);
-  const [showIqiWires, setShowIqiWires] = useState(false);
+  // --- IQI 可视化结果（来自 VisionResult.ocr.visualization，原始图像坐标系）---
+  const [iqiVisualization, setIqiVisualization] = useState<IqiVisualizationData>(() => createEmptyIqiVisualization());
+  const [showIqiVisualization, setShowIqiVisualization] = useState(false);
 
   // --- 新增：折叠状态 ---
   const [showDefectList, setShowDefectList] = useState(true);
@@ -1056,9 +1159,9 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     setIsSettingPositioning(false);
     // 重置焊缝位置形状（新文件加载时重新解析）
     setWeldLocationShapes([]);
-    // 重置 IQI 线条（新文件加载时重新解析）
-    setIqiWireLines([]);
-    setShowIqiWires(false);
+    // 重置 IQI 可视化结果（新文件加载时重新解析）
+    setIqiVisualization(createEmptyIqiVisualization());
+    setShowIqiVisualization(false);
     // 重置缺陷位置检测2原点及来源元信息
     setDefectOriginPoint(null);
     setDefectOriginMeta(null);
@@ -2186,19 +2289,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       filmInfoForm.setFieldsValue(initialFilmInfo);
       originalFilmInfoRef.current = initialFilmInfo;
 
-      // 从 VisionResult 解析 IQI 线条（wire lines 不单独存 DB，直接读 VisionResult）
-      const parsedWireLines: Array<{ index: number; image_xy: [[number, number], [number, number]] }> = [];
-      if (selectedFile.VisionResult) {
-        try {
-          const lines: any[] = JSON.parse(selectedFile.VisionResult)?.ocr?.wire?.lines ?? [];
-          for (const ln of lines) {
-            if (Array.isArray(ln.image_xy) && ln.image_xy.length >= 2) {
-              parsedWireLines.push({ index: ln.index ?? parsedWireLines.length, image_xy: ln.image_xy });
-            }
-          }
-        } catch { /* ignore */ }
-      }
-      setIqiWireLines(parsedWireLines);
+      // 从 VisionResult 解析 IQI 可视化数据（不单独存 DB，直接读推理结果 JSON）
+      setIqiVisualization(parseIqiVisualization(selectedFile.VisionResult));
 
       // 立即清空缺陷列表，防止在加载新数据前显示旧数据或发生时序闪烁
       setDefectRects([]);
@@ -2818,6 +2910,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const widthRatio = (trueImageW > 0 && imgSize.w > 0) ? (trueImageW / imgSize.w) : 1;
   const heightRatio = (trueImageH > 0 && imgSize.h > 0) ? (trueImageH / imgSize.h) : 1;
+  const hasIqiVisualization =
+    iqiVisualization.roi_polygon_xy.length > 0 ||
+    iqiVisualization.plate_text_items_selected.length > 0 ||
+    iqiVisualization.wire_lines.length > 0;
 
   // 旋转90°/270°后，水平轴对应原图高度、垂直轴对应原图宽度，标尺需交换 ratio 和 maxImageSize
   const corrNormR = ((rotation % 360) + 360) % 360;
@@ -3249,31 +3345,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             style={{ padding: '0 8px' }}
             onValuesChange={autoSaveFilmInfo}
           >
-            <Form.Item label="底片像素值" style={{ marginBottom: 12 }}>
-              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmPixelValue !== currentValues.filmPixelValue}>
-                {({ getFieldValue }) => {
-                  const filmPixelValue = getFieldValue('filmPixelValue');
-                  return (
-                    <div
-                      style={{
-                        width: '100%',
-                        minHeight: 24,
-                        padding: '1px 11px',
-                        border: '1px solid #d9d9d9',
-                        borderRadius: 6,
-                        background: '#fafafa',
-                        lineHeight: '22px',
-                      }}
-                    >
-                      {filmPixelValue || <Text type="secondary">暂无结果</Text>}
-                    </div>
-                  );
-                }}
-              </Form.Item>
-              <Form.Item name="filmPixelValue" hidden>
-                <Input />
-              </Form.Item>
-            </Form.Item>
             {/* <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
               <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
                 {({ getFieldValue }) => {
@@ -3363,6 +3434,32 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 </Form.Item>
               </Space.Compact>
             </Form.Item>
+             <Form.Item label="底片像素值" style={{ marginBottom: 12 }}>
+              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmPixelValue !== currentValues.filmPixelValue}>
+                {({ getFieldValue }) => {
+                  const filmPixelValue = getFieldValue('filmPixelValue');
+                  return (
+                    <div
+                      style={{
+                        width: '100%',
+                        minHeight: 24,
+                        padding: '1px 11px',
+                        border: '1px solid #d9d9d9',
+                        borderRadius: 6,
+                        background: '#fafafa',
+                        lineHeight: '22px',
+                      }}
+                    >
+                      {filmPixelValue || <Text type="secondary">暂无结果</Text>}
+                    </div>
+                  );
+                }}
+              </Form.Item>
+              <Form.Item name="filmPixelValue" hidden>
+                <Input />
+              </Form.Item>
+            </Form.Item>
+            
             <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
               <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
                 {({ getFieldValue }) => {
@@ -3398,12 +3495,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 </Form.Item>
                 <Button
                   size="small"
-                  type={showIqiWires ? 'primary' : 'default'}
-                  disabled={!selectedFile || iqiWireLines.length === 0}
-                  onClick={() => setShowIqiWires(v => !v)}
+                  type={showIqiVisualization ? 'primary' : 'default'}
+                  disabled={!selectedFile}
+                  onClick={() => setShowIqiVisualization(v => !v)}
                   style={{ marginLeft: 8, flexShrink: 0 }}
                 >
-                  {showIqiWires ? '隐藏结果' : '显示结果'}
+                  {showIqiVisualization ? '隐藏结果' : '显示结果'}
                 </Button>
               </div>
             </Form.Item>
@@ -4277,24 +4374,94 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                      );
                    })()}
 
-                  {/* 0-C. IQI 丝状像质计线条层（来自 ocr.wire.lines.image_xy，原始图像坐标系）*/}
-                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiWires && iqiWireLines.length > 0 && (
+                  {/* 0-C. IQI 可视化层（来自 ocr.visualization，原始图像坐标系）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiVisualization && hasIqiVisualization && (
                     <g>
-                      {iqiWireLines.map((ln) => {
-                        const x1 = widthRatio > 0 ? ln.image_xy[0][0] / widthRatio : ln.image_xy[0][0];
-                        const y1 = heightRatio > 0 ? ln.image_xy[0][1] / heightRatio : ln.image_xy[0][1];
-                        const x2 = widthRatio > 0 ? ln.image_xy[1][0] / widthRatio : ln.image_xy[1][0];
-                        const y2 = heightRatio > 0 ? ln.image_xy[1][1] / heightRatio : ln.image_xy[1][1];
+                      {(() => {
+                        const toDisplayPoint = ([rawX, rawY]: IqiPoint) => ({
+                          x: widthRatio > 0 ? rawX / widthRatio : rawX,
+                          y: heightRatio > 0 ? rawY / heightRatio : rawY,
+                        });
+
+                        const roiPoints = iqiVisualization.roi_polygon_xy.map(toDisplayPoint);
+                        const roiPointString = roiPoints.map((pt) => `${pt.x},${pt.y}`).join(' ');
+                        const normCSS = ((rotation % 360) + 360) % 360;
+
                         return (
-                          <line key={`iqi-wire-${ln.index}`}
-                            x1={x1} y1={y1} x2={x2} y2={y2}
-                            stroke="#ff0000"
-                            strokeWidth={2 / scale}
-                            strokeLinecap="round"
-                            opacity={0.85}
-                          />
+                          <>
+                            {roiPoints.length >= 3 && (
+                              <polygon
+                                points={roiPointString}
+                                fill="none"
+                                stroke="#39ff14"
+                                strokeWidth={2 / scale}
+                                strokeLinejoin="round"
+                                opacity={0.95}
+                              />
+                            )}
+
+                            {iqiVisualization.wire_lines.map((ln) => {
+                              const p1 = toDisplayPoint(ln.image_xy[0]);
+                              const p2 = toDisplayPoint(ln.image_xy[1]);
+                              return (
+                                <line
+                                  key={`iqi-wire-${ln.index}`}
+                                  x1={p1.x}
+                                  y1={p1.y}
+                                  x2={p2.x}
+                                  y2={p2.y}
+                                  stroke="#ff2d2d"
+                                  strokeWidth={2 / scale}
+                                  strokeLinecap="round"
+                                  opacity={0.9}
+                                />
+                              );
+                            })}
+
+                            {iqiVisualization.plate_text_items_selected.map((item, index) => {
+                              const boxPoints = item.box_image_xy.map(toDisplayPoint);
+                              const boxPointString = boxPoints.map((pt) => `${pt.x},${pt.y}`).join(' ');
+                              const xs = boxPoints.map((pt) => pt.x);
+                              const ys = boxPoints.map((pt) => pt.y);
+                              const minX = xs.length > 0 ? Math.min(...xs) : 0;
+                              const minY = ys.length > 0 ? Math.min(...ys) : 0;
+                              const textX = minX + 6 / scale;
+                              const textY = Math.max(minY - 8 / scale, 16 / scale);
+                              let textTransform = '';
+                              if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                              if (flipH === -1) textTransform += `translate(${2 * textX}, 0) scale(-1, 1)`;
+
+                              return (
+                                <g key={`iqi-text-${index}`}>
+                                  {boxPoints.length >= 3 && (
+                                    <polygon
+                                      points={boxPointString}
+                                      fill="none"
+                                      stroke="#ffe000"
+                                      strokeWidth={1.8 / scale}
+                                      strokeLinejoin="round"
+                                      opacity={0.95}
+                                    />
+                                  )}
+                                  {item.text && (
+                                    <text
+                                      x={textX}
+                                      y={textY}
+                                      fill="#ffe000"
+                                      fontSize={13 / scale}
+                                      fontWeight="bold"
+                                      style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
+                                      transform={textTransform || undefined}
+                                    >
+                                      {item.text}
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            })}
+                          </>
                         );
-                      })}
+                      })()}
                     </g>
                   )}
 

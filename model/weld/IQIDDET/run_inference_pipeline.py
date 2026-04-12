@@ -264,6 +264,10 @@ def main() -> None:
                         roi_gray=artifacts.get("roi_gray"),
                         roi_ocr_result=record.get("roi_ocr") or {},
                         wire_result=record.get("wire") or {},
+                        visualization=record.get("visualization") or {},
+                        plate_code=record.get("plate_code"),
+                        grade=record.get("grade"),
+                        wire_count=record.get("wire_count"),
                     )
                 )
                 record["status_vis_dir"] = str(sample_dir.relative_to(output_dir))
