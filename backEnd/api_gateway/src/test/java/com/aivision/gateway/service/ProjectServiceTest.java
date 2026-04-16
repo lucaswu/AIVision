@@ -2,11 +2,19 @@ package com.aivision.gateway.service;
 
 import com.aivision.gateway.model.Project;
 import com.aivision.gateway.model.ProjectListItem;
+import com.aivision.gateway.model.TaskFile;
+import com.aivision.gateway.model.User;
+import com.aivision.gateway.repository.DirectoryRepository;
 import com.aivision.gateway.repository.FileRepository;
 import com.aivision.gateway.repository.ProjectRepository;
+import com.aivision.gateway.repository.TaskFileRepository;
+import com.aivision.gateway.repository.UserProjectPermissionRepository;
+import com.aivision.gateway.repository.UserRepository;
+import com.aivision.gateway.service.storage.StorageStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -28,6 +36,21 @@ public class ProjectServiceTest {
     @Mock
     private FileRepository fileRepository;
 
+    @Mock
+    private DirectoryRepository directoryRepository;
+
+    @Mock
+    private UserProjectPermissionRepository permissionRepository;
+
+    @Mock
+    private UserRepository userRepository;
+
+    @Mock
+    private TaskFileRepository taskFileRepository;
+
+    @Mock
+    private StorageStrategy storageStrategy;
+
     @InjectMocks
     private ProjectService projectService;
 
@@ -45,7 +68,9 @@ public class ProjectServiceTest {
         p2.setCreatedAt(LocalDateTime.now());
         p2.setUpdatedAt(LocalDateTime.now());
 
+        when(userRepository.findById(userId)).thenReturn(Optional.of(createInspector(userId)));
         when(projectRepository.findByOwnerId(userId)).thenReturn(Arrays.asList(p1, p2));
+        when(permissionRepository.findByUserId(userId)).thenReturn(List.of());
         when(fileRepository.countByProjectId("p1")).thenReturn(10L);
         when(fileRepository.countByProjectId("p2")).thenReturn(5L);
 
@@ -73,6 +98,7 @@ public class ProjectServiceTest {
         String name = "New Project";
         String desc = "New Desc";
         
+        when(userRepository.findById(userId)).thenReturn(Optional.of(createAdmin(userId)));
         when(projectRepository.existsByProjectNameAndOwnerId(name, userId)).thenReturn(false);
         when(projectRepository.save(any(Project.class))).thenAnswer(inv -> {
             Project p = inv.getArgument(0);
@@ -93,6 +119,7 @@ public class ProjectServiceTest {
         String userId = "user-1";
         String name = "Duplicate Project";
         
+        when(userRepository.findById(userId)).thenReturn(Optional.of(createAdmin(userId)));
         when(projectRepository.existsByProjectNameAndOwnerId(name, userId)).thenReturn(true);
 
         // Act & Assert
@@ -109,6 +136,7 @@ public class ProjectServiceTest {
         project.setDescription("Old Desc");
         
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(createInspector(userId)));
         when(projectRepository.existsByProjectNameAndOwnerId("New Name", userId)).thenReturn(false);
 
         // Act
@@ -129,6 +157,8 @@ public class ProjectServiceTest {
         Project project = new Project(projectId, "Name", otherUser); // Owner is user-2
         
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(createInspector(userId)));
+        when(permissionRepository.findByUserIdAndProjectId(userId, projectId)).thenReturn(Optional.empty());
 
         // Act & Assert
         assertThrows(RuntimeException.class, () -> 
@@ -141,14 +171,47 @@ public class ProjectServiceTest {
         String projectId = "p1";
         String userId = "user-1";
         Project project = new Project(projectId, "Name", userId);
+        com.aivision.gateway.model.File file = new com.aivision.gateway.model.File();
+        file.setFilePath("/projects/p1/original.bmp");
+        file.setThumbnailPath("/projects/p1/original.bmp.thumb.jpg");
+
+        TaskFile taskFile = new TaskFile();
+        taskFile.setMinioFilePath("/projects/p1/original.bmp");
+        taskFile.setReportPath("/projects/p1/reports/result.json");
         
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(fileRepository.findByProjectId(projectId)).thenReturn(List.of(file));
+        when(taskFileRepository.findByProjectIds(List.of(projectId))).thenReturn(List.of(taskFile));
+        when(storageStrategy.exists("/projects/p1/original.bmp")).thenReturn(true, false);
+        when(storageStrategy.exists("/projects/p1/original.bmp.thumb.jpg")).thenReturn(true, false);
+        when(storageStrategy.exists("/projects/p1/reports/result.json")).thenReturn(true, false);
 
         // Act
         projectService.deleteProject(projectId, userId);
 
         // Assert
-        verify(projectRepository).delete(project);
+        InOrder inOrder = inOrder(storageStrategy, projectRepository);
+        inOrder.verify(storageStrategy).exists("/projects/p1/original.bmp");
+        inOrder.verify(storageStrategy).delete("/projects/p1/original.bmp");
+        inOrder.verify(storageStrategy).exists("/projects/p1/original.bmp");
+        inOrder.verify(storageStrategy).exists("/projects/p1/original.bmp.thumb.jpg");
+        inOrder.verify(storageStrategy).delete("/projects/p1/original.bmp.thumb.jpg");
+        inOrder.verify(storageStrategy).exists("/projects/p1/original.bmp.thumb.jpg");
+        inOrder.verify(storageStrategy).exists("/projects/p1/reports/result.json");
+        inOrder.verify(storageStrategy).delete("/projects/p1/reports/result.json");
+        inOrder.verify(storageStrategy).exists("/projects/p1/reports/result.json");
+        inOrder.verify(projectRepository).delete(project);
+
+        verify(storageStrategy, times(1)).delete("/projects/p1/original.bmp");
+        verifyNoInteractions(permissionRepository, directoryRepository);
+        verify(fileRepository, never()).deleteByProjectId(any());
+    }
+
+    private User createAdmin(String userId) {
+        return new User(userId, "admin", "password", User.Role.ADMIN);
+    }
+
+    private User createInspector(String userId) {
+        return new User(userId, "inspector", "password", User.Role.INSPECTOR);
     }
 }
-

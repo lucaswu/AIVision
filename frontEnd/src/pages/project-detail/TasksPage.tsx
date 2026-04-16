@@ -16,7 +16,6 @@ import {
   Tag,
   message,
   Dropdown,
-  Checkbox,
   Breadcrumb,
   Pagination,
   List,
@@ -30,7 +29,6 @@ import {
   DeleteOutlined,
   ReloadOutlined,
   FileTextOutlined,
-  ProjectOutlined,
   ArrowLeftOutlined,
   UploadOutlined,
   CheckCircleOutlined,
@@ -42,8 +40,8 @@ import {
 import type { TableColumnsType, TreeDataNode } from "antd";
 import { useRequest } from "ahooks";
 import { useNavigate } from "react-router-dom";
-import { taskAPI, fileAPI, projectAPI } from "../../utils/api";
-import { Task, TaskStatus, FileTreeNode, Project, TaskSubmitRequest } from "../../utils/data";
+import { taskAPI, fileAPI } from "../../utils/api";
+import { Task, TaskStatus, FileTreeNode, TaskSubmitRequest } from "../../utils/data";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -325,7 +323,17 @@ const TasksPage: React.FC<TasksPageProps> = ({
   );
 
   // 渲染创建任务视图
-  const renderCreateView = () => <CreateTaskView onBack={() => setView("list")} projectId={projectId} onCreated={() => { setView("list"); refreshTasks(); }} />;
+  const renderCreateView = () => (
+    <CreateTaskView
+      onBack={() => setView("list")}
+      projectId={projectId}
+      projectName={projectName}
+      onCreated={() => {
+        setView("list");
+        refreshTasks();
+      }}
+    />
+  );
 
   return (
     <div style={{ padding: 24, height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
@@ -353,6 +361,7 @@ const TasksPage: React.FC<TasksPageProps> = ({
 interface CreateTaskViewProps {
   onBack: () => void;
   projectId: string;
+  projectName: string;
   onCreated: () => void;
 }
 
@@ -364,12 +373,11 @@ interface SelectedItemMeta {
 interface SelectedItemsState {
   files: Map<string, SelectedItemMeta>;
   directories: Map<string, SelectedItemMeta>;
-  projects: Map<string, SelectedItemMeta>;
 }
 
 interface EffectiveSelectedItem {
   id: string;
-  type: "project" | "directory" | "file";
+  type: "directory" | "file";
   name: string;
   path?: string;
 }
@@ -377,13 +385,7 @@ interface EffectiveSelectedItem {
 const createEmptySelectedItems = (): SelectedItemsState => ({
   files: new Map(),
   directories: new Map(),
-  projects: new Map(),
 });
-
-const limitToSingleProject = (
-  projects: Map<string, SelectedItemMeta>
-): Map<string, SelectedItemMeta> =>
-  new Map<string, SelectedItemMeta>(Array.from(projects.entries()).slice(0, 1));
 
 const getEffectiveDirectoryIds = (selectedItems: SelectedItemsState): string[] => {
   const selectedFilePaths = Array.from(selectedItems.files.values())
@@ -426,17 +428,7 @@ const getEffectiveSelectedItems = (
       path: item.path,
     }));
 
-  if (fileItems.length > 0 || directoryItems.length > 0) {
-    return [...directoryItems, ...fileItems];
-  }
-
-  return Array.from<[string, SelectedItemMeta]>(
-    limitToSingleProject(selectedItems.projects).entries()
-  ).map(([id, item]) => ({
-    id,
-    type: "project" as const,
-    name: item.name,
-  }));
+  return [...directoryItems, ...fileItems];
 };
 
 const buildDirectoryPathIdMap = (
@@ -497,7 +489,12 @@ const clearDirectorySubtreeSelections = (
   });
 };
 
-const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCreated }) => {
+const CreateTaskView: React.FC<CreateTaskViewProps> = ({
+  onBack,
+  projectId,
+  projectName,
+  onCreated,
+}) => {
   const [form] = Form.useForm();
   const [showFileModal, setShowFileModal] = useState(false);
   const [selectedItems, setSelectedItems] = useState<SelectedItemsState>(createEmptySelectedItems());
@@ -508,19 +505,13 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
 
   const { run: submitTask, loading: submitting } = useRequest(
     (values: any) => {
-      const selectedProjectIds = Array.from(
-        limitToSingleProject(selectedItems.projects).keys()
-      );
       const effectiveDirectoryIds = getEffectiveDirectoryIds(selectedItems);
-      const shouldSubmitProjectIds =
-        selectedItems.files.size === 0 && selectedItems.directories.size === 0;
       const payload: TaskSubmitRequest = {
         Name: values.Name,
         Description: values.Description,
         AlgorithmType: "object-detection",
         SelectedFiles: Array.from<string>(selectedItems.files.keys()).map((id) => ({ FileId: id })),
         DirectoryIds: effectiveDirectoryIds,
-        ProjectIds: shouldSubmitProjectIds ? selectedProjectIds : [],
       };
       return taskAPI.createTask(projectId, payload);
     },
@@ -584,18 +575,18 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
                       const newItems: SelectedItemsState = {
                         files: new Map(selectedItems.files),
                         directories: new Map(selectedItems.directories),
-                        projects: new Map(selectedItems.projects)
                       };
                       if (item.type === 'file') newItems.files.delete(item.id);
-                      else if (item.type === 'directory') newItems.directories.delete(item.id);
-                      else if (item.type === 'project') newItems.projects.delete(item.id);
+                      else newItems.directories.delete(item.id);
                       setSelectedItems(newItems);
                     }} />
                   }>
                     <Space>
-                      {item.type === 'project' ? <ProjectOutlined style={{ color: '#1890ff' }} /> : 
-                       item.type === 'directory' ? <FolderOutlined style={{ color: '#faad14' }} /> : 
-                       <FileImageOutlined style={{ color: '#8c8c8c' }} />}
+                      {item.type === 'directory' ? (
+                        <FolderOutlined style={{ color: '#faad14' }} />
+                      ) : (
+                        <FileImageOutlined style={{ color: '#8c8c8c' }} />
+                      )}
                       <Text>{item.name}</Text>
                     </Space>
                   </List.Item>
@@ -629,6 +620,8 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
           setSelectedItems(items);
           setShowFileModal(false);
         }}
+        projectId={projectId}
+        projectName={projectName}
         initialSelected={selectedItems}
       />
     </div>
@@ -640,33 +633,29 @@ interface FileSelectionModalProps {
   open: boolean;
   onCancel: () => void;
   onConfirm: (items: SelectedItemsState) => void;
+  projectId: string;
+  projectName: string;
   initialSelected: SelectedItemsState;
 }
 
-const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel, onConfirm, initialSelected }) => {
+const FileSelectionModal: React.FC<FileSelectionModalProps> = ({
+  open,
+  onCancel,
+  onConfirm,
+  projectId,
+  projectName,
+  initialSelected,
+}) => {
   const [selectedItems, setSelectedItems] = useState<SelectedItemsState>(initialSelected);
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
 
-    const normalizedProjects = limitToSingleProject(initialSelected.projects);
     setSelectedItems({
       files: new Map(initialSelected.files),
       directories: new Map(initialSelected.directories),
-      projects: normalizedProjects,
     });
-
-    if (normalizedProjects.size === 1) {
-      setCurrentProjectId(Array.from(normalizedProjects.keys())[0]);
-    } else {
-      setCurrentProjectId(null);
-    }
-  }, [open, initialSelected]);
-
-  // 1. 获取所有可选项目
-  const { data: projectsResp, loading: projectsLoading } = useRequest(projectAPI.getProjects);
-  const projects = projectsResp?.Data || [];
+  }, [open, initialSelected, projectId]);
 
   // 2. 获取当前项目的文件树
   const { data: filesResp, loading: filesLoading, run: fetchFiles } = useRequest(
@@ -675,8 +664,10 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
   );
 
   useEffect(() => {
-    if (currentProjectId) fetchFiles(currentProjectId);
-  }, [currentProjectId]);
+    if (open) {
+      fetchFiles(projectId);
+    }
+  }, [open, projectId]);
 
   const treeData = useMemo(() => {
     const convert = (nodes: FileTreeNode[]): TreeDataNode[] => {
@@ -719,12 +710,9 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
     const newSelected: SelectedItemsState = {
       files: new Map(selectedItems.files),
       directories: new Map(selectedItems.directories),
-      projects: new Map(selectedItems.projects)
     };
     const node = info.node.data as FileTreeNode;
-    
-    // 目录和文件的勾选与左侧项目勾选可以并存，因此这里只同步当前节点自身的状态。
-    
+
     if (info.checked) {
       if (node.Type === 'directory') {
         newSelected.directories.set(node.Id, { name: node.Name, path: node.Path });
@@ -742,45 +730,6 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
     setSelectedItems(newSelected);
   };
 
-  const handleProjectSelect = (project: Project) => {
-    setCurrentProjectId(project.Id);
-    setSelectedItems(prevSelected => {
-      const isSameProject =
-        prevSelected.projects.size === 1 && prevSelected.projects.has(project.Id);
-
-      if (isSameProject) {
-        return {
-          files: new Map(prevSelected.files),
-          directories: new Map(prevSelected.directories),
-          projects: new Map([[project.Id, { name: project.Name }]]),
-        };
-      }
-
-      return {
-        files: new Map(),
-        directories: new Map(),
-        projects: new Map([[project.Id, { name: project.Name }]]),
-      };
-    });
-  };
-
-  const handleProjectToggle = (project: Project, checked: boolean) => {
-    if (checked) {
-      handleProjectSelect(project);
-      return;
-    }
-
-    setSelectedItems(() => ({
-      files: new Map(),
-      directories: new Map(),
-      projects: new Map(),
-    }));
-
-    if (currentProjectId === project.Id) {
-      setCurrentProjectId(null);
-    }
-  };
-
   const totalCount = getEffectiveSelectedItems(selectedItems).length;
 
   return (
@@ -794,77 +743,30 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
       cancelText="取消"
       className="file-selection-modal"
     >
-      <div style={{ height: 500, display: "flex" }}>
-        {/* 左侧项目列表 */}
-        <div style={{ width: 240, borderRight: "1px solid #f0f0f0", padding: "0 16px 0 0", overflowY: "auto" }}>
-          <div style={{ marginBottom: 12, padding: "8px 0" }}><Text strong>项目列表</Text></div>
-          <List
-            loading={projectsLoading}
-            dataSource={projects}
-            renderItem={(p) => (
-              <div 
-                style={{ 
-                  padding: "10px 12px", 
-                  cursor: "pointer", 
-                  borderRadius: "6px",
-                  backgroundColor: currentProjectId === p.Id ? "#e6f7ff" : "transparent",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: 4
-                }}
-                onClick={() => handleProjectSelect(p)}
-              >
-                <Space>
-                  <ProjectOutlined style={{ color: currentProjectId === p.Id ? "#1890ff" : "#8c8c8c" }} />
-                  <Text ellipsis={{ tooltip: p.Name }} style={{ width: 120 }}>{p.Name}</Text>
-                </Space>
-                <Checkbox 
-                  checked={selectedItems.projects.has(p.Id)}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => {
-                    handleProjectToggle(p, e.target.checked);
-                  }}
-                />
-              </div>
-            )}
+      <div style={{ height: 500, overflowY: "auto" }}>
+        <div style={{ marginBottom: 12, padding: "8px 0", display: "flex", justifyContent: "space-between" }}>
+          <Text strong>文件目录</Text>
+          <Text type="secondary">{projectName}</Text>
+        </div>
+        {filesLoading ? (
+          <div style={{ textAlign: "center", paddingTop: 100 }}><SyncOutlined spin /></div>
+        ) : treeData.length > 0 ? (
+          <Tree
+            checkable
+            checkStrictly={true}
+            treeData={treeData}
+            onCheck={handleCheck}
+            checkedKeys={treeCheckedKeys}
+            height={420}
+            selectable={false}
           />
-        </div>
-
-        {/* 右侧文件树 */}
-        <div style={{ flex: 1, padding: "0 0 0 16px", overflowY: "auto" }}>
-          {currentProjectId ? (
-            <>
-              <div style={{ marginBottom: 12, padding: "8px 0", display: "flex", justifyContent: "space-between" }}>
-                <Text strong>文件目录</Text>
-                <Text type="secondary">{projects.find(p => p.Id === currentProjectId)?.Name}</Text>
-              </div>
-              {filesLoading ? (
-                <div style={{ textAlign: "center", paddingTop: 100 }}><SyncOutlined spin /></div>
-              ) : treeData.length > 0 ? (
-                <Tree
-                  checkable
-                  checkStrictly={true}
-                  treeData={treeData}
-                  onCheck={handleCheck}
-                  checkedKeys={treeCheckedKeys}
-                  height={400}
-                  selectable={false}
-                />
-              ) : (
-                <Empty description="该项目下暂无文件" style={{ marginTop: 100 }} />
-              )}
-            </>
-          ) : (
-            <div style={{ textAlign: "center", paddingTop: 200 }}>
-              <Empty description="请从左侧选择一个项目来浏览文件" />
-            </div>
-          )}
-        </div>
+        ) : (
+          <Empty description="该项目下暂无文件" style={{ marginTop: 100 }} />
+        )}
       </div>
       <div style={{ marginTop: 16, borderTop: "1px solid #f0f0f0", paddingTop: 16, display: "flex", alignItems: "center" }}>
         <InfoCircleOutlined style={{ color: "#1890ff", marginRight: 8 }} />
-        <Text>已从授权项目中选择 <Text strong>{totalCount}</Text> 个资源</Text>
+        <Text>已从当前项目中选择 <Text strong>{totalCount}</Text> 个资源</Text>
       </div>
     </Modal>
   );

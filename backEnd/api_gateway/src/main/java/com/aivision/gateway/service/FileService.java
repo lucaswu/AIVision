@@ -430,10 +430,9 @@ public class FileService {
             
             File file = fileOpt.get();
             
-            // 2. 从存储服务删除文件（忽略失败）
-            try {
-                storageStrategy.delete(file.getFilePath());
-            } catch (Exception ignore) {}
+            // 2. 从存储服务删除文件及其缩略图（忽略失败，避免影响数据库清理）
+            deleteStoredObjectQuietly(file.getFilePath());
+            deleteStoredObjectQuietly(file.getThumbnailPath());
             
             // 3. 从数据库删除记录
             fileRepository.delete(file);
@@ -444,6 +443,18 @@ public class FileService {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("删除文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    private void deleteStoredObjectQuietly(String objectPath) {
+        if (objectPath == null || objectPath.isBlank()) {
+            return;
+        }
+
+        try {
+            storageStrategy.delete(objectPath);
+        } catch (Exception e) {
+            logger.warn("删除存储对象失败，已忽略: path={}, reason={}", objectPath, e.getMessage());
         }
     }
 

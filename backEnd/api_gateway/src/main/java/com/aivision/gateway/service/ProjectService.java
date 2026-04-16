@@ -6,9 +6,10 @@ import com.aivision.gateway.repository.DirectoryRepository;
 import com.aivision.gateway.repository.FileRepository;
 import com.aivision.gateway.repository.UserProjectPermissionRepository;
 import com.aivision.gateway.repository.UserRepository;
-import com.aivision.gateway.repository.TaskRepository;
 import com.aivision.gateway.repository.TaskFileRepository;
-import com.aivision.gateway.repository.ReportRepository;
+import com.aivision.gateway.service.storage.StorageStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +21,8 @@ import java.util.stream.Collectors;
 @Service
 @Transactional
 public class ProjectService {
+
+    private static final Logger logger = LoggerFactory.getLogger(ProjectService.class);
     
     @Autowired
     private ProjectRepository projectRepository;
@@ -37,13 +40,10 @@ public class ProjectService {
     private UserRepository userRepository;
 
     @Autowired
-    private TaskRepository taskRepository;
-
-    @Autowired
     private TaskFileRepository taskFileRepository;
 
     @Autowired
-    private ReportRepository reportRepository;
+    private StorageStrategy storageStrategy;
     
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
@@ -237,35 +237,53 @@ public class ProjectService {
         if (!project.getOwnerId().equals(userId)) {
             throw new RuntimeException("无权限删除该项目");
         }
-        
-        // 级联删除在数据库层通过 Foreign Key CASCADE 处理
-        // 但如果文件存储在 MinIO，这里需要调用 FileService 删除物理文件
-        // TODO: 集成 MinIO 删除逻辑
-        
-        // delete related entities
-        // 1. fetch all tasks for the project
-        List<Task> tasks = taskRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
-        for (Task task : tasks) {
-            taskFileRepository.deleteByTaskId(task.getTaskId());
-        }
 
-        // 2. delete reports
-        reportRepository.deleteByProjectId(projectId);
+        deleteProjectStorageObjects(projectId);
 
-        // 3. delete tasks
-        taskRepository.deleteByProjectId(projectId);
-
-        // 4. delete files
-        fileRepository.deleteByProjectId(projectId);
-
-        // 5. delete directories
-        directoryRepository.deleteByProjectId(projectId);
-
-        // 6. delete permissions
-        permissionRepository.deleteByProjectId(projectId);
-      
-        // 7. delete project 
+        // 依赖数据库外键的 ON DELETE CASCADE 统一删除子表数据，避免 directory 自引用树重复删除。
         projectRepository.delete(project);
+    }
+
+    private void deleteProjectStorageObjects(String projectId) {
+        Set<String> objectPaths = new LinkedHashSet<>();
+
+        fileRepository.findByProjectId(projectId).forEach(file -> {
+            collectStoragePath(objectPaths, file.getFilePath());
+            collectStoragePath(objectPaths, file.getThumbnailPath());
+        });
+
+        taskFileRepository.findByProjectIds(Collections.singletonList(projectId)).forEach(taskFile -> {
+            collectStoragePath(objectPaths, taskFile.getMinioFilePath());
+            collectStoragePath(objectPaths, taskFile.getReportPath());
+        });
+
+        for (String objectPath : objectPaths) {
+            deleteStorageObject(objectPath);
+        }
+    }
+
+    private void collectStoragePath(Set<String> objectPaths, String objectPath) {
+        if (objectPath != null && !objectPath.isBlank()) {
+            objectPaths.add(objectPath.trim());
+        }
+    }
+
+    private void deleteStorageObject(String objectPath) {
+        try {
+            if (!storageStrategy.exists(objectPath)) {
+                return;
+            }
+
+            storageStrategy.delete(objectPath);
+
+            if (storageStrategy.exists(objectPath)) {
+                throw new RuntimeException("存储对象删除后仍然存在");
+            }
+
+            logger.info("删除项目存储对象成功: {}", objectPath);
+        } catch (Exception e) {
+            throw new RuntimeException("删除项目存储对象失败: " + objectPath + ", 原因: " + e.getMessage(), e);
+        }
     }
     
     /**

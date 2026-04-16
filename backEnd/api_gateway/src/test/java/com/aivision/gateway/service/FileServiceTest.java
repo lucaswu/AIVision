@@ -9,6 +9,9 @@ import com.aivision.gateway.model.Project;
 import com.aivision.gateway.repository.DirectoryRepository;
 import com.aivision.gateway.repository.FileRepository;
 import com.aivision.gateway.repository.ProjectRepository;
+import com.aivision.gateway.repository.UserProjectPermissionRepository;
+import com.aivision.gateway.repository.UserRepository;
+import com.aivision.gateway.service.storage.StorageStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -40,6 +43,18 @@ class FileServiceTest {
 
     @Mock
     private FileUploadProperties fileUploadProperties;
+
+    @Mock
+    private UserProjectPermissionRepository permissionRepository;
+
+    @Mock
+    private UserRepository userRepository;
+
+    @Mock
+    private StorageStrategy storageStrategy;
+
+    @Mock
+    private ThumbnailService thumbnailService;
 
     @InjectMocks
     private FileService fileService;
@@ -125,5 +140,25 @@ class FileServiceTest {
         // Test effectively disabled for local FS reading until we implement @TempDir integration
         assertTrue(true); 
     }
-}
 
+    @Test
+    void testDeleteFile_DeletesOriginalAndThumbnail() {
+        String fileId = "file-1";
+        File file = new File();
+        file.setFileId(fileId);
+        file.setProjectId(projectId);
+        file.setUserId(userId);
+        file.setFilePath("/projects/proj-1/demo.bmp");
+        file.setThumbnailPath("/projects/proj-1/demo.bmp.thumb.jpg");
+
+        when(fileRepository.findByFileIdAndProjectIdAndUserId(fileId, projectId, userId))
+                .thenReturn(Optional.of(file));
+
+        boolean deleted = fileService.deleteFile(fileId, projectId, userId);
+
+        assertTrue(deleted);
+        verify(storageStrategy).delete("/projects/proj-1/demo.bmp");
+        verify(storageStrategy).delete("/projects/proj-1/demo.bmp.thumb.jpg");
+        verify(fileRepository).delete(file);
+    }
+}
