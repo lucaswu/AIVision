@@ -64,33 +64,79 @@ async function request<T = any>(
 }
 
 // 文件上传专用请求函数
+interface UploadProgressInfo {
+  loaded: number;
+  total: number;
+  percent: number;
+}
+
+interface UploadRequestOptions {
+  onProgress?: (info: UploadProgressInfo) => void;
+}
+
 async function uploadRequest(
   url: string,
   formData: FormData,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
+  options: UploadRequestOptions = {}
 ): Promise<any> {
-  try {
-    const response = await fetch(`${API_BASE_URL}${url}`, {
-      method: "POST",
-      headers: {
-        "user-id": getUserId(),
-        ...headers,
-      },
-      body: formData,
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}${url}`, true);
+    xhr.setRequestHeader("user-id", getUserId());
+
+    Object.entries(headers).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, value);
     });
 
-    const result = await response.json();
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !options.onProgress) return;
+      options.onProgress({
+        loaded: event.loaded,
+        total: event.total,
+        percent: event.total > 0 ? (event.loaded / event.total) * 100 : 0,
+      });
+    };
 
-    if (result.Code !== 200) {
-      message.error(result.Message || "上传失败");
-      throw new Error(result.Message || "上传失败");
-    }
+    xhr.onload = () => {
+      try {
+        const result = JSON.parse(xhr.responseText || "{}");
 
-    return result;
-  } catch (error) {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const errorMessage = result.Message || "上传失败";
+          message.error(errorMessage);
+          reject(new Error(errorMessage));
+          return;
+        }
+
+        if (result.Code !== 200) {
+          const errorMessage = result.Message || "上传失败";
+          message.error(errorMessage);
+          reject(new Error(errorMessage));
+          return;
+        }
+
+        resolve(result);
+      } catch (error) {
+        console.error("文件上传响应解析失败:", error);
+        const parseError = new Error("上传响应解析失败");
+        message.error(parseError.message);
+        reject(parseError);
+      }
+    };
+
+    xhr.onerror = () => {
+      const networkError = new Error("上传失败，请检查网络连接");
+      console.error("文件上传错误:", networkError);
+      message.error(networkError.message);
+      reject(networkError);
+    };
+
+    xhr.send(formData);
+  }).catch((error) => {
     console.error("文件上传错误:", error);
     throw error;
-  }
+  });
 }
 
 // 项目相关API
@@ -137,13 +183,18 @@ export const directoryAPI = {
 // 文件相关API
 export const fileAPI = {
   getFiles: (projectId: string) => projectAPI.getProjectFiles(projectId),
-  uploadFiles: (projectId: string, directoryId: string, files: FileList) => {
+  uploadFiles: (
+    projectId: string,
+    directoryId: string,
+    files: FileList,
+    options: UploadRequestOptions = {}
+  ) => {
     const formData = new FormData();
     Array.from(files).forEach((file) => formData.append("File", file));
     return uploadRequest("/api/v1/files/upload", formData, {
       "project-id": projectId,
       "directory-id": directoryId,
-    });
+    }, options);
   },
   deleteFile: (fileId: string, projectId: string) =>
     request<void>(`/api/v1/files/${fileId}`, {

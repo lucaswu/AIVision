@@ -18,6 +18,7 @@ import {
   Breadcrumb,
   List,
   Spin,
+  Progress,
 } from "antd";
 import {
   UploadOutlined,
@@ -49,6 +50,19 @@ import HighBitPreviewImage from "@/components/HighBitPreviewImage";
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
 
+function formatUploadSize(size: number): string {
+  if (size >= 1024 * 1024 * 1024) {
+    return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
+  if (size >= 1024 * 1024) {
+    return `${(size / 1024 / 1024).toFixed(2)} MB`;
+  }
+  if (size >= 1024) {
+    return `${(size / 1024).toFixed(2)} KB`;
+  }
+  return `${size} B`;
+}
+
 interface FilesPageProps {
   projectId: string;
   projectName?: string;
@@ -71,6 +85,9 @@ const FilesPage: React.FC<FilesPageProps> = ({
   // 新增状态管理上传文件列表
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadProgressText, setUploadProgressText] = useState("");
+  const [uploadProgressDetail, setUploadProgressDetail] = useState("");
 
   // 获取文件树数据
   const {
@@ -343,6 +360,71 @@ const FilesPage: React.FC<FilesPageProps> = ({
     return foundId;
   };
 
+  const getUploadFileSize = (file: UploadFile): number => {
+    return file.originFileObj?.size || file.size || 0;
+  };
+
+  const resetUploadProgress = useCallback(() => {
+    setUploadProgress(0);
+    setUploadProgressText("");
+    setUploadProgressDetail("");
+  }, []);
+
+  const updateUploadProgress = useCallback((
+    uploadedBytes: number,
+    totalBytes: number,
+    completedFiles: number,
+    totalFiles: number,
+    statusText: string,
+    options?: {
+      isFinal?: boolean;
+      waitingForServer?: boolean;
+    }
+  ) => {
+    const safeUploadedBytes = Math.min(Math.max(uploadedBytes, 0), totalBytes || uploadedBytes);
+    const isFinal = options?.isFinal ?? false;
+    const waitingForServer = options?.waitingForServer ?? false;
+    const estimatedFiles = totalBytes > 0
+      ? Math.floor((safeUploadedBytes / totalBytes) * totalFiles)
+      : 0;
+    const displayFiles = isFinal
+      ? totalFiles
+      : totalFiles > 0
+        ? Math.min(
+            waitingForServer ? totalFiles - 1 : totalFiles,
+            Math.max(Math.min(completedFiles, totalFiles), estimatedFiles)
+          )
+        : 0;
+    const rawPercent = totalBytes > 0
+      ? Math.round((safeUploadedBytes / totalBytes) * 100)
+      : totalFiles > 0
+        ? Math.min(100, Math.round((Math.min(completedFiles, totalFiles) / totalFiles) * 100))
+        : 0;
+    const percent = isFinal ? 100 : Math.min(99, rawPercent);
+
+    setUploadProgress(percent);
+    setUploadProgressText(statusText);
+
+    if (totalFiles > 0) {
+      if (totalBytes > 0) {
+        setUploadProgressDetail(
+          `${isFinal ? "已完成" : "约已传输"} ${displayFiles}/${totalFiles} 个文件 · ${formatUploadSize(safeUploadedBytes)} / ${formatUploadSize(totalBytes)}`
+        );
+      } else {
+        setUploadProgressDetail(`${isFinal ? "已完成" : "约已传输"} ${displayFiles}/${totalFiles} 个文件`);
+      }
+    } else {
+      setUploadProgressDetail("");
+    }
+  }, []);
+
+  const openUploadModal = (type: "file" | "directory") => {
+    setUploadType(type);
+    setUploadModalVisible(true);
+    setFileList([]);
+    resetUploadProgress();
+  };
+
   // 文件上传处理 - 支持文件和目录
   const handleFileUpload = async () => {
     const rootDirectoryId = getSelectedDirectoryId(selectedPath);
@@ -356,22 +438,44 @@ const FilesPage: React.FC<FilesPageProps> = ({
       return;
     }
 
+    const totalFiles = fileList.length;
+    const totalBytes = fileList.reduce((sum, file) => sum + getUploadFileSize(file), 0);
+    let successMessage = "";
+
     setUploading(true);
+    updateUploadProgress(0, totalBytes, 0, totalFiles, "正在准备上传...");
     try {
       if (uploadType === "file") {
         // 普通多文件上传
-      const dataTransfer = new DataTransfer();
-      fileList.forEach((file) => {
-        if (file.originFileObj) {
-          dataTransfer.items.add(file.originFileObj);
-        }
-      });
-      const result = await fileAPI.uploadFiles(
-        projectId,
+        const dataTransfer = new DataTransfer();
+        fileList.forEach((file) => {
+          if (file.originFileObj) {
+            dataTransfer.items.add(file.originFileObj);
+          }
+        });
+        const result = await fileAPI.uploadFiles(
+          projectId,
           rootDirectoryId!,
-          dataTransfer.files
-      );
-      message.success(`成功上传 ${result.Data.SuccessCount} 个文件`);
+          dataTransfer.files,
+          {
+            onProgress: ({ loaded, total }) => {
+              const currentUploaded = total > 0
+                ? (loaded / total) * totalBytes
+                : 0;
+              const waitingForServer = total > 0 && loaded >= total;
+              updateUploadProgress(
+                currentUploaded,
+                totalBytes,
+                0,
+                totalFiles,
+                waitingForServer ? "数据已发送，正在等待服务器处理..." : "正在上传文件...",
+                { waitingForServer }
+              );
+            },
+          }
+        );
+        updateUploadProgress(totalBytes, totalBytes, totalFiles, totalFiles, "上传完成", { isFinal: true });
+        successMessage = `成功上传 ${result.Data.SuccessCount} 个文件`;
       } else {
         // 目录上传逻辑
         console.log("开始目录上传，文件列表:", fileList);
@@ -411,16 +515,24 @@ const FilesPage: React.FC<FilesPageProps> = ({
         if (sortedPaths.length === 0) {
           console.warn("未发现有效目录结构，请检查是否选择了文件夹。");
           message.warning("未发现有效目录结构，请确认选择的是文件夹。");
-          setUploading(false);
           return;
         }
 
         let totalSuccess = 0;
+        let uploadedBytes = 0;
+        let uploadedFiles = 0;
         for (const fullPath of sortedPaths) {
           const parts = fullPath.split("/");
           let currentParentId = rootDirectoryId; // 初始父目录为用户当前选中的目录
 
           console.log(`正在处理目录路径: ${fullPath}, 初始父ID: ${currentParentId}`);
+          updateUploadProgress(
+            uploadedBytes,
+            totalBytes,
+            uploadedFiles,
+            totalFiles,
+            `正在准备目录 ${fullPath}...`
+          );
 
           for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
@@ -472,6 +584,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
           console.log(`正在上传目录 ${fullPath} 下的文件，数量: ${filesInDir.length}, 目录ID: ${currentParentId}`);
           if (filesInDir.length > 0 && currentParentId) {
             const dataTransfer = new DataTransfer();
+            const batchBytes = filesInDir.reduce((sum, file) => sum + file.size, 0);
             filesInDir.forEach((f) => {
               // 核心修复：重新包装 File 对象，剥离路径，只保留文件名
               const cleanFileName = f.name.split("/").pop()!;
@@ -482,18 +595,50 @@ const FilesPage: React.FC<FilesPageProps> = ({
             const uploadRes = await fileAPI.uploadFiles(
               projectId,
               currentParentId,
-              dataTransfer.files
+              dataTransfer.files,
+              {
+                onProgress: ({ loaded, total }) => {
+                  const currentBatchUploaded = total > 0
+                    ? Math.min(batchBytes, (loaded / total) * batchBytes)
+                    : 0;
+                  const waitingForServer = total > 0 && loaded >= total;
+                  updateUploadProgress(
+                    uploadedBytes + currentBatchUploaded,
+                    totalBytes,
+                    uploadedFiles,
+                    totalFiles,
+                    waitingForServer
+                      ? `目录 ${fullPath} 数据已发送，正在等待服务器处理...`
+                      : `正在上传目录 ${fullPath}...`,
+                    { waitingForServer }
+                  );
+                },
+              }
             );
             console.log(`目录 ${fullPath} 文件上传成功，数量: ${uploadRes.Data.SuccessCount}`);
             totalSuccess += uploadRes.Data.SuccessCount;
+            uploadedBytes += batchBytes;
+            uploadedFiles += filesInDir.length;
+            updateUploadProgress(
+              uploadedBytes,
+              totalBytes,
+              uploadedFiles,
+              totalFiles,
+              `已完成目录 ${fullPath}`
+            );
           }
         }
-        message.success(`目录上传完成，共成功上传 ${totalSuccess} 个文件`);
+        updateUploadProgress(totalBytes, totalBytes, totalFiles, totalFiles, "上传完成", { isFinal: true });
+        successMessage = `目录上传完成，共成功上传 ${totalSuccess} 个文件`;
       }
 
       // 重置状态并刷新
       setFileList([]);
       setUploadModalVisible(false);
+      resetUploadProgress();
+      if (successMessage) {
+        message.success(successMessage);
+      }
       await refresh(); // 等待数据刷新
     } catch (error: any) {
       console.error("上传过程出错:", error);
@@ -505,8 +650,13 @@ const FilesPage: React.FC<FilesPageProps> = ({
 
   // 取消上传
   const handleCancelUpload = () => {
+    if (uploading) {
+      message.info("文件正在上传，请等待当前任务完成");
+      return;
+    }
     setFileList([]);
     setUploadModalVisible(false);
+    resetUploadProgress();
   };
 
   // 上传配置
@@ -515,12 +665,14 @@ const FilesPage: React.FC<FilesPageProps> = ({
     multiple: true,
     fileList: fileList,
     onChange: ({ fileList: newFileList }) => {
+      if (uploading) return;
       setFileList(newFileList);
     },
     beforeUpload: () => {
       return false; // 阻止自动上传
     },
     onRemove: (file) => {
+      if (uploading) return false;
       const index = fileList.indexOf(file);
       const newFileList = fileList.slice();
       newFileList.splice(index, 1);
@@ -676,22 +828,14 @@ const FilesPage: React.FC<FilesPageProps> = ({
           <Button
             type="primary"
             icon={<UploadOutlined />}
-                onClick={() => {
-                  setUploadType("file");
-                  setUploadModalVisible(true);
-                  setFileList([]);
-                }}
+            onClick={() => openUploadModal("file")}
           >
             上传文件
           </Button>
               <Button
                 type="primary"
                 icon={<FolderAddOutlined />}
-                onClick={() => {
-                  setUploadType("directory");
-                  setUploadModalVisible(true);
-                  setFileList([]);
-                }}
+                onClick={() => openUploadModal("directory")}
               >
                 上传目录
               </Button>
@@ -787,8 +931,14 @@ const FilesPage: React.FC<FilesPageProps> = ({
         cancelText="取消"
         confirmLoading={uploading}
         width={600}
+        closable={!uploading}
+        maskClosable={!uploading}
+        keyboard={!uploading}
         okButtonProps={{
-          disabled: fileList.length === 0,
+          disabled: fileList.length === 0 || uploading,
+        }}
+        cancelButtonProps={{
+          disabled: uploading,
         }}
       >
         <div style={{ padding: "20px 0" }}>
@@ -800,6 +950,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
               style={{ width: "100%", marginTop: 8 }}
               placeholder="请选择目标目录 (根目录可留空)"
               allowClear
+              disabled={uploading}
             >
               {flattenedDirectories.map((dir) => (
                 <Select.Option key={dir.Id} value={dir.Path}>
@@ -816,6 +967,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
                 {...uploadProps}
                 directory={uploadType === "directory"}
                 showUploadList={false}
+                disabled={uploading}
               >
                 <p className="ant-upload-drag-icon">
                   {uploadType === "file" ? (
@@ -834,6 +986,21 @@ const FilesPage: React.FC<FilesPageProps> = ({
             </div>
           </div>
 
+          {uploading && (
+            <div style={{ marginBottom: 16, padding: "12px 16px", background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 8 }}>
+              <Text strong>{uploadProgressText || "正在上传..."}</Text>
+              <Progress
+                percent={uploadProgress}
+                status="active"
+                strokeColor="#1890ff"
+                style={{ margin: "8px 0 4px" }}
+              />
+              {uploadProgressDetail && (
+                <Text type="secondary">{uploadProgressDetail}</Text>
+              )}
+            </div>
+          )}
+
           {fileList.length > 0 && (
             <div>
               <Text strong>待上传文件列表：</Text>
@@ -847,6 +1014,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
                       <Button
                         type="link"
                         size="small"
+                        disabled={uploading}
                         onClick={() => uploadProps.onRemove?.(file)}
                       >
                         移除
