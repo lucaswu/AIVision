@@ -356,28 +356,171 @@ interface CreateTaskViewProps {
   onCreated: () => void;
 }
 
+interface SelectedItemMeta {
+  name: string;
+  path?: string;
+}
+
+interface SelectedItemsState {
+  files: Map<string, SelectedItemMeta>;
+  directories: Map<string, SelectedItemMeta>;
+  projects: Map<string, SelectedItemMeta>;
+}
+
+interface EffectiveSelectedItem {
+  id: string;
+  type: "project" | "directory" | "file";
+  name: string;
+  path?: string;
+}
+
+const createEmptySelectedItems = (): SelectedItemsState => ({
+  files: new Map(),
+  directories: new Map(),
+  projects: new Map(),
+});
+
+const limitToSingleProject = (
+  projects: Map<string, SelectedItemMeta>
+): Map<string, SelectedItemMeta> =>
+  new Map<string, SelectedItemMeta>(Array.from(projects.entries()).slice(0, 1));
+
+const getEffectiveDirectoryIds = (selectedItems: SelectedItemsState): string[] => {
+  const selectedFilePaths = Array.from(selectedItems.files.values())
+    .map((item) => item.path)
+    .filter((path): path is string => Boolean(path));
+
+  return Array.from(selectedItems.directories.entries())
+    .filter(([, directory]) => {
+      if (!directory.path) {
+        return true;
+      }
+
+      return !selectedFilePaths.some(
+        (filePath) => filePath === directory.path || filePath.startsWith(`${directory.path}/`)
+      );
+    })
+    .map(([id]) => id);
+};
+
+const getEffectiveSelectedItems = (
+  selectedItems: SelectedItemsState
+): EffectiveSelectedItem[] => {
+  const effectiveDirectoryIdSet = new Set(getEffectiveDirectoryIds(selectedItems));
+  const fileItems = Array.from<[string, SelectedItemMeta]>(selectedItems.files.entries()).map(
+    ([id, item]) => ({
+      id,
+      type: "file" as const,
+      name: item.name,
+      path: item.path,
+    })
+  );
+  const directoryItems = Array.from<[string, SelectedItemMeta]>(
+    selectedItems.directories.entries()
+  )
+    .filter(([id]) => effectiveDirectoryIdSet.has(id))
+    .map(([id, item]) => ({
+      id,
+      type: "directory" as const,
+      name: item.name,
+      path: item.path,
+    }));
+
+  if (fileItems.length > 0 || directoryItems.length > 0) {
+    return [...directoryItems, ...fileItems];
+  }
+
+  return Array.from<[string, SelectedItemMeta]>(
+    limitToSingleProject(selectedItems.projects).entries()
+  ).map(([id, item]) => ({
+    id,
+    type: "project" as const,
+    name: item.name,
+  }));
+};
+
+const buildDirectoryPathIdMap = (
+  nodes: FileTreeNode[],
+  map: Map<string, string> = new Map()
+): Map<string, string> => {
+  nodes.forEach((node) => {
+    if (node.Type === "directory") {
+      map.set(node.Path, node.Id);
+      if (node.Children?.length) {
+        buildDirectoryPathIdMap(node.Children, map);
+      }
+    }
+  });
+
+  return map;
+};
+
+const getAncestorDirectoryIdsForFiles = (
+  files: Map<string, SelectedItemMeta>,
+  directoryPathIdMap: Map<string, string>
+): string[] => {
+  const directoryIds = new Set<string>();
+
+  Array.from(files.values()).forEach((file) => {
+    if (!file.path) {
+      return;
+    }
+
+    const parts = file.path.split("/").filter(Boolean);
+    let currentPath = "";
+
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      currentPath += `/${parts[i]}`;
+      const directoryId = directoryPathIdMap.get(currentPath);
+      if (directoryId) {
+        directoryIds.add(directoryId);
+      }
+    }
+  });
+
+  return Array.from(directoryIds);
+};
+
+const clearDirectorySubtreeSelections = (
+  node: FileTreeNode,
+  selectedItems: SelectedItemsState
+) => {
+  selectedItems.directories.delete(node.Id);
+
+  node.Children?.forEach((child) => {
+    if (child.Type === "directory") {
+      clearDirectorySubtreeSelections(child, selectedItems);
+      return;
+    }
+
+    selectedItems.files.delete(child.Id);
+  });
+};
+
 const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCreated }) => {
   const [form] = Form.useForm();
   const [showFileModal, setShowFileModal] = useState(false);
-  const [selectedItems, setSelectedItems] = useState<{
-    files: Map<string, string>;
-    directories: Map<string, string>;
-    projects: Map<string, string>;
-  }>({
-    files: new Map(),
-    directories: new Map(),
-    projects: new Map(),
-  });
+  const [selectedItems, setSelectedItems] = useState<SelectedItemsState>(createEmptySelectedItems());
+  const effectiveSelectedItems = useMemo(
+    () => getEffectiveSelectedItems(selectedItems),
+    [selectedItems]
+  );
 
   const { run: submitTask, loading: submitting } = useRequest(
     (values: any) => {
+      const selectedProjectIds = Array.from(
+        limitToSingleProject(selectedItems.projects).keys()
+      );
+      const effectiveDirectoryIds = getEffectiveDirectoryIds(selectedItems);
+      const shouldSubmitProjectIds =
+        selectedItems.files.size === 0 && selectedItems.directories.size === 0;
       const payload: TaskSubmitRequest = {
         Name: values.Name,
         Description: values.Description,
         AlgorithmType: "object-detection",
-        SelectedFiles: Array.from(selectedItems.files.keys()).map(id => ({ FileId: id })),
-        DirectoryIds: Array.from(selectedItems.directories.keys()),
-        ProjectIds: Array.from(selectedItems.projects.keys()),
+        SelectedFiles: Array.from<string>(selectedItems.files.keys()).map((id) => ({ FileId: id })),
+        DirectoryIds: effectiveDirectoryIds,
+        ProjectIds: shouldSubmitProjectIds ? selectedProjectIds : [],
       };
       return taskAPI.createTask(projectId, payload);
     },
@@ -390,7 +533,7 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
     }
   );
 
-  const totalSelectedCount = selectedItems.files.size + selectedItems.directories.size + selectedItems.projects.size;
+  const totalSelectedCount = effectiveSelectedItems.length;
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -434,15 +577,11 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
               </div>
               <List
                 bordered
-                dataSource={[
-                  ...Array.from(selectedItems.projects.entries()).map(([id, name]) => ({ id, type: 'project', name })),
-                  ...Array.from(selectedItems.directories.entries()).map(([id, name]) => ({ id, type: 'directory', name })),
-                  ...Array.from(selectedItems.files.entries()).map(([id, name]) => ({ id, type: 'file', name })),
-                ]}
+                dataSource={effectiveSelectedItems}
                 renderItem={(item) => (
                   <List.Item extra={
                     <Button type="text" icon={<DeleteOutlined />} onClick={() => {
-                      const newItems = { 
+                      const newItems: SelectedItemsState = {
                         files: new Map(selectedItems.files),
                         directories: new Map(selectedItems.directories),
                         projects: new Map(selectedItems.projects)
@@ -500,16 +639,29 @@ const CreateTaskView: React.FC<CreateTaskViewProps> = ({ onBack, projectId, onCr
 interface FileSelectionModalProps {
   open: boolean;
   onCancel: () => void;
-  onConfirm: (items: { files: Map<string, string>; directories: Map<string, string>; projects: Map<string, string> }) => void;
-  initialSelected: { files: Map<string, string>; directories: Map<string, string>; projects: Map<string, string> };
+  onConfirm: (items: SelectedItemsState) => void;
+  initialSelected: SelectedItemsState;
 }
 
 const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel, onConfirm, initialSelected }) => {
-  const [selectedItems, setSelectedItems] = useState(initialSelected);
+  const [selectedItems, setSelectedItems] = useState<SelectedItemsState>(initialSelected);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) setSelectedItems(initialSelected);
+    if (!open) return;
+
+    const normalizedProjects = limitToSingleProject(initialSelected.projects);
+    setSelectedItems({
+      files: new Map(initialSelected.files),
+      directories: new Map(initialSelected.directories),
+      projects: normalizedProjects,
+    });
+
+    if (normalizedProjects.size === 1) {
+      setCurrentProjectId(Array.from(normalizedProjects.keys())[0]);
+    } else {
+      setCurrentProjectId(null);
+    }
   }, [open, initialSelected]);
 
   // 1. 获取所有可选项目
@@ -544,31 +696,44 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
     return convert(filesResp?.Data || []);
   }, [filesResp]);
 
+  const directoryPathIdMap = useMemo(
+    () => buildDirectoryPathIdMap(filesResp?.Data || []),
+    [filesResp]
+  );
+
+  const autoCheckedDirectoryIds = useMemo(
+    () => getAncestorDirectoryIdsForFiles(selectedItems.files, directoryPathIdMap),
+    [selectedItems.files, directoryPathIdMap]
+  );
+
+  const treeCheckedKeys = useMemo(
+    () => Array.from(new Set([
+      ...Array.from<string>(selectedItems.files.keys()),
+      ...Array.from<string>(selectedItems.directories.keys()),
+      ...autoCheckedDirectoryIds,
+    ])),
+    [selectedItems.files, selectedItems.directories, autoCheckedDirectoryIds]
+  );
+
   const handleCheck = (checkedKeys: any, info: any) => {
-    const newSelected = { 
+    const newSelected: SelectedItemsState = {
       files: new Map(selectedItems.files),
       directories: new Map(selectedItems.directories),
       projects: new Map(selectedItems.projects)
     };
     const node = info.node.data as FileTreeNode;
     
-    // Antd Tree check 事件的特殊处理：当选中目录时，Antd 可能只返回目录被选中，也可能返回子节点被选中
-    // 这里我们简单处理：如果是目录被操作，更新目录；如果是文件被操作，更新文件
-    // 关键修复：防止重复添加，和目录/文件混淆
+    // 目录和文件的勾选与左侧项目勾选可以并存，因此这里只同步当前节点自身的状态。
     
     if (info.checked) {
       if (node.Type === 'directory') {
-        newSelected.directories.set(node.Id, node.Name);
+        newSelected.directories.set(node.Id, { name: node.Name, path: node.Path });
       } else {
-        newSelected.files.set(node.Id, node.Name);
-      }
-      // 关键修复：勾选具体文件或目录时，取消该项目的“全选”状态，避免过度包含
-      if (currentProjectId) {
-        newSelected.projects.delete(currentProjectId);
+        newSelected.files.set(node.Id, { name: node.Name, path: node.Path });
       }
     } else {
       if (node.Type === 'directory') {
-        newSelected.directories.delete(node.Id);
+        clearDirectorySubtreeSelections(node, newSelected);
       } else {
         newSelected.files.delete(node.Id);
       }
@@ -577,7 +742,46 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
     setSelectedItems(newSelected);
   };
 
-  const totalCount = selectedItems.files.size + selectedItems.directories.size + selectedItems.projects.size;
+  const handleProjectSelect = (project: Project) => {
+    setCurrentProjectId(project.Id);
+    setSelectedItems(prevSelected => {
+      const isSameProject =
+        prevSelected.projects.size === 1 && prevSelected.projects.has(project.Id);
+
+      if (isSameProject) {
+        return {
+          files: new Map(prevSelected.files),
+          directories: new Map(prevSelected.directories),
+          projects: new Map([[project.Id, { name: project.Name }]]),
+        };
+      }
+
+      return {
+        files: new Map(),
+        directories: new Map(),
+        projects: new Map([[project.Id, { name: project.Name }]]),
+      };
+    });
+  };
+
+  const handleProjectToggle = (project: Project, checked: boolean) => {
+    if (checked) {
+      handleProjectSelect(project);
+      return;
+    }
+
+    setSelectedItems(() => ({
+      files: new Map(),
+      directories: new Map(),
+      projects: new Map(),
+    }));
+
+    if (currentProjectId === project.Id) {
+      setCurrentProjectId(null);
+    }
+  };
+
+  const totalCount = getEffectiveSelectedItems(selectedItems).length;
 
   return (
     <Modal
@@ -609,7 +813,7 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
                   justifyContent: "space-between",
                   marginBottom: 4
                 }}
-                onClick={() => setCurrentProjectId(p.Id)}
+                onClick={() => handleProjectSelect(p)}
               >
                 <Space>
                   <ProjectOutlined style={{ color: currentProjectId === p.Id ? "#1890ff" : "#8c8c8c" }} />
@@ -617,25 +821,9 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
                 </Space>
                 <Checkbox 
                   checked={selectedItems.projects.has(p.Id)}
+                  onClick={(e) => e.stopPropagation()}
                   onChange={(e) => {
-                    const newItems = { 
-                      files: new Map(selectedItems.files),
-                      directories: new Map(selectedItems.directories),
-                      projects: new Map(selectedItems.projects)
-                    };
-                    if (e.target.checked) {
-                      newItems.projects.set(p.Id, p.Name);
-                      // 关键修复：选中“全选项目”时，清空当前项目下可能已选的特定目录或文件
-                      // 避免重复计数和显示混乱
-                      if (currentProjectId === p.Id) {
-                        // 清除当前项目中已选的特定目录和文件
-                        // 我们只能清除当前已展开/可见节点的关联项，或者遍历 Map 处理
-                        // 这里最快的方式是让用户感知到：既然选了全项，细节选择就不再必要
-                      }
-                    } else {
-                      newItems.projects.delete(p.Id);
-                    }
-                    setSelectedItems(newItems);
+                    handleProjectToggle(p, e.target.checked);
                   }}
                 />
               </div>
@@ -659,7 +847,7 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({ open, onCancel,
                   checkStrictly={true}
                   treeData={treeData}
                   onCheck={handleCheck}
-                  checkedKeys={[...Array.from(selectedItems.files.keys()), ...Array.from(selectedItems.directories.keys())]}
+                  checkedKeys={treeCheckedKeys}
                   height={400}
                   selectable={false}
                 />
