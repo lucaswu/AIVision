@@ -5164,7 +5164,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                       <Button
                         type="text"
                         size="small"
-                        icon={isReviewPanelCollapsed ? <VerticalAlignTopOutlined /> : <VerticalAlignBottomOutlined />}
+                        icon={isReviewPanelCollapsed ? <VerticalAlignBottomOutlined /> : <VerticalAlignTopOutlined />}
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
