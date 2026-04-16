@@ -855,6 +855,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [showIqiVisualization, setShowIqiVisualization] = useState(false);
 
   // --- 新增：折叠状态 ---
+  const [isReviewPanelCollapsed, setIsReviewPanelCollapsed] = useState(false);
   const [showDefectList, setShowDefectList] = useState(true);
   const [showFilmInfo, setShowFilmInfo] = useState(true); // 底片信息折叠状态
 
@@ -5113,8 +5114,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   left: floatingReviewPanelPosition?.x ?? 0,
                   top: floatingReviewPanelPosition?.y ?? 0,
                   visibility: floatingReviewPanelPosition ? 'visible' : 'hidden',
-                  width: 'min(340px, calc(100% - 32px))',
-                  maxHeight: 'calc(100% - 32px)',
+                  width: isReviewPanelCollapsed ? 'min(220px, calc(100% - 32px))' : 'min(340px, calc(100% - 32px))',
+                  maxHeight: isReviewPanelCollapsed ? undefined : 'calc(100% - 32px)',
                   background: 'rgba(255, 255, 255, 0.98)',
                   border: '1px solid #e8e8e8',
                   borderRadius: 12,
@@ -5124,6 +5125,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   flexDirection: 'column',
                   overflow: 'hidden',
                   backdropFilter: 'blur(8px)',
+                  transition: 'width 0.2s ease, box-shadow 0.2s ease',
                 }}
               >
                 <div
@@ -5137,7 +5139,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     padding: '10px 14px',
-                    borderBottom: '1px solid #f0f0f0',
+                    borderBottom: isReviewPanelCollapsed ? 'none' : '1px solid #f0f0f0',
                     cursor: isFloatingReviewPanelDragging ? 'grabbing' : 'grab',
                     userSelect: 'none',
                     touchAction: 'none',
@@ -5149,14 +5151,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                     <DragOutlined style={{ color: '#8c8c8c' }} />
                     <Text strong style={{ color: '#262626' }}>审核信息</Text>
                   </Space>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    拖动面板
-                  </Text>
+                  <Space size={4}>
+                    {!isReviewPanelCollapsed && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        拖动面板
+                      </Text>
+                    )}
+                    <Tooltip
+                      title={isReviewPanelCollapsed ? '展开审核信息' : '收起审核信息'}
+                      getPopupContainer={getEditorPopupContainer}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={isReviewPanelCollapsed ? <VerticalAlignTopOutlined /> : <VerticalAlignBottomOutlined />}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsReviewPanelCollapsed(prev => !prev);
+                        }}
+                        style={{ color: '#595959' }}
+                      />
+                    </Tooltip>
+                  </Space>
                 </div>
-                <div style={{ padding: '16px 14px 0', overflowY: 'auto', flex: 1, minHeight: 0 }}>
-                  {renderReviewInfoPanelContent()}
-                </div>
-                {renderReviewPanelFooter()}
+                {!isReviewPanelCollapsed && (
+                  <>
+                    <div style={{ padding: '16px 14px 0', overflowY: 'auto', flex: 1, minHeight: 0 }}>
+                      {renderReviewInfoPanelContent()}
+                    </div>
+                    {renderReviewPanelFooter()}
+                  </>
+                )}
               </div>
             )}
           </div>
