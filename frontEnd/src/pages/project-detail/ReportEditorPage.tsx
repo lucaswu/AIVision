@@ -1265,9 +1265,25 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     flipV,
   });
 
+  const isWindowControlPendingOriginal = isPreviewQuality;
+  const windowWidthLabel = isWindowControlPendingOriginal ? '窗宽: --' : `窗宽: ${windowWidth}`;
+  const windowLevelLabel = isWindowControlPendingOriginal ? '窗位: --' : `窗位: ${windowLevel}`;
+  const windowControlHint = isWindowControlPendingOriginal
+    ? '预览图阶段不显示真实窗宽/窗位，原图加载完成后显示'
+    : `缩放: ${Math.round(scale * 100)}%`;
+  const windowToolTooltip = isWindowControlPendingOriginal
+    ? '预览图加载中，原图就绪后可调整窗宽窗位'
+    : '窗宽调整';
+
   // 防止切换文件瞬间闪烁：强制标记状态重置 Ref
   // 该 Ref 在切换文件时立即设为 true，只有当 imageReady 真正变回 false 后才设为 false
   const isImageResetingRef = useRef(false);
+
+  useEffect(() => {
+    if (isWindowControlPendingOriginal && activeTool === 'windowing') {
+      setActiveTool('pan');
+    }
+  }, [isWindowControlPendingOriginal, activeTool]);
 
   // 旋转图片自动适配：记录已完成自动缩放的文件ID，避免重复触发
   const autoFitFileIdRef = useRef<string | null>(null);
@@ -3968,9 +3984,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 }} /></Tooltip>
 
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="窗宽调整">
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title={windowToolTooltip}>
               <Button type="text" ghost
                 icon={<img src="/contrast.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                disabled={isWindowControlPendingOriginal}
                 onClick={() => setActiveTool(activeTool === 'windowing' ? 'pan' : 'windowing')}
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'windowing' ? '#1890ff' : 'transparent' }}
               />
@@ -5080,29 +5097,33 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 borderTop: '1px solid #434343', height: '40px', zIndex: 100
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
-                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗宽: {windowWidth}</span>
+                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '68px' }}>{windowWidthLabel}</span>
                   <Slider
                     min={windowWidthMin}
                     max={windowWidthMax}
                     value={windowWidth}
                     onChange={(val) => setManualWindowLevel(val, windowLevel)}
+                    disabled={isWindowControlPendingOriginal}
                     style={{ flex: 1, margin: 0 }}
                     trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
                   />
                 </div>
                 <div style={{ width: 1, height: 16, background: '#595959' }}></div>
                 <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
-                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '60px' }}>窗位: {windowLevel}</span>
+                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '68px' }}>{windowLevelLabel}</span>
                   <Slider
                     min={windowLevelMin}
                     max={windowLevelMax}
                     value={windowLevel}
                     onChange={(val) => setManualWindowLevel(windowWidth, val)}
+                    disabled={isWindowControlPendingOriginal}
                     style={{ flex: 1, margin: 0 }}
                     trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
                   />
                 </div>
-                <div style={{ color: '#8c8c8c', fontSize: '12px', marginLeft: '12px' }}>缩放: {Math.round(scale * 100)}%</div>
+                <div style={{ color: isWindowControlPendingOriginal ? '#faad14' : '#8c8c8c', fontSize: '12px', marginLeft: '12px', whiteSpace: 'nowrap' }}>
+                  {windowControlHint}
+                </div>
               </div>
             )}
 
