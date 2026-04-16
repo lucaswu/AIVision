@@ -798,28 +798,6 @@ class IQIInferencer:
             record["plate"] = selected_plate
             record["plate_source"] = plate_source
 
-            if not selected_plate.get("ok"):
-                if roi_error_code == 1101:
-                    record["wire"] = self._build_skipped_wire("skipped_no_roi", roi_error_message)
-                elif roi_error_code == 1102:
-                    record["wire"] = self._build_skipped_wire("skipped_roi_invalid", roi_error_message)
-                else:
-                    record["wire"] = self._build_skipped_wire("skipped_marker_not_found", "像质计标识未识别成功，跳过 FClip 分支")
-
-                error_entries: List[Dict[str, Any]] = []
-                if roi_error_code is not None:
-                    error_entries.append({"stage": "roi", **build_result_status(roi_error_code, roi_error_message)})
-                marker_result = roi_plate_result if roi_plate_result is not None and roi_error_code is None else full_plate_result
-                error_entries.append({"stage": "marker", **build_result_status(int(marker_result.get("result_code", 9001)))})
-                self._attach_visualization_payload(
-                    record,
-                    roi_plate_vis_items=roi_plate_vis_items,
-                    full_plate_vis_items=full_plate_vis_items,
-                )
-                final_record = self._finalize_record(record, error_entries, warnings)
-                _attach_timing(final_record)
-                return final_record, debug_artifacts
-
             if roi_error_code is not None:
                 record["wire"] = self._build_skipped_wire(
                     "skipped_no_roi" if roi_error_code == 1101 else "skipped_roi_invalid",
@@ -857,11 +835,23 @@ class IQIInferencer:
             warnings.extend(wire_result.get("warnings") or [])
             record["wire"] = wire_result
 
-            error_entries = []
+            wire_error_entries: List[Dict[str, Any]] = []
             if wire_result.get("status") != "ok":
-                error_entries.append({"stage": "wire", **build_result_status(3001, wire_result.get("error") or "像质丝识别失败")})
+                wire_error_entries.append({"stage": "wire", **build_result_status(3001, wire_result.get("error") or "像质丝识别失败")})
             elif wire_result.get("wire_count") is None:
-                error_entries.append({"stage": "wire", **build_result_status(3002)})
+                wire_error_entries.append({"stage": "wire", **build_result_status(3002)})
+
+            if not selected_plate.get("ok"):
+                error_entries = list(wire_error_entries)
+                error_entries.append({"stage": "marker", **build_result_status(int(selected_plate.get("result_code", 9001)))})
+                self._attach_visualization_payload(
+                    record,
+                    roi_plate_vis_items=roi_plate_vis_items,
+                    full_plate_vis_items=full_plate_vis_items,
+                )
+                final_record = self._finalize_record(record, error_entries, warnings)
+                _attach_timing(final_record)
+                return final_record, debug_artifacts
 
             step_start = time.perf_counter()
             grade_result = compute_iqi_grade(
@@ -872,6 +862,7 @@ class IQIInferencer:
             )
             _mark("grade_fusion_ms", step_start)
             record["grade_rule"] = grade_result
+            error_entries = list(wire_error_entries)
             if selected_plate.get("ok") and wire_result.get("status") == "ok" and not grade_result.get("ok"):
                 error_entries.append({"stage": "grade", **build_result_status(int(grade_result.get("result_code", 9001)))})
 
