@@ -12,6 +12,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { projectAPI } from "@/utils/api";
 import { CreateProjectRequest } from "@/utils/data";
+import { notifyProjectsUpdated } from "@/utils/projectEvents";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -37,6 +38,7 @@ const CreateProject: React.FC = () => {
 
       if (res.Code === 200) {
         message.success("项目创建成功");
+        notifyProjectsUpdated();
         navigate("/projects");
       }
     } catch (error) {
@@ -114,4 +116,3 @@ const CreateProject: React.FC = () => {
 };
 
 export default CreateProject;
-

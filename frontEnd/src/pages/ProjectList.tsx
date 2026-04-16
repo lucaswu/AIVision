@@ -27,6 +27,7 @@ import {
   Project,
 } from "@/utils/data";
 import { projectAPI } from "@/utils/api";
+import { notifyProjectsUpdated } from "@/utils/projectEvents";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -94,6 +95,7 @@ export default function ProjectList() {
       form.resetFields();
       setEditingProject(null);
       refresh();
+      notifyProjectsUpdated();
       }
     } catch (error) {
       console.log("验证失败:", error);
@@ -109,6 +111,7 @@ export default function ProjectList() {
         setDeletingProject(null);
         setDeleteConfirmName("");
         refresh();
+        notifyProjectsUpdated();
       } catch (error) {
         // API工具已经处理了错误消息
       }

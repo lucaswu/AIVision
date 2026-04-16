@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Routes, Route, Navigate, BrowserRouter } from "react-router-dom";
 import { Layout, Menu, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
@@ -13,6 +13,7 @@ import Login from "./pages/Login";
 import { rootSidebarItems } from "./utils/constans";
 import { projectAPI } from "./utils/api";
 import { useRequest } from "ahooks";
+import { PROJECTS_UPDATED_EVENT } from "./utils/projectEvents";
 
 const { Header, Sider, Content } = Layout;
 
@@ -29,9 +30,20 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const { data: projectsResponse } = useRequest(() => projectAPI.getProjects(), {
+  const { data: projectsResponse, refresh: refreshProjects } = useRequest(() => projectAPI.getProjects(), {
     refreshDeps: [location.pathname],
   });
+
+  useEffect(() => {
+    const handleProjectsUpdated = () => {
+      refreshProjects();
+    };
+
+    window.addEventListener(PROJECTS_UPDATED_EVENT, handleProjectsUpdated);
+    return () => {
+      window.removeEventListener(PROJECTS_UPDATED_EVENT, handleProjectsUpdated);
+    };
+  }, [refreshProjects]);
 
   const projects = useMemo(() => {
     return (projectsResponse?.Data || []).sort((a, b) => {
