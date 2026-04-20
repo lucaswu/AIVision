@@ -606,6 +606,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   useEffect(() => {
     const handleFullScreenChange = () => {
       setIsFullScreen(!!document.fullscreenElement);
+      setFloatingReviewPanelPosition(null);
     };
     document.addEventListener('fullscreenchange', handleFullScreenChange);
     return () => {
