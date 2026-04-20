@@ -131,7 +131,7 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
 
   // 文字位置计算
   const textLayout = useMemo(() => {
-    if (!currPoint) return null;
+    if (!startPoint || !currPoint) return null;
 
     const screenOffsetX = 15;
     const screenOffsetY = 5;
@@ -145,13 +145,16 @@ const GeometricMeasureTool: React.FC<GeometricMeasureToolProps> = ({
     const localOffsetX = unscaledOffsetX * Math.cos(rad) - unscaledOffsetY * Math.sin(rad);
     const localOffsetY = unscaledOffsetX * Math.sin(rad) + unscaledOffsetY * Math.cos(rad);
 
-    const tx = currPoint.x + localOffsetX;
-    const ty = currPoint.y + localOffsetY;
+    const midX = (startPoint.x + currPoint.x) / 2;
+    const midY = (startPoint.y + currPoint.y) / 2;
+
+    const tx = midX + localOffsetX;
+    const ty = midY + localOffsetY;
 
     const transformStr = `rotate(${-rotation}, ${tx}, ${ty}) translate(${tx}, ${ty}) scale(${flipH}, ${flipV}) translate(${-tx}, ${-ty})`;
 
     return { x: tx, y: ty, transform: transformStr };
-  }, [currPoint, rotation, flipH, flipV, scale]);
+  }, [startPoint, currPoint, rotation, flipH, flipV, scale]);
 
   if (!visible) return null;
 
