@@ -3213,6 +3213,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               size="small"
               value={item.label}
               style={{ flex: 1 }}
+              getPopupContainer={getEditorPopupContainer}
               onChange={(val) => updateDefectInfo(type, index, 'label', val)}
             >
               {DEFECT_TYPES.map(dt => (
@@ -3281,6 +3282,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 placeholder="等级"
                 value={item.quality || undefined}
                 style={{ flex: 1, minWidth: 0 }}
+                getPopupContainer={getEditorPopupContainer}
                 onChange={(val) => updateDefectInfo(type, index, 'quality', val)}
               >
                 <Option value="一级">I 级</Option>
