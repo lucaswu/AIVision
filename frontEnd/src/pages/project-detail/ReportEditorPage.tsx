@@ -606,6 +606,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   useEffect(() => {
     const handleFullScreenChange = () => {
       setIsFullScreen(!!document.fullscreenElement);
+      setFloatingReviewPanelPosition(null);
     };
     document.addEventListener('fullscreenchange', handleFullScreenChange);
     return () => {
@@ -3228,6 +3229,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               size="small"
               value={item.label}
               style={{ flex: 1 }}
+              getPopupContainer={getEditorPopupContainer}
               onChange={(val) => updateDefectInfo(type, index, 'label', val)}
             >
               {DEFECT_TYPES.map(dt => (
@@ -3296,6 +3298,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 placeholder="等级"
                 value={item.quality || undefined}
                 style={{ flex: 1, minWidth: 0 }}
+                getPopupContainer={getEditorPopupContainer}
                 onChange={(val) => updateDefectInfo(type, index, 'quality', val)}
               >
                 <Option value="一级">I 级</Option>
@@ -4367,24 +4370,35 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                        ox = t.x; oy = t.y;
                      }
                      const dox = widthRatio > 0 ? ox / widthRatio : ox;
+                     const doy = heightRatio > 0 ? oy / heightRatio : oy;
+
+                     // 文字防旋转/翻转处理
+                     const normCSS = ((rotation % 360) + 360) % 360;
+                     const textX = dox + 15 / scale;
+                     const textY = doy - 15 / scale;
+                     let textTfm = '';
+                     if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                     if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                      return (
                        <g key="defect-origin">
-                         {/* 经过该位置的红色竖线（虚线），标注“原点” */}
-                         <line
-                           x1={dox} y1={0}
-                           x2={dox} y2="100%"
-                           stroke="#f5222d"
-                           strokeWidth={1 / scale}
-                           strokeDasharray="4,4"
-                         />
+                         {/* 全屏贯穿红色十字虚线 */}
+                         <line x1={dox} y1={0} x2={dox} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="4,4" />
+                         <line x1={0} y1={doy} x2="100%" y2={doy} stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="4,4" />
+                         
+                         {/* 中心加粗十字准心及圆圈 */}
+                         <circle cx={dox} cy={doy} r={6 / scale} fill="none" stroke="#f5222d" strokeWidth={2 / scale} />
+                         <line x1={dox - 10 / scale} y1={doy} x2={dox + 10 / scale} y2={doy} stroke="#f5222d" strokeWidth={2 / scale} />
+                         <line x1={dox} y1={doy - 10 / scale} x2={dox} y2={doy + 10 / scale} stroke="#f5222d" strokeWidth={2 / scale} />
+
                          <text
-                           x={dox + 10}
-                           y={20 / scale}
+                           x={textX}
+                           y={textY}
                            fill="#f5222d"
                            fontSize={12 / scale}
                            fontWeight="bold"
                            style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
+                           transform={textTfm || undefined}
                          >
                            原点
                          </text>
@@ -4728,14 +4742,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 </svg>
 
                 {/* 3. 坐标原点十字线 */}
-                {showPositioningCoords && activeTool === 'setOrigin' && tempOrigin && (
-                  <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
-                    <line x1={tempOrigin.x} y1={0} x2={tempOrigin.x} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
-                    <line x1={0} y1={tempOrigin.y} x2="100%" y2={tempOrigin.y} stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
-                    <text x={tempOrigin.x + 10} y={tempOrigin.y - 6} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }}>x (原点)</text>
-                    <text x={tempOrigin.x + 6} y={tempOrigin.y + 14} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }}>y</text>
-                  </svg>
-                )}
+                {showPositioningCoords && activeTool === 'setOrigin' && tempOrigin && (() => {
+                  // 文字防旋转/翻转处理
+                  const normCSS = ((rotation % 360) + 360) % 360;
+                  const textX = tempOrigin.x + 15 / scale;
+                  const textY = tempOrigin.y - 15 / scale;
+                  const textY2 = tempOrigin.y + 15 / scale;
+                  let textTfm1 = '';
+                  let textTfm2 = '';
+                  if (normCSS !== 0) {
+                    textTfm1 += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                    textTfm2 += `rotate(${-normCSS}, ${textX}, ${textY2}) `;
+                  }
+                  if (flipH === -1) {
+                    textTfm1 += `translate(${2 * textX}, 0) scale(-1, 1)`;
+                    textTfm2 += `translate(${2 * textX}, 0) scale(-1, 1)`;
+                  }
+                  return (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
+                      {/* 全屏贯穿红色十字虚线 */}
+                      <line x1={tempOrigin.x} y1={0} x2={tempOrigin.x} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
+                      <line x1={0} y1={tempOrigin.y} x2="100%" y2={tempOrigin.y} stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
+                      
+                      {/* 中心加粗十字准心及圆圈 */}
+                      <circle cx={tempOrigin.x} cy={tempOrigin.y} r={6 / scale} fill="none" stroke="#f5222d" strokeWidth={2 / scale} />
+                      <line x1={tempOrigin.x - 10 / scale} y1={tempOrigin.y} x2={tempOrigin.x + 10 / scale} y2={tempOrigin.y} stroke="#f5222d" strokeWidth={2 / scale} />
+                      <line x1={tempOrigin.x} y1={tempOrigin.y - 10 / scale} x2={tempOrigin.x} y2={tempOrigin.y + 10 / scale} stroke="#f5222d" strokeWidth={2 / scale} />
+
+                      <text x={textX} y={textY} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm1 || undefined}>x (原点)</text>
+                      <text x={textX} y={textY2} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm2 || undefined}>y</text>
+                    </svg>
+                  );
+                })()}
 
                 {/* 3.5. 坐标原点垂直辅助线（定位标记成像后显示） */}
                 {showPositioningCoords && originPoint && (
@@ -4757,27 +4795,43 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                         : { x: originPoint.x, y: originPoint.y };
                       const imageCoords = calculateImageCoordinates(rawPt.x, rawPt.y);
                       const normR = ((rotation % 360) + 360) % 360;
-                      // CSS rotate(90°/270°) 使 SVG 竖线变为屏幕水平线，反之亦然
-                      // 90°/270° 时改画水平SVG线，使其在屏幕上仍显示为竖线（垂直x轴）
-                      const isSwapped = normR === 90 || normR === 270;
+                      // CSS rotate(90°/270°) 当画满屏十字坐标系时不需要特意区分宽高交换
+                      
+                      // 文字防旋转/翻转处理
+                      const normCSS = ((rotation % 360) + 360) % 360;
+                      const textX = imageCoords.x + 15 / scale;
+                      const textY = imageCoords.y - 15 / scale;
+                      let textTfm = '';
+                      if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                      if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
+
                       return (
                         <g>
+                          {/* 全屏贯穿红色十字虚线 */}
                           <line
-                            x1={isSwapped ? 0 : imageCoords.x}
-                            y1={isSwapped ? imageCoords.y : 0}
-                            x2={isSwapped ? imgSize.w : imageCoords.x}
-                            y2={isSwapped ? imageCoords.y : imgSize.h}
-                            stroke="rgba(245, 34, 45, 1)"
-                            strokeWidth={1 / scale}
-                            strokeDasharray="5 5"
+                            x1={imageCoords.x} y1={0}
+                            x2={imageCoords.x} y2={imgSize.h}
+                            stroke="rgba(245, 34, 45, 1)" strokeWidth={1 / scale} strokeDasharray="5 5"
                           />
+                          <line
+                            x1={0} y1={imageCoords.y}
+                            x2={imgSize.w} y2={imageCoords.y}
+                            stroke="rgba(245, 34, 45, 1)" strokeWidth={1 / scale} strokeDasharray="5 5"
+                          />
+                          
+                          {/* 中心加粗十字准心及圆圈 */}
+                          <circle cx={imageCoords.x} cy={imageCoords.y} r={6 / scale} fill="none" stroke="rgba(245, 34, 45, 1)" strokeWidth={2 / scale} />
+                          <line x1={imageCoords.x - 10 / scale} y1={imageCoords.y} x2={imageCoords.x + 10 / scale} y2={imageCoords.y} stroke="rgba(245, 34, 45, 1)" strokeWidth={2 / scale} />
+                          <line x1={imageCoords.x} y1={imageCoords.y - 10 / scale} x2={imageCoords.x} y2={imageCoords.y + 10 / scale} stroke="rgba(245, 34, 45, 1)" strokeWidth={2 / scale} />
+
                           <text
-                            x={isSwapped ? 10 / scale : imageCoords.x + 10 / scale}
-                            y={isSwapped ? imageCoords.y - 10 / scale : 20 / scale}
+                            x={textX}
+                            y={textY}
                             fill="#f5222d"
                             fontSize={12 / scale}
                             fontWeight="bold"
                             style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
+                            transform={textTfm || undefined}
                           >
                             原点
                           </text>
