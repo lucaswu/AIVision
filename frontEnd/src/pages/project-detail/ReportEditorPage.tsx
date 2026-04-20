@@ -3390,38 +3390,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 <Input />
               </Form.Item>
             </Form.Item> */}
-            <Form.Item label="规格" style={{ marginBottom: 12 }}>
-              <Space.Compact style={{ width: '100%' }}>
-                <Tooltip title={ocrTargetField === 'specification' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
-                  <Button
-                    size="small"
-                    icon={<ScanOutlined spin={ocrLoadingField === 'specification'} />}
-                    type={ocrTargetField === 'specification' ? 'primary' : 'default'}
-                    onClick={() => handleOcrButtonClick('specification')}
-                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'specification')}
-                  />
-                </Tooltip>
-                <Form.Item name="specification" noStyle>
-                  <Input placeholder="输入规格" />
-                </Form.Item>
-              </Space.Compact>
-            </Form.Item>
-            <Form.Item label="检验日期" style={{ marginBottom: 12 }}>
-              <Space.Compact style={{ width: '100%' }}>
-                <Tooltip title={ocrTargetField === 'inspectionDate' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
-                  <Button
-                    size="small"
-                    icon={<ScanOutlined spin={ocrLoadingField === 'inspectionDate'} />}
-                    type={ocrTargetField === 'inspectionDate' ? 'primary' : 'default'}
-                    onClick={() => handleOcrButtonClick('inspectionDate')}
-                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'inspectionDate')}
-                  />
-                </Tooltip>
-                <Form.Item name="inspectionDate" noStyle>
-                  <Input placeholder="输入检验日期" />
-                </Form.Item>
-              </Space.Compact>
-            </Form.Item>
             <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
               <Space.Compact style={{ width: '100%' }}>
                 <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
@@ -3451,6 +3419,38 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 </Tooltip>
                 <Form.Item name="filmNumber" noStyle>
                   <Input placeholder="输入片号" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="部件规格" style={{ marginBottom: 12 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'specification' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'specification'} />}
+                    type={ocrTargetField === 'specification' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('specification')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'specification')}
+                  />
+                </Tooltip>
+                <Form.Item name="specification" noStyle>
+                  <Input placeholder="输入部件规格" />
+                </Form.Item>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item label="检验日期" style={{ marginBottom: 12 }}>
+              <Space.Compact style={{ width: '100%' }}>
+                <Tooltip title={ocrTargetField === 'inspectionDate' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                  <Button
+                    size="small"
+                    icon={<ScanOutlined spin={ocrLoadingField === 'inspectionDate'} />}
+                    type={ocrTargetField === 'inspectionDate' ? 'primary' : 'default'}
+                    onClick={() => handleOcrButtonClick('inspectionDate')}
+                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'inspectionDate')}
+                  />
+                </Tooltip>
+                <Form.Item name="inspectionDate" noStyle>
+                  <Input placeholder="输入检验日期" />
                 </Form.Item>
               </Space.Compact>
             </Form.Item>
