@@ -110,6 +110,7 @@ interface ImageEditorViewerProps {
   initialReviewPanelCollapsed?: boolean;
   onToggleFullScreen?: () => void;
   sharedBlobCacheRef?: React.MutableRefObject<Map<string, File>>;
+  onFileSaved?: () => void;
 }
 
 type FilmInfoOcrField =
@@ -560,6 +561,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   initialReviewPanelCollapsed = false,
   onToggleFullScreen,
   sharedBlobCacheRef,
+  onFileSaved,
 }) => {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -2835,6 +2837,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
       message.success("保存并确认成功");
       refreshFiles();
+      onFileSaved?.();
 
       const currentIndex = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
       if (currentIndex < files.length - 1) {
