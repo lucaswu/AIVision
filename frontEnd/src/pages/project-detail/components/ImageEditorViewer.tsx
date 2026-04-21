@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { ImageEditorViewer } from "./components/ImageEditorViewer";
 import {
   Row,
   Col,
@@ -27,7 +26,6 @@ import {
   Collapse,
   Popconfirm,
   Alert,
-  Switch,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -72,17 +70,17 @@ import {
   ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, type OcrRecognizeResult, type RegionSnrResult } from "../../utils/api";
-import { fileThumbnailPath } from "../../utils/constans";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, type OcrRecognizeResult, type RegionSnrResult } from "../../../utils/api";
+import { fileThumbnailPath } from "../../../utils/constans";
 
 // 移除本地 Mock defectRecordAPI
 // const defectRecordAPI = { ... };
-import { TaskFile, Report, DefectType, DefectRecord } from "../../utils/data";
-import GeometricMeasureTool from './tool/GeometricMeasureTool';
-import { useWindowLevelTool,preprocessToGrayCache } from './tool/WindowLevelTool';
-import Ruler from './tool/Ruler';
-import DefectMarking, { DrawingType } from './tool/DefectMarking';
-import PositionAndSizeTool, { PositionSizeType } from './tool/PositionAndSizeTool';
+import { TaskFile, Report, DefectType, DefectRecord } from "../../../utils/data";
+import GeometricMeasureTool from '../tool/GeometricMeasureTool';
+import { useWindowLevelTool,preprocessToGrayCache } from '../tool/WindowLevelTool';
+import Ruler from '../tool/Ruler';
+import DefectMarking, { DrawingType } from '../tool/DefectMarking';
+import PositionAndSizeTool, { PositionSizeType } from '../tool/PositionAndSizeTool';
 
 const { Content, Sider } = Layout;
 const { Title, Text, Link } = Typography;
@@ -100,14 +98,18 @@ const DEFAULT_DEFECT_TYPES = [
   { Code: 'other', Name: '其他(H)', Color: '#52c41a', SortOrder: 8, Enabled: true },
 ];
 
-interface ReportEditorPageProps {
+interface ImageEditorViewerProps {
+  file: TaskFile | null;
   taskId: string;
   projectId: string;
   projectName?: string;
-  onBack: () => void;
+  onBack?: () => void;
   onPreview?: () => void;
   projectSidebarCollapsed?: boolean;
   onProjectSidebarCollapseChange?: (collapsed: boolean) => void;
+  initialReviewPanelCollapsed?: boolean;
+  onToggleFullScreen?: () => void;
+  sharedBlobCacheRef?: React.MutableRefObject<Map<string, File>>;
 }
 
 type FilmInfoOcrField =
@@ -389,12 +391,25 @@ function getRegionSnrErrorMessage(result: RegionSnrResult) {
   return result.message || '区域归一化信噪比计算失败';
 }
 
+/**
+ * 将矫正后坐标点反变换回原图坐标系（CSS 变换作用前的坐标系）。
+ * AI 检测结果的 bbox 存储在矫正后坐标系中，需要逆变换使 CSS transform 能正确对齐。
+ * @param px - 矫正后图像中的 x 坐标（像素）
+ * @param py - 矫正后图像中的 y 坐标（像素）
+ * @param corrW - 矫正后图像的宽度（像素）
+ * @param corrH - 矫正后图像的高度（像素）
+ * @param rotationDeg - 矫正旋转角度（0/90/180/270/-90）
+ * @param flipH - 水平翻转系数（1 不翻转, -1 翻转）
+ */
 function inverseTransformPoint(
   px: number, py: number,
   corrW: number, corrH: number,
   rotationDeg: number, flipH: number
 ): { x: number; y: number } {
+  // 归一化旋转角度到 0/90/180/270
   const r = ((rotationDeg % 360) + 360) % 360;
+  // 正向变换顺序：先旋转，再水平翻转
+  // 逆变换必须反序：先撤销翻转，再撤销旋转
   if (flipH === -1) {
     px = corrW - px;
   }
@@ -402,26 +417,49 @@ function inverseTransformPoint(
   if (r === 0) { x = px; y = py; }
   else if (r === 90) { x = py; y = corrW - px; }
   else if (r === 180) { x = corrW - px; y = corrH - py; }
-  else { x = corrH - py; y = px; }
+  else /* 270 */ { x = corrH - py; y = px; }
   return { x, y };
 }
 
+/**
+ * 将原图坐标点正向变换到矫正后坐标系（inverseTransformPoint 的逆操作）。
+ * 用于将用户手动标注的坐标（在原图坐标系中）转换为与 AI 检测结果相同的存储坐标系。
+ * @param px - 原图中的 x 坐标（像素）
+ * @param py - 原图中的 y 坐标（像素）
+ * @param rawW - 原图宽度（像素）
+ * @param rawH - 原图高度（像素）
+ * @param rotationDeg - 矫正旋转角度（0/90/180/270）
+ * @param flipH - 水平翻转系数（1 不翻转, -1 翻转）
+ */
 function forwardTransformPoint(
   px: number, py: number,
   rawW: number, rawH: number,
   rotationDeg: number, flipH: number
 ): { x: number; y: number } {
   const r = ((rotationDeg % 360) + 360) % 360;
+  // 正向变换顺序：先旋转，再水平翻转（与 inverseTransformPoint 逆序一致）
   let x: number, y: number;
   if (r === 0) { x = px; y = py; }
   else if (r === 90) { x = rawH - py; y = px; }
   else if (r === 180) { x = rawW - px; y = rawH - py; }
-  else { x = py; y = rawW - px; }
+  else /* 270 */ { x = py; y = rawW - px; }
+  // 矫正后图像的宽度（旋转 90/270° 后宽高互换）
   const corrW = (r === 90 || r === 270) ? rawH : rawW;
   if (flipH === -1) { x = corrW - x; }
   return { x, y };
 }
 
+/**
+ * 根据缺陷框X轴范围和原点位置，生成位置描述字符串。
+ * 格式: +->左边距离~右边距离{px|mm}
+ * 左右距离 = 边到原点的像素差，向右为正，向左为负。
+ * 若 pixelRatio > 0，则乘以 pixelRatio 并以 mm 为单位；否则以 px 为单位。
+ * @param minX   缺陷框最小 X 像素坐标（矫正后坐标系）
+ * @param maxX   缺陷框最大 X 像素坐标（矫正后坐标系）
+ * @param originX 0点的 X 像素坐标（矫正后坐标系）
+ * @param pixelRatio 物理标定比例（mm/px），未标定时传 0
+ * @param originLabel 0点来源标签：十字准心传 '+'，边缘标记传识别到的字母/数字（如 'C'、'1'）
+ */
 function formatDefectPosition(minX: number, maxX: number, originX: number, pixelRatio: number, originLabel = '+'): string {
   const rawLeft = minX - originX;
   const rawRight = maxX - originX;
@@ -437,10 +475,20 @@ function formatDefectPosition(minX: number, maxX: number, originX: number, pixel
   }
 }
 
+/**
+ * 判断位置字符串是否为自动计算格式，用于决定是否覆盖重算。
+ * 匹配："+->10~20mm"、"+->10~20mm 2'-3'"（含时钟）、"2'-3'"（纯时钟）
+ */
 function isAutoPosition(pos: string): boolean {
   return /^[^~\s]+->.+~/.test(pos) || /^\d+'-\d+'$/.test(pos);
 }
 
+/**
+ * 根据缺陷中心点和椭圆参数，计算缺陷在时钟位置系统中所处的区间。
+ * 时钟定义：12'在顶部（-π/2），顺时针方向，共12个等分区间。
+ * 通过将椭圆归一化到单位圆求参数角，避免长短轴不等带来的偏差。
+ * @returns 如 "2'-3'" 的字符串，无法计算时返回空字符串
+ */
 function getClockPositionLabel(
   ax: number, ay: number,
   cx: number, cy: number,
@@ -448,13 +496,19 @@ function getClockPositionLabel(
 ): string {
   if (rx <= 0 || ry <= 0) return '';
   const CLOCK_LABELS = ["12'", "1'", "2'", "3'", "4'", "5'", "6'", "7'", "8'", "9'", "10'", "11'"];
+  // 归一化到单位圆后求参数角 φ（椭圆参数方程 x=cx+rx·cosφ, y=cy+ry·sinφ）
   const phi = Math.atan2((ay - cy) / ry, (ax - cx) / rx);
+  // 12' 位于 φ=-π/2，平移使 12' 对应 0，顺时针增大
   const shifted = ((phi + Math.PI / 2) + 2 * Math.PI) % (2 * Math.PI);
+  // 12 等分，每扇区 2π/12
   const sectorIdx = Math.floor(shifted / (2 * Math.PI / 12)) % 12;
   const nextIdx = (sectorIdx + 1) % 12;
   return `${CLOCK_LABELS[sectorIdx]}-${CLOCK_LABELS[nextIdx]}`;
 }
 
+/**
+ * 从 WeldLocationRect 列表中找到离给定点最近的椭圆，返回其 cx/cy/rx/ry。
+ */
 function getNearestEllipseParams(
   shapes: WeldLocationRect[],
   ax: number, ay: number
@@ -494,7 +548,8 @@ function getNearestEllipseParams(
   };
 }
 
-const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
+export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
+  file: selectedFile,
   taskId,
   projectId,
   projectName,
@@ -502,14 +557,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   onPreview,
   projectSidebarCollapsed = false,
   onProjectSidebarCollapseChange,
+  initialReviewPanelCollapsed = false,
+  onToggleFullScreen,
+  sharedBlobCacheRef,
 }) => {
-  const [selectedFile, setSelectedFile] = useState<TaskFile | null>(null);
-  const [viewMode, setViewMode] = useState<'single' | 'compare'>('single');
-  const [compareSelectedFiles, setCompareSelectedFiles] = useState<[TaskFile | null, TaskFile | null]>([null, null]);
-  // 对比模式下两侧 ImageEditorViewer 共享同一个 Blob LRU 缓存
-  // 这样左右互换文件时可直接命中对方已加载的缓存，无需重新下载
-  const compareBlobCacheRef = useRef<Map<string, File>>(new Map());
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -579,12 +631,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   }, [selectedFile]);
 
   useEffect(() => {
-    if (viewMode === 'compare') {
-      setIsReviewPanelCollapsed(true);
-    }
-  }, [viewMode]);
-
-  useEffect(() => {
     if (!selectedFile) return;
 
     let frameId = 0;
@@ -646,6 +692,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   }, [selectedFile, isFullScreen]);
 
   const toggleFullScreen = () => {
+    if (onToggleFullScreen) {
+      onToggleFullScreen();
+      return;
+    }
     if (!document.fullscreenElement) {
       editorContainerRef.current?.requestFullscreen().catch(err => {
         message.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
@@ -817,7 +867,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   const [showIqiVisualization, setShowIqiVisualization] = useState(false);
 
   // --- 新增：折叠状态 ---
-  const [isReviewPanelCollapsed, setIsReviewPanelCollapsed] = useState(false);
+  const [isReviewPanelCollapsed, setIsReviewPanelCollapsed] = useState(initialReviewPanelCollapsed);
   const [showDefectList, setShowDefectList] = useState(true);
   const [showFilmInfo, setShowFilmInfo] = useState(true); // 底片信息折叠状态
 
@@ -902,11 +952,11 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // 1. 获取报告详情
   const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
-  const report = reportResp?.Data;
+  const report = (reportResp as any)?.Data;
 
   // 2. 获取缺陷类型列表
   const { data: defectTypesResp, error: defectTypesError } = useRequest(() => defectTypeAPI.getDefectTypes());
-  const isDefectTypesFromBackend = !defectTypesError && defectTypesResp?.Data != null;
+  const isDefectTypesFromBackend = !defectTypesError && (defectTypesResp as any)?.Data != null;
 
   // 动态计算左侧栏宽度
   useEffect(() => {
@@ -919,12 +969,12 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   // 使用 useMemo 缓存 DEFECT_TYPES，避免每次渲染都创建新数组导致 useEffect 重复执行
   const DEFECT_TYPES = useMemo(() => {
-    return (defectTypesResp?.Data || DEFAULT_DEFECT_TYPES).map((dt: any) => ({
+    return ((defectTypesResp as any)?.Data || DEFAULT_DEFECT_TYPES).map((dt: any) => ({
       code: dt.Code,
       name: dt.Name,
       color: dt.Color,
     }));
-  }, [defectTypesResp?.Data]);
+  }, [(defectTypesResp as any)?.Data]);
 
   // 3. 获取文件列表
   const {
@@ -932,7 +982,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     loading: filesLoading,
     refresh: refreshFiles,
   } = useRequest(() => reportAPI.getReportFiles(taskId));
-  const files = filesResp?.Data || [];
+  const files = (filesResp as any)?.Data || [];
 
   const previewUrl = selectedFile
     ? `/api/v1/files/preview?FileId=${selectedFile.FileId}&ProjectId=${projectId}&UserId=${getUserId()}`
@@ -1150,8 +1200,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   // ─── Blob 内存缓存 （LRU）───────────────────────────────────────────────
   // Map 维持插入顺序，头部 = 最久未使用（LRU），尾部 = 最近使用
   // 每张 BMP 大约 10～20MB，最大缓存 15 张 ≈ 150～300MB
+  // 对比模式下由父组件传入共享缓存，两侧实例共享同一份，切换时直接命中
   const MAX_BLOB_CACHE_SIZE = 15;
-  const fileBlobCacheRef = useRef<Map<string, File>>(new Map());
+  const internalBlobCacheRef = useRef<Map<string, File>>(new Map());
+  const fileBlobCacheRef = sharedBlobCacheRef ?? internalBlobCacheRef;
 
   /** 写入缓存，带 LRU 淘汰。每次微少渮负（Map 操作 O(1)） */
   const setBlobCache = useCallback((fileId: string, file: File) => {
@@ -2235,19 +2287,8 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   useEffect(() => {
     if (files.length > 0 && !selectedFile) {
-      setSelectedFile(files[0]);
+      console.log("Navigation disabled in internal viewer");
     }
-  }, [files]);
-
-  useEffect(() => {
-    setCompareSelectedFiles(([left, right]) => {
-      const nextLeft = left && files.some(file => file.TaskFileId === left.TaskFileId) ? left : null;
-      const nextRight = right && files.some(file => file.TaskFileId === right.TaskFileId) ? right : null;
-      if (nextLeft === left && nextRight === right) {
-        return [left, right];
-      }
-      return [nextLeft, nextRight];
-    });
   }, [files]);
 
   // 使用 useRef 保存之前的 TaskFileId，避免重复加载
@@ -2255,6 +2296,10 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   useEffect(() => {
     if (selectedFile && selectedFile.TaskFileId !== prevTaskFileIdRef.current) {
+      isInitialLoadRef.current = true;
+      cancelAutoSaveFilmInfo();
+      cancelAutoSaveDefects();
+
       // 切换瞬间，如果当前图片是就绪的（说明是旧图），则标记为重置中，防止闪烁
       // 如果当前图片本身就不就绪（如首屏加载），则不需要锁，否则会导致死锁（因为解锁逻辑依赖 imageReady 变 false 的动作）
       if (imageReady) {
@@ -2494,9 +2539,6 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
         updateHistoryState([emptySnapshot], 0);
         setTimeout(() => { isInitialLoadRef.current = false; }, 100);
       });
-
-      // 切换文件时标记为初始加载状态
-      isInitialLoadRef.current = true;
 
       // 解析焊缝位置检测结果（B路径，来自 location_0.pt，12个关键点拟合椭圆）
       const parseWeldLocationShapes = (): WeldLocationRect[] => {
@@ -2797,7 +2839,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       const currentIndex = files.findIndex(f => f.TaskFileId === selectedFile.TaskFileId);
       if (currentIndex < files.length - 1) {
         const nextFile = files[currentIndex + 1];
-        setSelectedFile(nextFile);
+        console.log("Navigation disabled in internal viewer");
         const nextPageIndex = Math.floor((currentIndex + 1) / pageSize) + 1;
         if (nextPageIndex !== currentPage) {
           setCurrentPage(nextPageIndex);
@@ -2810,7 +2852,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   };
 
   // --- 自动保存：底片信息（防抖 1 秒）---
-  const { run: autoSaveFilmInfo } = useDebounceFn(
+  const { run: autoSaveFilmInfo, cancel: cancelAutoSaveFilmInfo } = useDebounceFn(
     async () => {
       if (!selectedFile) return;
       try {
@@ -2847,7 +2889,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   );
 
   // --- 自动保存：缺陷记录（防抖 500ms）---
-  const { run: autoSaveDefects } = useDebounceFn(
+  const { run: autoSaveDefects, cancel: cancelAutoSaveDefects } = useDebounceFn(
     async () => {
       if (!selectedFile) return;
       try {
@@ -2893,6 +2935,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
     },
     { wait: 500 }
   );
+
+  useEffect(() => {
+    return () => {
+      cancelAutoSaveFilmInfo();
+      cancelAutoSaveDefects();
+    };
+  }, [cancelAutoSaveDefects, cancelAutoSaveFilmInfo]);
 
   // 使用 Hook 返回的同步尺寸计算比例，避免 useEffect 更新 originalSize 带来的渲染延迟（闪烁根本原因）
   const trueImageW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
@@ -3128,13 +3177,13 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
 
   const handleSelectPreviousFile = () => {
     if (selectedFileIndex > 0) {
-      setSelectedFile(files[selectedFileIndex - 1]);
+      console.log("Navigation disabled in internal viewer");
     }
   };
 
   const handleSelectNextFile = () => {
     if (selectedFileIndex >= 0 && selectedFileIndex < files.length - 1) {
-      setSelectedFile(files[selectedFileIndex + 1]);
+      console.log("Navigation disabled in internal viewer");
     }
   };
 
@@ -3673,501 +3722,1354 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
       </div>
     );
   };
-
   return (
-    <Layout style={{ height: "100%", background: "#fff", margin: 0, padding: 0 }}>
-      {/* 左侧文件列表 */}
-      <Sider
-        width={actualLeftSidebarWidth}
-        theme="light"
-        style={{
-          borderRight: "1px solid #f0f0f0",
-          overflow: 'hidden',
-          transition: 'all 0.2s ease',
-          position: 'relative',
-          background: isLeftSidebarCollapsed ? '#fafafa' : '#fff',
-          flex: `0 0 ${actualLeftSidebarWidth}px`,
-          maxWidth: actualLeftSidebarWidth,
-          minWidth: actualLeftSidebarWidth,
-        }}
-      >
-        {isLeftSidebarCollapsed ? (
-          <div
-            style={{
-              height: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Tooltip
-              title="展开左侧列表"
-              placement="right"
-              getPopupContainer={() => editorContainerRef.current || document.body}
-            >
-              <Button
-                type="text"
-                size="small"
-                icon={<CollapseRightOutlined />}
-                onClick={() => setIsLeftSidebarCollapsed(false)}
-                style={{
-                  width: 18,
-                  height: 72,
-                  padding: 0,
-                  borderRadius: 999,
-                  color: '#8c8c8c',
-                  background: 'transparent',
-                }}
-              />
-            </Tooltip>
-          </div>
-        ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: leftSidebarWidth, overflow: 'hidden' }}>
-        <div style={{ padding: "20px 16px", borderBottom: "1px solid #f0f0f0" }}>
-          <Space direction="vertical" style={{ width: "100%" }} size={12}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <Button
-                icon={<LeftOutlined />}
-                onClick={onBack}
-                type="text"
-                style={{ padding: 0, height: 'auto', color: '#8c8c8c' }}
-              >
-                返回列表
-              </Button>
-              <Space size={4}>
-                {onProjectSidebarCollapseChange && (
-                  <Tooltip
-                    title={projectSidebarCollapsed ? '展开项目列表' : '收起项目列表'}
-                    placement="right"
-                    getPopupContainer={() => editorContainerRef.current || document.body}
-                  >
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DoubleRightOutlined style={{ transform: projectSidebarCollapsed ? 'none' : 'rotate(180deg)' }} />}
-                      onClick={() => onProjectSidebarCollapseChange(!projectSidebarCollapsed)}
-                      style={{
-                        color: '#8c8c8c',
-                        width: 24,
-                        minWidth: 24,
-                        height: 24,
-                        padding: 0,
-                        borderRadius: 12,
-                        flexShrink: 0,
-                      }}
-                    />
-                  </Tooltip>
-                )}
-                {onProjectSidebarCollapseChange && (
-                  <Tooltip
-                    title={areBothSidebarsCollapsed ? '展开项目列表和返回列表' : '同时折叠项目列表和返回列表'}
-                    placement="right"
-                    getPopupContainer={() => editorContainerRef.current || document.body}
-                  >
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<SwapOutlined />}
-                      onClick={handleToggleBothSidebars}
-                      style={{
-                        color: areBothSidebarsCollapsed ? '#1890ff' : '#8c8c8c',
-                        width: 24,
-                        minWidth: 24,
-                        height: 24,
-                        padding: 0,
-                        borderRadius: 12,
-                        flexShrink: 0,
-                      }}
-                    />
-                  </Tooltip>
-                )}
-                <Tooltip
-                  title="收起左侧列表"
-                  placement="right"
-                  getPopupContainer={() => editorContainerRef.current || document.body}
-                >
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<LeftOutlined />}
-                    onClick={() => setIsLeftSidebarCollapsed(true)}
-                    style={{
-                      color: '#8c8c8c',
-                      width: 24,
-                      minWidth: 24,
-                      height: 24,
-                      padding: 0,
-                      borderRadius: 12,
-                      flexShrink: 0,
-                    }}
-                  />
-                </Tooltip>
-              </Space>
-            </div>
-            <Title level={4} style={{ margin: 0, fontSize: '18px', whiteSpace: 'nowrap', display: 'inline-block' }}>
-              <div ref={reportTitleRef}>
-                {report?.ReportName || `检测报告_${taskId.slice(-6)}`}
-              </div>
-            </Title>
-          </Space>
-
-          <div style={{ marginTop: 24 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: '12px', color: '#8c8c8c' }}>
-              <span>文件总数: {files.length}个</span>
-              <span>{progressPercent}%</span>
-            </div>
-            <Progress percent={progressPercent} size="small" showInfo={false} strokeColor="#52c41a" trailColor="#f0f0f0" />
-            <div style={{ display: 'flex', marginTop: 16, background: '#f8f9fa', borderRadius: '4px', padding: '12px 0' }}>
-              <div style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ color: '#52c41a', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{confirmedCount}</div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>已确认</div>
-              </div>
-              <div style={{ borderLeft: '1px solid #e8e8e8', height: '24px', alignSelf: 'center' }} />
-              <div style={{ textAlign: 'center', flex: 1 }}>
-                <div style={{ color: '#faad14', fontSize: '20px', fontWeight: '600', lineHeight: 1.2 }}>{unconfirmedCount}</div>
-                <div style={{ fontSize: '12px', color: '#8c8c8c', marginTop: 4 }}>未确认</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ padding: "8px 16px", display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f0f0f0' }}>
-          <Checkbox
-            checked={selectedIds.size === files.length && files.length > 0}
-            indeterminate={selectedIds.size > 0 && selectedIds.size < files.length}
-            onChange={(e) => handleSelectAll(e.target.checked)}
-          >
-            全选
-          </Checkbox>
-          {selectedIds.size > 0 && (
-            <Button type="link" size="small" danger onClick={handleBatchConfirm}>
-              批量确认 ({selectedIds.size})
-            </Button>
-          )}
-        </div>
-
-        <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0f0', background: '#fff' }}>
-          <Space size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Text strong style={{ fontSize: 13 }}>
-              {viewMode === 'compare' ? '当前为对比模式' : '当前为单图模式'}
-            </Text>
-            <Space size={8}>
-              <span style={{ fontSize: 12, color: '#8c8c8c' }}>对比模式</span>
-              <Switch
-                checked={viewMode === 'compare'}
-                onChange={(checked) => {
-                  setViewMode(checked ? 'compare' : 'single');
-                  if (checked && selectedFile) {
-                    setCompareSelectedFiles([selectedFile, null]);
-                  }
-                }}
-                size="small"
-              />
-            </Space>
-          </Space>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          <List
-            loading={filesLoading}
-            dataSource={paginatedFiles}
-            renderItem={(file) => (
-              <List.Item
-                onClick={() => {
-                  if (viewMode === 'single') {
-                    setSelectedFile(file);
-                  } else {
-                    setCompareSelectedFiles(prev => {
-                      if (!prev[0] || (prev[0] && prev[1])) return [file, null];
-                      return [prev[0], file];
-                    });
-                  }
-                }}
-                style={{
-                  cursor: "pointer",
-                  padding: "10px 16px",
-                  backgroundColor: (viewMode === "single"
-                    ? selectedFile?.TaskFileId === file.TaskFileId
-                    : compareSelectedFiles.some(f => f?.TaskFileId === file.TaskFileId))
-                    ? "#e6f7ff"
-                    : "transparent",
-                  borderLeft: (viewMode === "single"
-                    ? selectedFile?.TaskFileId === file.TaskFileId
-                    : compareSelectedFiles.some(f => f?.TaskFileId === file.TaskFileId))
-                    ? "4px solid #1890ff"
-                    : "4px solid transparent",
-                  transition: 'all 0.3s',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                  <Checkbox
-                    checked={selectedIds.has(file.TaskFileId)}
-                    onChange={(e) => handleSelectOne(file.TaskFileId, e.target.checked)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginRight: 12 }}
-                  />
-                  <Space style={{ flex: 1 }}>
-                    {file.ReviewStatus === "CONFIRMED" ? (
-                      <CheckCircleOutlined style={{ color: "#52c41a" }} />
-                    ) : (
-                      <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid #faad14' }} />
-                    )}
-                    <Tooltip title={file.FileName} placement="topLeft" mouseEnterDelay={0.1}>
-                      <Text ellipsis style={{ flex: 1, color: (viewMode === "single"
-                        ? selectedFile?.TaskFileId === file.TaskFileId
-                        : compareSelectedFiles.some(f => f?.TaskFileId === file.TaskFileId))
-                        ? "#1890ff"
-                        : "inherit", minWidth: 0 }}>
-                        {file.FileName}
-                      </Text>
-                    </Tooltip>
-                  </Space>
-                </div>
-              </List.Item>
-            )}
-          />
-        </div>
-
-        <div style={{ padding: '8px', borderTop: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-          <Pagination
-            simple
-            current={currentPage}
-            total={files.length}
-            pageSize={pageSize}
-            onChange={setCurrentPage}
-            showSizeChanger={false}
-            size="small"
-            style={{ whiteSpace: 'nowrap' }}
-          />
-          <Select
-            size="small"
-            value={pageSize}
-            onChange={(size) => { setPageSize(size); setCurrentPage(1); }}
-            placement="topLeft"
-            options={[
-              { label: '10条/页', value: 10 },
-              { label: '20条/页', value: 20 },
-              { label: '50条/页', value: 50 },
-            ]}
-          />
-        </div>
-
-        <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
-          <Button
-            type="primary"
-            block
-            size="large"
-            icon={<FileTextOutlined />}
-            style={{ height: '48px', borderRadius: '4px' }}
-            onClick={() => onPreview && onPreview()}
-          >
-            预览报告
-          </Button>
-        </div>
-        </div>
-        )}
-      </Sider>
-
-      {/* 中间编辑区 */}
-      <Content
+<Content
         ref={editorContainerRef}
         style={{ display: "flex", flexDirection: "column", background: '#f0f2f5', height: '100%', overflow: 'hidden' }}
       >
-        {viewMode === 'single' ? (
-          <ImageEditorViewer file={selectedFile} taskId={taskId} projectId={projectId} />
-        ) : (
-          <div style={{ display: 'flex', height: '100%', width: '100%' }}>
-            <div style={{ flex: 1, borderRight: '2px solid #000', position: 'relative', overflow: 'hidden' }}>
-              {compareSelectedFiles[0] ? (
-                <ImageEditorViewer
-                  file={compareSelectedFiles[0]}
-                  taskId={taskId}
-                  projectId={projectId}
-                  initialReviewPanelCollapsed={true}
-                  onToggleFullScreen={toggleFullScreen}
-                  sharedBlobCacheRef={compareBlobCacheRef}
-                />
-              ) : (
-                <div style={{ padding: '40px', textAlign: 'center' }}>请在左侧选择图片 1</div>
-              )}
-            </div>
-            <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-              {compareSelectedFiles[1] ? (
-                <ImageEditorViewer
-                  file={compareSelectedFiles[1]}
-                  taskId={taskId}
-                  projectId={projectId}
-                  initialReviewPanelCollapsed={true}
-                  onToggleFullScreen={toggleFullScreen}
-                  sharedBlobCacheRef={compareBlobCacheRef}
-                />
-              ) : (
-                <div style={{ padding: '40px', textAlign: 'center' }}>请在左侧选择图片 2</div>
-              )}
-            </div>
-          </div>
-        )}
-      </Content>
+        {/* 顶部工具栏 (保持不变) */}
+        <div style={{
+          height: 48,
+          background: '#1f1f1f',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 8px',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid #303030'
+        }}>
+          <Space size={0}>
 
-      {/* 测量距离前的尺寸定标确认弹窗 */}
-      < Modal
-        title="尺寸定标确认"
-        open={calibratePromptModalVisible}
-        onCancel={() => {
-          setCalibratePromptModalVisible(false);
-          setMeasureAfterCalibrate(false);
-        }}
-        footer={null}
-        width={360}
-        centered
-        maskClosable={false}
-        getContainer={() => editorContainerRef.current || document.body}
-      >
-        <div style={{ marginBottom: 24 }}>
-          <Text>是否需要先进行尺寸定标？</Text>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button
-            onClick={() => {
-              setCalibratePromptModalVisible(false);
-              setMeasureAfterCalibrate(false);
-              setActiveTool('measure');
-            }}
-          >
-            否，直接测量
-          </Button>
-          <Button
-            type="primary"
-            onClick={() => {
-              setMeasureAfterCalibrate(true);
-              startCalibration();
-            }}
-          >
-            是，先定标
-          </Button>
-        </div>
-      </Modal >
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="重置视图">
+              <Button
+                type="text" ghost
+                icon={<img src="/fullscreen.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                onClick={() => {
+                  setScale(1);
+                  setRotation(selectedFile?.CorrectionRotation ?? 0);
+                  setFlipH(selectedFile?.CorrectionFlip ? -1 : 1);
+                  setFlipV(1);
+                  setPosition({ x: 0, y: 0 });
+                  resetWindow();
+                }} /></Tooltip>
 
-      <Modal
-        title="尺寸已定标"
-        open={recalibratePromptModalVisible}
-        onCancel={() => setRecalibratePromptModalVisible(false)}
-        footer={null}
-        width={360}
-        centered
-        maskClosable={false}
-        getContainer={() => editorContainerRef.current || document.body}
-      >
-        <div style={{ marginBottom: 24 }}>
-          <Text>当前图片已完成尺寸定标，是否重新定标？</Text>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button onClick={() => setRecalibratePromptModalVisible(false)}>
-            取消
-          </Button>
-          <Button
-            type="primary"
-            onClick={() => {
-              startCalibration();
-            }}
-          >
-            重新定标
-          </Button>
-        </div>
-      </Modal>
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title={windowToolTooltip}>
+              <Button type="text" ghost
+                icon={<img src="/contrast.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                disabled={isWindowControlPendingOriginal}
+                onClick={() => setActiveTool(activeTool === 'windowing' ? 'pan' : 'windowing')}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'windowing' ? '#1890ff' : 'transparent' }}
+              />
+            </Tooltip>
+            <Tooltip
+              getPopupContainer={() => editorContainerRef.current || document.body}
+              title={isNegative ? '负片（已开启）' : '负片（已关闭）'}
+            >
+              <Button
+                type={isNegative ? 'primary' : 'text'}
+                ghost={!isNegative}
+                onClick={() => setIsNegative(!isNegative)}
+                icon={<img src="/negative.svg" alt="negative" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isNegative ? '#1890ff' : 'transparent' }}
+              />
+            </Tooltip>
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-      {/* 4. 像素标定弹窗 */}
-      < Modal
-        title="像素标定"
-        open={calibrateModalVisible}
-        onOk={handleCalibrateConfirm}
-        onCancel={() => {
-          setCalibrateModalVisible(false);
-          setCalibrateLine(null);
-          setMeasureAfterCalibrate(false);
-          setActiveTool('pan');
-        }}
-        okText="确认"
-        cancelText="取消"
-        width={300}
-        centered
-        maskClosable={false}
-        getContainer={() => editorContainerRef.current || document.body}
-      >
-        <div style={{ marginBottom: 16 }}>
-          <Text type="secondary">选择的距离 (像素)：</Text>
-          <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: 4 }}>
-            {measuredPixelDistance} px
-          </div>
-        </div>
-        <div>
-          <Text type="secondary">实际长度 (毫米)：</Text>
-          <InputNumber
-            style={{ width: '100%', marginTop: 4 }}
-            placeholder="请输入实际长度"
-            value={actualLength}
-            onChange={(val) => setActualLength(val)}
-            addonAfter="mm"
-            autoFocus
-          />
-        </div>
-      </Modal >
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="缺陷标记">
+              <Button
+                type={activeTool === 'defect' ? 'primary' : 'text'}
+                ghost={activeTool !== 'defect'}
+                icon={<img src="/circle-alert.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{
+                  color: '#fff', width: 36, height: 32, padding: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: activeTool === 'defect' ? '#1890ff' : 'transparent'
+                }}
+                onClick={() => setActiveTool(activeTool === 'defect' ? 'pan' : 'defect')}
+              />
+            </Tooltip>
 
-      {/* 5. 新增：缺陷类型选择弹窗 */}
-      < Modal
-        title="选择缺陷类型"
-        open={labelModalVisible}
-        onOk={handleLabelConfirm}
-        onCancel={() => {
-          setLabelModalVisible(false);
-          setPendingShape(null);
-          setSelectedLabelCode(null);
-        }}
-        okText="确认"
-        cancelText="取消"
-        width={320}
-        centered
-        maskClosable={false}
-        destroyOnClose
-        getContainer={() => editorContainerRef.current || document.body}
-      >
-        {!isDefectTypesFromBackend && (
-          <Alert
-            message="缺陷类型加载失败，使用默认数据"
-            type="warning"
-            showIcon
-            style={{ marginBottom: 12 }}
-          />
-        )}
-        <div style={{ marginBottom: 16 }}>请选择当前区域的缺陷类型：</div>
-        <Select
-          style={{ width: '100%' }}
-          placeholder="请选择"
-          value={selectedLabelCode}
-          onChange={setSelectedLabelCode}
-          defaultOpen
-          listHeight={200}
-          getPopupContainer={() => editorContainerRef.current || document.body}
-        >
-          {DEFECT_TYPES.map(type => (
-            <Option key={type.code} value={type.code}>
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                {/* 颜色方块 */}
-                <div style={{
-                  width: 12,
-                  height: 12,
-                  background: type.color,
-                  marginRight: 8,
-                  borderRadius: 2
-                }} />
-                {type.name}
+            {/* <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="数字识别"><Button type="text" ghost icon={<img src="/type.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} /></Tooltip> */}
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="设置坐标原点">
+              <Button
+                type={activeTool === 'setOrigin' ? 'primary' : 'text'}
+                ghost={activeTool !== 'setOrigin'}
+                onClick={() => {
+                  if (activeTool !== 'setOrigin') {
+                    setTempOrigin(null);
+                    setIsSettingOrigin(false);
+                  }
+                  setActiveTool(activeTool === 'setOrigin' ? 'pan' : 'setOrigin')
+                }}
+                icon={<img src="/mouse-pointer-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'setOrigin' ? '#1890ff' : 'transparent' }}
+              />
+            </Tooltip>
+
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="测量距离">
+              <Button
+                type={activeTool === 'measure' ? 'primary' : 'text'}
+                ghost={activeTool !== 'measure'} icon={<img src="/ruler.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                onClick={handleMeasureToolClick}
+                style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: activeTool === 'measure' ? '#1890ff' : 'transparent' }} /></Tooltip>
+
+
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r - 90)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 90)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 180)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipH(h => h * -1)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipV(v => v * -1)} /></Tooltip>
+
+            <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="位置和尺寸">
+              <Button
+                type={activeTool === 'positionSize' ? 'primary' : 'text'}
+                ghost={activeTool !== 'positionSize'}
+                icon={<img src="/codepen.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />}
+                style={{
+                  color: '#fff', width: 36, height: 32, padding: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: activeTool === 'positionSize' ? '#1890ff' : 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool(activeTool === 'positionSize' ? 'pan' : 'positionSize');
+                }}
+              />
+            </Tooltip>
+          </Space>
+
+          <Space size={8}>
+            <Button
+              type="text"
+              ghost
+              icon={isFullScreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+              onClick={toggleFullScreen}
+              style={{
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px',
+                background: '#303030',
+                borderRadius: '4px', display: 'flex', alignItems: 'center'
+              }}
+            >
+              {isFullScreen ? '退出全屏' : '全屏显示'}
+            </Button>
+            <Button
+              type={activeTool === 'calibrate' ? 'primary' : 'text'}
+              ghost={activeTool !== 'calibrate'}
+              icon={<ColumnWidthOutlined />}
+              onClick={handleCalibrateToolClick}
+              style={{
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px',
+                background: activeTool === 'calibrate' ? '#1890ff' : '#303030',
+                borderRadius: '4px', display: 'flex', alignItems: 'center'
+              }}
+            >
+              尺寸定标
+            </Button>
+
+            <Button
+              onClick={() => setShowPositioningCoords(v => !v)}
+              style={{
+                color: '#fff', fontSize: '12px', height: 28, padding: '0 12px',
+                background: '#303030',
+                borderRadius: '4px', display: 'flex', alignItems: 'center'
+              }}
+            >
+              {showPositioningCoords ? '隐藏定位坐标' : '显示定位坐标'}
+            </Button>
+
+            <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
+              <LinkOutlined style={{ transform: 'rotate(-45deg)', marginRight: 4 }} />
+                <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
+                  <div>1px</div>
+                  <div style={{ borderTop: '1px solid #595959', marginTop: 1 }}>
+                  {hasPixelCalibration ? `${pixelRatio}mm` : '未标定'}
+                  </div>
+                </div>
               </div>
-            </Option>
-          ))}
-        </Select>
-      </Modal >
 
-    </Layout >
+            <div style={{ background: '#262626', height: 28, borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: '11px', color: '#8c8c8c' }}>
+              <AimOutlined style={{ color: '#1890ff', marginRight: 4 }} />
+              <div style={{ textAlign: 'left', lineHeight: 1.1 }}>
+                <div>原点:</div>
+                <div style={{ color: '#fff' }}>
+                  ({displayOrigin.x}, {displayOrigin.y})
+                </div>
+              </div>
+            </div>
+
+          </Space>
+        </div>
+
+        {/* 图片容器 */}
+        <div
+          ref={viewerAreaRef}
+          style={{
+          flex: 1,
+          position: 'relative',
+          overflow: 'hidden',
+          background: '#262626',
+          display: 'grid',
+          gridTemplateColumns: '20px 1fr',
+          gridTemplateRows: '20px 1fr',
+        }}
+        >
+          {/* 左上角单位 */}
+          <div style={{ background: '#1f1f1f', color: '#8c8c8c', fontSize: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid #303030', borderRight: '1px solid #303030', zIndex: 20 }}>
+            PX
+          </div>
+
+          {/* 顶部标尺 */}
+          <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
+            <Ruler type="horizontal" scale={scale} offset={imageOffset.x} length={containerSize.w} ratio={rulerHorizRatio} maxImageSize={rulerHorizMax} />
+          </div>
+
+          {/* 左侧标尺 */}
+          <div style={{ overflow: 'hidden', position: 'relative', zIndex: 10 }}>
+            <Ruler type="vertical" scale={scale} offset={imageOffset.y} length={containerSize.h} ratio={rulerVertRatio} maxImageSize={rulerVertMax} />
+          </div>
+
+          {/* 图片视口 */}
+          <div
+            ref={setCanvasContainer}
+            style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            {selectedFile ? (
+              <div
+                ref={imageWrapperRef}
+                onWheel={handleWheel}
+
+                onMouseDown={handleMouseDownWrapper}
+                onMouseMove={handleMouseMoveWrapper}
+                onMouseUp={handleMouseUpWrapper}
+                onMouseLeave={handleMouseLeaveWrapper}
+                onDoubleClick={handleDoubleClickWrapper}
+
+                style={{
+                  position: "relative",
+                  display: 'inline-block',
+                  transform: `translate(${position.x}px, ${position.y}px) scale(${scale * flipH}, ${scale * flipV}) rotate(${rotation}deg)`,
+                  transformOrigin: 'center center',
+                  transition: 'none',
+                  cursor: cursorStyle
+                }}
+                onTransitionEnd={() => updateImageOffset()}
+              >
+                <canvas
+                  key={selectedFile?.TaskFileId || 'default-canvas'}
+                  ref={canvasRef}
+                  style={{
+                    maxHeight: "calc(100vh - 280px)",
+                    maxWidth: "100%",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                    display: 'block',
+                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin') ? 'none' : 'auto',
+                    filter: isNegative ? 'invert(100%)' : 'none',
+                    visibility: imageReady ? 'visible' : 'hidden',
+                  }}
+                />
+
+                {/* 图片质量徽章：JPEG 占位时显示"预览图"，原图加载完毕后消失 */}
+                {isPreviewQuality && imageReady && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 8,
+                    right: 8,
+                    backgroundColor: 'rgba(250, 173, 20, 0.92)',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    pointerEvents: 'none',
+                    zIndex: 20,
+                    letterSpacing: '0.5px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                  }}>
+                    预览图 · 原图加载中…
+                  </div>
+                )}
+
+                {/* --- 1. Window Level 选框 --- */}
+                {selectionRect && (
+                  <div style={{
+                    position: 'absolute',
+                    border: '2px dashed #ff4d4f',
+                    backgroundColor: 'rgba(255, 77, 79, 0.2)',
+                    left: selectionRect.left,
+                    top: selectionRect.top,
+                    width: selectionRect.width,
+                    height: selectionRect.height,
+                    pointerEvents: 'none',
+                    zIndex: 10
+                  }} />
+                )}
+
+                {/* --- 2. 缺陷标注层 (SVG) --- */}
+                <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 100 }}>
+
+                  {/* 0. 焊缝位置层（关键点标注，来自 location_0.pt）*/}
+                  {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && (
+                    weldLocationShapes.map((shape, idx) => {
+                      const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                      const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                      const normR = ((corrRotation % 360) + 360) % 360;
+                      const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                      const rimgW = (normR === 90 || normR === 270)
+                        ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                      const rimgH = (normR === 90 || normR === 270)
+                        ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                      // 从关键点拟合椭圆：计算中心和半径（关键点不足时回退到 bbox）
+                      const kps = shape.keypoints;
+                      let cx: number, cy: number, rx: number, ry: number;
+                      if (kps.length >= 2) {
+                        const xs = kps.map(k => k.x);
+                        const ys = kps.map(k => k.y);
+                        cx = (Math.max(...xs) + Math.min(...xs)) / 2;
+                        cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+                        rx = (Math.max(...xs) - Math.min(...xs)) / 2;
+                        ry = (Math.max(...ys) - Math.min(...ys)) / 2;
+                      } else {
+                        cx = (shape.x1 + shape.x2) / 2;
+                        cy = (shape.y1 + shape.y2) / 2;
+                        rx = (shape.x2 - shape.x1) / 2;
+                        ry = (shape.y2 - shape.y1) / 2;
+                      }
+
+                      // 等距生成12个时钟位置：12'在顶部(-π/2)，顺时针依次1'…11'
+                      // 这样 12'/3'/6'/9' 精确落在上/右/下/左四个正方向
+                      const CLOCK_LABELS = ["12'", "1'", "2'", "3'", "4'", "5'", "6'", "7'", "8'", "9'", "10'", "11'"];
+                      const clockPoints = CLOCK_LABELS.map((label, i) => {
+                        const angle = -Math.PI / 2 + (2 * Math.PI * i / 12);
+                        return { label, x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) };
+                      });
+
+                      // 将时钟点转换到显示坐标，供椭圆轮廓和时钟点共用
+                      const dispClockPts = clockPoints.map(pt => {
+                        let kx = pt.x, ky = pt.y;
+                        if (needsInverse && rimgW > 0 && rimgH > 0) {
+                          const t = inverseTransformPoint(kx, ky, rimgW, rimgH, corrRotation, corrFlipH);
+                          kx = t.x; ky = t.y;
+                        }
+                        return {
+                          label: pt.label,
+                          x: widthRatio > 0 ? kx / widthRatio : kx,
+                          y: heightRatio > 0 ? ky / heightRatio : ky
+                        };
+                      });
+                      // 从显示坐标还原椭圆参数，用于绘制椭圆轮廓
+                      const allDx = dispClockPts.map(p => p.x);
+                      const allDy = dispClockPts.map(p => p.y);
+                      const ellCx = (Math.max(...allDx) + Math.min(...allDx)) / 2;
+                      const ellCy = (Math.max(...allDy) + Math.min(...allDy)) / 2;
+                      const ellRx = (Math.max(...allDx) - Math.min(...allDx)) / 2;
+                      const ellRy = (Math.max(...allDy) - Math.min(...allDy)) / 2;
+
+                      return (
+                        <g key={`weld-loc-${idx}`}>
+                          {/* 椭圆轮廓（绿色虚线） */}
+                          <ellipse
+                            cx={ellCx} cy={ellCy}
+                            rx={ellRx} ry={ellRy}
+                            fill="none"
+                            stroke="#39ff14"
+                            strokeWidth={2 / scale}
+                            strokeDasharray={`${6 / scale} ${4 / scale}`}
+                            opacity={0.85}
+                          />
+                          {/* 时钟位置点：12'/3'/6'/9' 为主方向（较大），其余等距插值 */}
+                          {dispClockPts.map((pt, ki) => {
+                            const isCardinal = ki % 3 === 0; // 12', 3', 6', 9'
+                            const normCSS = ((rotation % 360) + 360) % 360;
+                            const tx = pt.x + 6 / scale;
+                            const ty = pt.y - 4 / scale;
+                            let textTfm = '';
+                            if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${tx}, ${ty}) `;
+                            if (flipH === -1) textTfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                            return (
+                              <g key={ki}>
+                                <circle cx={pt.x} cy={pt.y}
+                                  r={(isCardinal ? 5 : 3.5) / scale}
+                                  fill={ki === 0 ? '#00e5ff' : '#fd0202'}
+                                  opacity={0.9}
+                                />
+                                <text
+                                  x={tx}
+                                  y={ty}
+                                  fill={ki === 0 ? '#00e5ff' : '#fd0202'}
+                                  fontSize={(isCardinal ? 13 : 11) / scale}
+                                  fontWeight="bold"
+                                  textAnchor="start"
+                                  style={{ filter: 'drop-shadow(0 0 2px #000)' }}
+                                  transform={textTfm || undefined}
+                                >
+                                  {pt.label}
+                                </text>
+                              </g>
+                            );
+                          })}
+                        </g>
+                      );
+                    })
+                  )}
+
+                   {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
+                   {/* 只有在显示坐标且没有手动设置原点时，才显示 AI 检测的原点 */}
+                   {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && !originPoint && (() => {
+                     const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                     const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                     const normR = ((corrRotation % 360) + 360) % 360;
+                     const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                     const rimgW = (normR === 90 || normR === 270)
+                       ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                     const rimgH = (normR === 90 || normR === 270)
+                       ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                     let ox = defectOriginPoint.x;
+                     let oy = defectOriginPoint.y;
+                     if (needsInverse && rimgW > 0 && rimgH > 0) {
+                       const t = inverseTransformPoint(ox, oy, rimgW, rimgH, corrRotation, corrFlipH);
+                       ox = t.x; oy = t.y;
+                     }
+                     const dox = widthRatio > 0 ? ox / widthRatio : ox;
+                     const doy = heightRatio > 0 ? oy / heightRatio : oy;
+
+                     // 文字防旋转/翻转处理
+                     const normCSS = ((rotation % 360) + 360) % 360;
+                     const textX = dox + 15 / scale;
+                     const textY = doy - 15 / scale;
+                     let textTfm = '';
+                     if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                     if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
+
+                     return (
+                       <g key="defect-origin">
+                         {/* 全屏贯穿红色十字虚线 */}
+                         <line x1={dox} y1={0} x2={dox} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="4,4" />
+                         <line x1={0} y1={doy} x2="100%" y2={doy} stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="4,4" />
+                         
+                         {/* 中心加粗十字准心及圆圈 */}
+                         <circle cx={dox} cy={doy} r={6 / scale} fill="none" stroke="#f5222d" strokeWidth={2 / scale} />
+                         <line x1={dox - 10 / scale} y1={doy} x2={dox + 10 / scale} y2={doy} stroke="#f5222d" strokeWidth={2 / scale} />
+                         <line x1={dox} y1={doy - 10 / scale} x2={dox} y2={doy + 10 / scale} stroke="#f5222d" strokeWidth={2 / scale} />
+
+                         <text
+                           x={textX}
+                           y={textY}
+                           fill="#f5222d"
+                           fontSize={12 / scale}
+                           fontWeight="bold"
+                           style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
+                           transform={textTfm || undefined}
+                         >
+                           原点
+                         </text>
+                       </g>
+                     );
+                   })()}
+
+                  {/* 0-C. IQI 可视化层（来自 ocr.visualization，原始图像坐标系）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiVisualization && hasIqiVisualization && (
+                    <g>
+                      {(() => {
+                        const toDisplayPoint = ([rawX, rawY]: IqiPoint) => ({
+                          x: widthRatio > 0 ? rawX / widthRatio : rawX,
+                          y: heightRatio > 0 ? rawY / heightRatio : rawY,
+                        });
+
+                        const roiPoints = iqiVisualization.roi_polygon_xy.map(toDisplayPoint);
+                        const roiPointString = roiPoints.map((pt) => `${pt.x},${pt.y}`).join(' ');
+                        const normCSS = ((rotation % 360) + 360) % 360;
+
+                        return (
+                          <>
+                            {roiPoints.length >= 3 && (
+                              <polygon
+                                points={roiPointString}
+                                fill="none"
+                                stroke="#39ff14"
+                                strokeWidth={2 / scale}
+                                strokeLinejoin="round"
+                                opacity={0.95}
+                              />
+                            )}
+
+                            {iqiVisualization.wire_lines.map((ln) => {
+                              const p1 = toDisplayPoint(ln.image_xy[0]);
+                              const p2 = toDisplayPoint(ln.image_xy[1]);
+                              return (
+                                <line
+                                  key={`iqi-wire-${ln.index}`}
+                                  x1={p1.x}
+                                  y1={p1.y}
+                                  x2={p2.x}
+                                  y2={p2.y}
+                                  stroke="#ff2d2d"
+                                  strokeWidth={2 / scale}
+                                  strokeLinecap="round"
+                                  opacity={0.9}
+                                />
+                              );
+                            })}
+
+                            {iqiVisualization.plate_text_items_selected.map((item, index) => {
+                              const boxPoints = item.box_image_xy.map(toDisplayPoint);
+                              const boxPointString = boxPoints.map((pt) => `${pt.x},${pt.y}`).join(' ');
+                              const xs = boxPoints.map((pt) => pt.x);
+                              const ys = boxPoints.map((pt) => pt.y);
+                              const minX = xs.length > 0 ? Math.min(...xs) : 0;
+                              const minY = ys.length > 0 ? Math.min(...ys) : 0;
+                              const textX = minX + 6 / scale;
+                              const textY = Math.max(minY - 8 / scale, 16 / scale);
+                              let textTransform = '';
+                              if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                              if (flipH === -1) textTransform += `translate(${2 * textX}, 0) scale(-1, 1)`;
+
+                              return (
+                                <g key={`iqi-text-${index}`}>
+                                  {boxPoints.length >= 3 && (
+                                    <polygon
+                                      points={boxPointString}
+                                      fill="none"
+                                      stroke="#ffe000"
+                                      strokeWidth={1.8 / scale}
+                                      strokeLinejoin="round"
+                                      opacity={0.95}
+                                    />
+                                  )}
+                                  {item.text && (
+                                    <text
+                                      x={textX}
+                                      y={textY}
+                                      fill="#ffe000"
+                                      fontSize={13 / scale}
+                                      fontWeight="bold"
+                                      style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
+                                      transform={textTransform || undefined}
+                                    >
+                                      {item.text}
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            })}
+                          </>
+                        );
+                      })()}
+                    </g>
+                  )}
+
+                  {/* A. 绘制已保存的矩形 (增加 label 和 color) */}
+                  {/* 从后端加载的数据是矫正后像素坐标,需要先逆变换回原图坐标再转为 CSS 坐标 */}
+                  {/*只在图片加载完成后且当前文件ID匹配时才显示缺陷信息 */}
+                  {(() => {
+                    // 防止切换文件瞬间闪烁：只有当 imageReady 为 true 且当前渲染的文件 ID 与已处理的 ID 一致，且不处于重置过程中时才显示
+                    const isFileSynced = selectedFile?.TaskFileId === prevTaskFileIdRef.current;
+                    const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
+
+                    if (!shouldShowDefects) return null;
+
+                    // 渲染时逆变换：使用已加载的图像尺寸（此时 rawImageWidth/Height 已有值）
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    // 矫正后图像的像素尺寸（90/270°时宽高互换）
+                    const rimgW = (normR === 90 || normR === 270)
+                      ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270)
+                      ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                    // 文字反变换：抵消 CSS 旋转和翻转，使标注文字固定正向显示
+                    // SVG transform 应用顺序：先右边再左边，所以写为 rotate 然后 scale
+                    const makeTextTransform = (tx: number, ty: number) => {
+                      let t = '';
+                      // 先抖消旋转（相对于文字中心）
+                      if (corrRotation !== 0) {
+                        t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                      }
+                      // 再抖消水平翻转（如果有）
+                      if (corrFlipH === -1) {
+                        t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                      }
+                      return t || undefined;
+                    };
+
+                    return defectRects.map((rect, idx) => {
+                      let rx = rect.x, ry = rect.y, rw = rect.w, rh = rect.h;
+                      if (needsInverse && rimgW > 0 && rimgH > 0) {
+                        const p1 = inverseTransformPoint(rx, ry, rimgW, rimgH, corrRotation, corrFlipH);
+                        const p2 = inverseTransformPoint(rx + rw, ry + rh, rimgW, rimgH, corrRotation, corrFlipH);
+                        rx = Math.min(p1.x, p2.x); ry = Math.min(p1.y, p2.y);
+                        rw = Math.abs(p2.x - p1.x); rh = Math.abs(p2.y - p1.y);
+                      }
+                      const displayX = widthRatio > 0 ? rx / widthRatio : rx;
+                      const displayY = widthRatio > 0 ? ry / widthRatio : ry;
+                      const displayW = widthRatio > 0 ? rw / widthRatio : rw;
+                      const displayH = widthRatio > 0 ? rh / widthRatio : rh;
+                      // 标签附着在矩形左上角上方
+                      const labelX = displayX, labelY = displayY - 5;
+
+                      return (
+                        <g key={`rect-${idx}`}>
+                          <rect
+                            x={displayX} y={displayY} width={displayW} height={displayH}
+                            stroke={rect.color}
+                            strokeWidth={(hoveredDefectKey === `rect-${idx}` ? 4 : 2) / scale}
+                            fill={hoveredDefectKey === `rect-${idx}` ? `${rect.color}4D` : "none"}
+                          />
+                          <text
+                            x={labelX} y={labelY}
+                            fill={rect.color}
+                            fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
+                            fontWeight="bold"
+                            style={{ textShadow: '0 0 2px #000' }}
+                            transform={makeTextTransform(labelX, labelY)}
+                          >
+                            {rect.label}
+                          </text>
+                        </g>
+                      );
+                    });
+                  })()}
+
+                  {/* B. 绘制已保存的多边形 */}
+                  {(() => {
+                    const isFileSynced = selectedFile?.TaskFileId === prevTaskFileIdRef.current;
+                    const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
+                    if (!shouldShowDefects) return null;
+
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                    const makeTextTransform = (tx: number, ty: number) => {
+                      let t = '';
+                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                      return t || undefined;
+                    };
+
+                    return defectPolygons.map((poly, idx) => {
+                      const transformedPoints = poly.points.map(p => {
+                        let { x, y } = p;
+                        if (needsInverse && rimgW > 0 && rimgH > 0) {
+                          ({ x, y } = inverseTransformPoint(x, y, rimgW, rimgH, corrRotation, corrFlipH));
+                        }
+                        return { x: widthRatio > 0 ? x / widthRatio : x, y: heightRatio > 0 ? y / heightRatio : y };
+                      });
+                      const pointsStr = transformedPoints.map(p => `${p.x},${p.y}`).join(' ');
+                      const labelP = transformedPoints[0] || { x: 0, y: 0 };
+                      const lx = labelP.x, ly = labelP.y - 5;
+
+                      return (
+                        <g key={`poly-${idx}`}>
+                          <polygon
+                            points={pointsStr}
+                            stroke={poly.color}
+                            strokeWidth={(hoveredDefectKey === `polygon-${idx}` ? 4 : 2) / scale}
+                            fill={hoveredDefectKey === `polygon-${idx}` ? `${poly.color}4D` : "none"}
+                          />
+                          <text
+                            x={lx} y={ly}
+                            fill={poly.color}
+                            fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
+                            fontWeight="bold"
+                            style={{ textShadow: '0 0 2px #000' }}
+                            transform={makeTextTransform(lx, ly)}
+                          >
+                            {poly.label}
+                          </text>
+                        </g>
+                      );
+                    });
+                  })()}
+
+                  {/* C. 绘制已保存的圆形 */}
+                  {(() => {
+                    const isFileSynced = selectedFile?.TaskFileId === prevTaskFileIdRef.current;
+                    const shouldShowDefects = imageReady && !isImageResetingRef.current && isFileSynced;
+                    if (!shouldShowDefects) return null;
+
+                    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                    const normR = ((corrRotation % 360) + 360) % 360;
+                    const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                    const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                    const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                    const makeTextTransform = (tx: number, ty: number) => {
+                      let t = '';
+                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
+                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                      return t || undefined;
+                    };
+
+                    return defectCircles.map((circle, idx) => {
+                      let { x: cirX, y: cirY } = circle;
+                      if (needsInverse && rimgW > 0 && rimgH > 0) {
+                        ({ x: cirX, y: cirY } = inverseTransformPoint(cirX, cirY, rimgW, rimgH, corrRotation, corrFlipH));
+                      }
+                      const cx = widthRatio > 0 ? cirX / widthRatio : cirX;
+                      const cy = widthRatio > 0 ? cirY / widthRatio : cirY;
+                      const r = widthRatio > 0 ? circle.r / widthRatio : circle.r;
+                      const labelX = cx, labelY = cy - r - 5;
+
+                      return (
+                        <g key={`circle-${idx}`}>
+                          <circle
+                            cx={cx}
+                            cy={cy}
+                            r={r}
+                            stroke={circle.color}
+                            strokeWidth={(hoveredDefectKey === `circle-${idx}` ? 4 : 2) / scale}
+                            fill={hoveredDefectKey === `circle-${idx}` ? `${circle.color}4D` : "none"}
+                          />
+                          <text
+                            x={labelX} y={labelY}
+                            fill={circle.color}
+                            fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
+                            fontWeight="bold"
+                            style={{ textShadow: '0 0 2px #000' }}
+                            transform={makeTextTransform(labelX, labelY)}
+                          >
+                            {circle.label}
+                          </text>
+                        </g>
+                      );
+                    });
+                  })()}
+
+
+                  {/* D. 绘制当前正在拖拽的矩形 (虚线框, 默认红色) */}
+                  {activeTool === 'defect' && drawingType === 'rect' && currentDefectRect && (
+                    <rect
+                      x={currentDefectRect.x}
+                      y={currentDefectRect.y}
+                      width={currentDefectRect.w}
+                      height={currentDefectRect.h}
+                      stroke="#f5222d" strokeWidth={2 / scale} strokeDasharray="4 2" fill="rgba(245, 34, 45, 0.1)"
+                    />
+                  )}
+
+                  {/* D2. OCR框选区域（橙色虚线） */}
+                  {ocrDrawRect && (
+                    <rect
+                      x={ocrDrawRect.x}
+                      y={ocrDrawRect.y}
+                      width={ocrDrawRect.w}
+                      height={ocrDrawRect.h}
+                      stroke="#fa8c16" strokeWidth={2 / scale} strokeDasharray="4 2" fill="rgba(250, 140, 22, 0.1)"
+                    />
+                  )}
+
+                  {/* E. 绘制当前正在绘制的多边形 (蓝色折线 + 橡皮筋线) */}
+                  {activeTool === 'defect' && drawingType === 'polygon' && currentPolygonPoints.length > 0 && (
+                    <>
+                      <polyline
+                        points={currentPolygonPoints.map(p => `${p.x},${p.y}`).join(' ')}
+                        fill="none" stroke="#1890ff" strokeWidth={2 / scale}
+                      />
+                      {currentPolygonPoints.map((p, idx) => (
+                        <circle key={`pt-${idx}`} cx={p.x} cy={p.y} r={3 / scale} fill="#fff" stroke="#1890ff" strokeWidth={1 / scale} />
+                      ))}
+                      {cursorInImage && (
+                        <line
+                          x1={currentPolygonPoints[currentPolygonPoints.length - 1].x}
+                          y1={currentPolygonPoints[currentPolygonPoints.length - 1].y}
+                          x2={cursorInImage.x}
+                          y2={cursorInImage.y}
+                          stroke="#1890ff" strokeWidth={1 / scale} strokeDasharray="4 2"
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {/* F. 绘制当前正在绘制的圆形 (虚线圆) */}
+                  {activeTool === 'defect' && drawingType === 'circle' && currentDefectCircle && (
+                    <circle
+                      cx={currentDefectCircle.x}
+                      cy={currentDefectCircle.y}
+                      r={currentDefectCircle.r}
+                      stroke="#f5222d"
+                      strokeWidth={2 / scale}
+                      strokeDasharray="4 2"
+                      fill="rgba(245, 34, 45, 0.1)"
+                    />
+                  )}
+
+                </svg>
+
+                {/* 3. 坐标原点十字线 */}
+                {showPositioningCoords && activeTool === 'setOrigin' && tempOrigin && (() => {
+                  // 文字防旋转/翻转处理
+                  const normCSS = ((rotation % 360) + 360) % 360;
+                  const textX = tempOrigin.x + 15 / scale;
+                  const textY = tempOrigin.y - 15 / scale;
+                  const textY2 = tempOrigin.y + 15 / scale;
+                  let textTfm1 = '';
+                  let textTfm2 = '';
+                  if (normCSS !== 0) {
+                    textTfm1 += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                    textTfm2 += `rotate(${-normCSS}, ${textX}, ${textY2}) `;
+                  }
+                  if (flipH === -1) {
+                    textTfm1 += `translate(${2 * textX}, 0) scale(-1, 1)`;
+                    textTfm2 += `translate(${2 * textX}, 0) scale(-1, 1)`;
+                  }
+                  return (
+                    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
+                      {/* 全屏贯穿红色十字虚线 */}
+                      <line x1={tempOrigin.x} y1={0} x2={tempOrigin.x} y2="100%" stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
+                      <line x1={0} y1={tempOrigin.y} x2="100%" y2={tempOrigin.y} stroke="#f5222d" strokeWidth={1 / scale} strokeDasharray="5 5" />
+                      
+                      {/* 中心加粗十字准心及圆圈 */}
+                      <circle cx={tempOrigin.x} cy={tempOrigin.y} r={6 / scale} fill="none" stroke="#f5222d" strokeWidth={2 / scale} />
+                      <line x1={tempOrigin.x - 10 / scale} y1={tempOrigin.y} x2={tempOrigin.x + 10 / scale} y2={tempOrigin.y} stroke="#f5222d" strokeWidth={2 / scale} />
+                      <line x1={tempOrigin.x} y1={tempOrigin.y - 10 / scale} x2={tempOrigin.x} y2={tempOrigin.y + 10 / scale} stroke="#f5222d" strokeWidth={2 / scale} />
+
+                      <text x={textX} y={textY} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm1 || undefined}>x (原点)</text>
+                      <text x={textX} y={textY2} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm2 || undefined}>y</text>
+                    </svg>
+                  );
+                })()}
+
+                {/* 3.5. 坐标原点垂直辅助线（定位标记成像后显示） */}
+                {showPositioningCoords && originPoint && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 11 }}
+                  >
+                    {(() => {
+                      // originPoint 存储于矫正后坐标系，需逆变换回原图坐标系再转 SVG 显示坐标
+                      const _corrR = selectedFile?.CorrectionRotation ?? 0;
+                      const _corrF = selectedFile?.CorrectionFlip ? -1 : 1;
+                      const _normCorrR = ((_corrR % 360) + 360) % 360;
+                      const _corrImgW = (_normCorrR === 90 || _normCorrR === 270)
+                        ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                      const _corrImgH = (_normCorrR === 90 || _normCorrR === 270)
+                        ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+                      const rawPt = (_corrR !== 0 || _corrF === -1)
+                        ? inverseTransformPoint(originPoint.x, originPoint.y, _corrImgW, _corrImgH, _corrR, _corrF)
+                        : { x: originPoint.x, y: originPoint.y };
+                      const imageCoords = calculateImageCoordinates(rawPt.x, rawPt.y);
+                      const normR = ((rotation % 360) + 360) % 360;
+                      // CSS rotate(90°/270°) 当画满屏十字坐标系时不需要特意区分宽高交换
+                      
+                      // 文字防旋转/翻转处理
+                      const normCSS = ((rotation % 360) + 360) % 360;
+                      const textX = imageCoords.x + 15 / scale;
+                      const textY = imageCoords.y - 15 / scale;
+                      let textTfm = '';
+                      if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
+                      if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
+
+                      return (
+                        <g>
+                          {/* 全屏贯穿红色十字虚线 */}
+                          <line
+                            x1={imageCoords.x} y1={0}
+                            x2={imageCoords.x} y2={imgSize.h}
+                            stroke="rgba(245, 34, 45, 1)" strokeWidth={1 / scale} strokeDasharray="5 5"
+                          />
+                          <line
+                            x1={0} y1={imageCoords.y}
+                            x2={imgSize.w} y2={imageCoords.y}
+                            stroke="rgba(245, 34, 45, 1)" strokeWidth={1 / scale} strokeDasharray="5 5"
+                          />
+                          
+                          {/* 中心加粗十字准心及圆圈 */}
+                          <circle cx={imageCoords.x} cy={imageCoords.y} r={6 / scale} fill="none" stroke="rgba(245, 34, 45, 1)" strokeWidth={2 / scale} />
+                          <line x1={imageCoords.x - 10 / scale} y1={imageCoords.y} x2={imageCoords.x + 10 / scale} y2={imageCoords.y} stroke="rgba(245, 34, 45, 1)" strokeWidth={2 / scale} />
+                          <line x1={imageCoords.x} y1={imageCoords.y - 10 / scale} x2={imageCoords.x} y2={imageCoords.y + 10 / scale} stroke="rgba(245, 34, 45, 1)" strokeWidth={2 / scale} />
+
+                          <text
+                            x={textX}
+                            y={textY}
+                            fill="#f5222d"
+                            fontSize={12 / scale}
+                            fontWeight="bold"
+                            style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
+                            transform={textTfm || undefined}
+                          >
+                            原点
+                          </text>
+                        </g>
+                      );
+                    })()}
+                  </svg>
+                )}
+
+                {/* 4. 标定线绘制层 */}
+                {activeTool === 'calibrate' && calibrateLine && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    <line x1={calibrateLine.x1} y1={calibrateLine.y1} x2={calibrateLine.x2} y2={calibrateLine.y2} stroke="#faad14" strokeWidth={2 / scale} strokeDasharray="4 2" />
+                    <circle cx={calibrateLine.x1} cy={calibrateLine.y1} r={3 / scale} fill="#faad14" />
+                    <circle cx={calibrateLine.x2} cy={calibrateLine.y2} r={3 / scale} fill="#faad14" />
+                  </svg>
+                )}
+
+                {/* 5. 椭圆工具绘制层 */}
+                {activeTool === 'positionSize' && positionSizeType === 'elliptical' && ellipseState.shape && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    <g
+                      transform={`translate(${ellipseState.shape.cx} ${ellipseState.shape.cy}) rotate(${ellipseState.shape.rotation * 180 / Math.PI})`}
+                    >
+                      {/* A. 椭圆本体 */}
+                      <ellipse
+                        cx={0} cy={0}
+                        rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
+                        fill="none"
+                        stroke={ellipseState.mode === 'placing' ? '#00ccff' : 'rgba(255, 255, 255, 0.3)'}
+                        strokeWidth={ellipseState.mode === 'placing' ? 2 / scale : 15 / scale}
+                        strokeDasharray={ellipseState.mode === 'placing' ? '5 5' : 'none'}
+                      />
+
+                      {/* B. 时钟系统刻度（刻度圆点在旋转g内，标签在外部以便抵消CSS旋转）
+                           startAngle = -π/2 - rotation_rad，使 12' 始终对应屏幕正上方方向 */}
+                      {Array.from({ length: 12 }).map((_, i) => {
+                        const startAngle = -Math.PI / 2 - (rotation * Math.PI / 180);
+                        const angle = startAngle + (i * (Math.PI / 6));
+                        const px = ellipseState.shape!.rx * Math.cos(angle);
+                        const py = ellipseState.shape!.ry * Math.sin(angle);
+                        return (
+                          <circle key={`clock-dot-${i}`} cx={px} cy={py} r={3 / scale} fill="#00ccff" />
+                        );
+                      })}
+
+                      {/* C. 控制手柄 (仅编辑模式) */}
+                      {ellipseState.mode === 'editing' && (
+                        <g>
+                          {/* 辅助框 */}
+                          <ellipse
+                            cx={0} cy={0}
+                            rx={ellipseState.shape.rx} ry={ellipseState.shape.ry}
+                            fill="none" stroke="#00ff00" strokeWidth={1 / scale} strokeDasharray="5 3"
+                          />
+                          {/* 旋转杆 */}
+                          <line
+                            x1={0} y1={-ellipseState.shape.ry}
+                            x2={0} y2={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
+                            stroke="#fff" strokeWidth={2 / scale}
+                          />
+                          {/* 旋转手柄 */}
+                          <circle
+                            cx={0} cy={-ellipseState.shape.ry - ROTATE_HANDLE_OFFSET}
+                            r={HANDLE_SIZE / scale}
+                            fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                          />
+
+                          {/* 缩放手柄 */}
+                          {[
+                            { x: ellipseState.shape.rx, y: 0 },
+                            { x: -ellipseState.shape.rx, y: 0 },
+                            { x: 0, y: ellipseState.shape.ry },
+                            { x: 0, y: -ellipseState.shape.ry }
+                          ].map((pt, idx) => (
+                            <rect
+                              key={`handle-${idx}`}
+                              x={pt.x - HANDLE_SIZE / scale}
+                              y={pt.y - HANDLE_SIZE / scale}
+                              width={HANDLE_SIZE * 2 / scale}
+                              height={HANDLE_SIZE * 2 / scale}
+                              fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                            />
+                          ))}
+                        </g>
+                      )}
+                    </g>
+
+                    {/* B-外部. 时钟标签（绝对坐标，附加抵消CSS旋转的transform使文字保持正向） */}
+                    {ellipseState.shape && (() => {
+                      const shape = ellipseState.shape;
+                      const R = shape.rotation;
+                      const cosR = Math.cos(R);
+                      const sinR = Math.sin(R);
+                      const normCSS = ((rotation % 360) + 360) % 360;
+
+                      const startAngleLbl = -Math.PI / 2 - (rotation * Math.PI / 180);
+                      return Array.from({ length: 12 }).map((_, i) => {
+                        const angle = startAngleLbl + (i * Math.PI / 6);
+                        const minRadius = Math.min(shape.rx, shape.ry);
+                        const labelOffset = Math.max(20, Math.min(40, minRadius * 0.15)) / scale;
+                        // 局部坐标（g坐标系内）
+                        const lx = (shape.rx + labelOffset) * Math.cos(angle);
+                        const ly = (shape.ry + labelOffset) * Math.sin(angle);
+                        // 转换到绝对SVG坐标
+                        const absTx = shape.cx + lx * cosR - ly * sinR;
+                        const absTy = shape.cy + lx * sinR + ly * cosR;
+                        // 抵消CSS旋转与翻转
+                        let tfm = '';
+                        if (normCSS !== 0) tfm += `rotate(${-normCSS}, ${absTx}, ${absTy}) `;
+                        if (flipH === -1) tfm += `translate(${2 * absTx}, 0) scale(-1, 1)`;
+                        const label = i === 0 ? "12'" : `${i}'`;
+                        return (
+                          <text
+                            key={`clock-label-${i}`}
+                            x={absTx} y={absTy}
+                            fill={(i % 3 === 0) ? "#ffcc00" : "#00ccff"}
+                            fontSize={16 / scale}
+                            fontWeight="bold"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            transform={tfm || undefined}
+                          >
+                            {label}
+                          </text>
+                        );
+                      });
+                    })()}
+                  </svg>
+                )}
+
+                {/* 6. 垂直成像绘制层 */}
+                {activeTool === 'positionSize' && positionSizeType === 'vertical' && verticalState.shape && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    <g>
+                      {/* A. 扁平椭圆本体 */}
+                      <ellipse
+                        cx={verticalState.shape.cx}
+                        cy={verticalState.shape.cy}
+                        rx={verticalState.shape.rx}
+                        ry={verticalState.shape.ry}
+                        fill="none"
+                        stroke={verticalState.mode === 'placing' ? '#00ccff' : 'rgba(255, 255, 255, 0.3)'}
+                        strokeWidth={verticalState.mode === 'placing' ? 2 / scale : 15 / scale}
+                        strokeDasharray={verticalState.mode === 'placing' ? '5 5' : 'none'}
+                      />
+
+                      {/* B. 垂直成像时钟刻度（重叠显示） */}
+                      {verticalState.mode === 'editing' && (() => {
+                        const s = verticalState.shape;
+                        const labelOffsetY = 25 / scale;
+
+                        // 5个位置：9', (8',10'), (12',6'), (2',4'), 3'
+                        const positions = [
+                          { x: s.cx - s.rx, labels: ["9'"], color: "#ffcc00" },                    // 最左：9'
+                          { x: s.cx - s.rx * 0.5, labels: ["8'", "10'"], color: "#ff6666" },       // 左中：8' 和 10' 重叠
+                          { x: s.cx, labels: ["12'", "6'"], color: "#ffcc00" },                    // 中间：12' 和 6' 重叠
+                          { x: s.cx + s.rx * 0.5, labels: ["2'", "4'"], color: "#ff6666" },        // 右中：2' 和 4' 重叠
+                          { x: s.cx + s.rx, labels: ["3'"], color: "#ffcc00" }                     // 最右：3'
+                        ];
+
+                        return positions.map((pos, idx) => (
+                          <g key={`vertical-clock-${idx}`}>
+                            {/* 刻度点 */}
+                            {pos.labels.length === 1 ? (
+                              // 单个点
+                              <circle cx={pos.x} cy={s.cy} r={3 / scale} fill={pos.color} />
+                            ) : (
+                              // 重叠的两个点（上下分开）
+                              <>
+                                <circle cx={pos.x} cy={s.cy - 5 / scale} r={3 / scale} fill={pos.color} />
+                                <circle cx={pos.x} cy={s.cy + 5 / scale} r={3 / scale} fill={pos.color} />
+                              </>
+                            )}
+
+                            {/* 标签文字 */}
+                            {pos.labels.map((label, labelIdx) => (
+                              <text
+                                key={`label-${labelIdx}`}
+                                x={pos.x}
+                                y={s.cy + (pos.labels.length === 1 ? -labelOffsetY : (labelIdx === 0 ? -labelOffsetY : labelOffsetY + 10 / scale))}
+                                fill={pos.color}
+                                fontSize={pos.labels.length === 1 ? 20 / scale : 16 / scale}
+                                fontWeight="bold"
+                                textAnchor="middle"
+                              >
+                                {label}
+                              </text>
+                            ))}
+
+                            {/* 重叠位置的连接线 */}
+                            {pos.labels.length > 1 && (
+                              <>
+                                <line
+                                  x1={pos.x} y1={s.cy - 5 / scale}
+                                  x2={pos.x} y2={s.cy - labelOffsetY + 5 / scale}
+                                  stroke={pos.color} strokeWidth={1 / scale}
+                                />
+                                <line
+                                  x1={pos.x} y1={s.cy + 5 / scale}
+                                  x2={pos.x} y2={s.cy + labelOffsetY - 5 / scale}
+                                  stroke={pos.color} strokeWidth={1 / scale}
+                                />
+                              </>
+                            )}
+                          </g>
+                        ));
+                      })()}
+
+                      {/* C. 控制手柄（仅编辑模式，只有左右两个） */}
+                      {verticalState.mode === 'editing' && (
+                        <g>
+                          {/* 辅助框 */}
+                          <ellipse
+                            cx={verticalState.shape.cx}
+                            cy={verticalState.shape.cy}
+                            rx={verticalState.shape.rx}
+                            ry={verticalState.shape.ry}
+                            fill="none" stroke="#00ff00" strokeWidth={1 / scale} strokeDasharray="5 3"
+                          />
+
+                          {/* 左右拉伸手柄 */}
+                          {[
+                            { x: verticalState.shape.cx - verticalState.shape.rx, y: verticalState.shape.cy },  // 9' 位置（左）
+                            { x: verticalState.shape.cx + verticalState.shape.rx, y: verticalState.shape.cy }   // 3' 位置（右）
+                          ].map((pt, idx) => (
+                            <rect
+                              key={`handle-${idx}`}
+                              x={pt.x - HANDLE_SIZE / scale}
+                              y={pt.y - HANDLE_SIZE / scale}
+                              width={HANDLE_SIZE * 2 / scale}
+                              height={HANDLE_SIZE * 2 / scale}
+                              fill="#fff" stroke="#000" strokeWidth={1 / scale}
+                            />
+                          ))}
+                        </g>
+                      )}
+                    </g>
+                  </svg>
+                )}
+
+                {/* 7. 定位标记成像绘制层（十字线） - 复用设置坐标原点的 tempOrigin */}
+                {activeTool === 'positionSize' && positionSizeType === 'positioning' && tempOrigin && (
+                  <svg
+                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 15 }}
+                  >
+                    {/* 十字线 */}
+                    <line
+                      x1={tempOrigin.x} y1={0}
+                      x2={tempOrigin.x} y2={imgSize.h}
+                      stroke="#f5222d" strokeWidth={1 / scale}
+                    />
+                    <line
+                      x1={0} y1={tempOrigin.y}
+                      x2={imgSize.w} y2={tempOrigin.y}
+                      stroke="#f5222d" strokeWidth={1 / scale}
+                    />
+                    {/* x 和 y 标签（抵消CSS旋转，保持文字正向显示） */}
+                    {(() => {
+                      const normCSS = ((rotation % 360) + 360) % 360;
+                      const lx1 = tempOrigin.x + 10 / scale, ly1 = tempOrigin.y - 6 / scale;
+                      const lx2 = tempOrigin.x + 6 / scale, ly2 = tempOrigin.y + 14 / scale;
+                      const makeTfm = (tx: number, ty: number) => {
+                        let t = '';
+                        if (normCSS !== 0) t += `rotate(${-normCSS}, ${tx}, ${ty}) `;
+                        if (flipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
+                        return t || undefined;
+                      };
+                      return (
+                        <>
+                          <text x={lx1} y={ly1} fill="#f5222d" fontSize={12 / scale}
+                            style={{ userSelect: 'none' }} transform={makeTfm(lx1, ly1)}>x</text>
+                          <text x={lx2} y={ly2} fill="#f5222d" fontSize={12 / scale}
+                            style={{ userSelect: 'none' }} transform={makeTfm(lx2, ly2)}>y</text>
+                        </>
+                      );
+                    })()}
+                  </svg>
+                )}
+
+                <GeometricMeasureTool
+                  visible={activeTool === 'measure'}
+                  imageUrl={previewUrl}
+                  width={imgSize.w}
+                  height={imgSize.h}
+                  pixelRatio={pixelRatio}
+                  hasCalibration={hasPixelCalibration}
+                  scale={scale}
+                  rotation={rotation}
+                  flipH={flipH}
+                  flipV={flipV}
+                  container={canvasContainer}
+                  imageRatioX={(originalSize.w > 0 && imgSize.w > 0) ? originalSize.w / imgSize.w : 1}
+                  imageRatioY={(originalSize.h > 0 && imgSize.h > 0) ? originalSize.h / imgSize.h : 1}
+                />
+              </div>
+            ) : (
+              <Empty description="请从左侧选择图片开始审核" />
+            )}
+
+            {/* 窗宽窗位 Slider 控制条 */}
+            {selectedFile && (
+              <div style={{
+                position: 'absolute', bottom: 0, left: 0, right: 0,
+                background: 'rgba(38, 38, 38, 0.85)', padding: '4px 24px',
+                display: 'flex', alignItems: 'center', gap: '32px',
+                borderTop: '1px solid #434343', height: '40px', zIndex: 100
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '68px' }}>{windowWidthLabel}</span>
+                  <Slider
+                    min={windowWidthMin}
+                    max={windowWidthMax}
+                    value={windowWidth}
+                    onChange={(val) => setManualWindowLevel(val, windowLevel)}
+                    disabled={isWindowControlPendingOriginal}
+                    style={{ flex: 1, margin: 0 }}
+                    trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
+                  />
+                </div>
+                <div style={{ width: 1, height: 16, background: '#595959' }}></div>
+                <div style={{ display: 'flex', alignItems: 'center', flex: 1, gap: '12px' }}>
+                  <span style={{ color: '#fff', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '68px' }}>{windowLevelLabel}</span>
+                  <Slider
+                    min={windowLevelMin}
+                    max={windowLevelMax}
+                    value={windowLevel}
+                    onChange={(val) => setManualWindowLevel(windowWidth, val)}
+                    disabled={isWindowControlPendingOriginal}
+                    style={{ flex: 1, margin: 0 }}
+                    trackStyle={{ backgroundColor: '#1890ff' }} handleStyle={{ borderColor: '#1890ff' }}
+                  />
+                </div>
+                <div style={{ color: isWindowControlPendingOriginal ? '#faad14' : '#8c8c8c', fontSize: '12px', marginLeft: '12px', whiteSpace: 'nowrap' }}>
+                  {windowControlHint}
+                </div>
+              </div>
+            )}
+
+            {selectedFile && (
+              <div
+                ref={floatingReviewPanelRef}
+                style={{
+                  position: 'absolute',
+                  left: floatingReviewPanelPosition?.x ?? 0,
+                  top: floatingReviewPanelPosition?.y ?? 0,
+                  visibility: floatingReviewPanelPosition ? 'visible' : 'hidden',
+                  width: isReviewPanelCollapsed ? 'min(220px, calc(100% - 32px))' : 'min(340px, calc(100% - 32px))',
+                  maxHeight: isReviewPanelCollapsed ? undefined : 'calc(100% - 32px)',
+                  background: 'rgba(255, 255, 255, 0.98)',
+                  border: '1px solid #e8e8e8',
+                  borderRadius: 12,
+                  boxShadow: isFloatingReviewPanelDragging ? '0 12px 28px rgba(0,0,0,0.22)' : '0 8px 24px rgba(0,0,0,0.16)',
+                  zIndex: 120,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  backdropFilter: 'blur(8px)',
+                  transition: 'width 0.2s ease, box-shadow 0.2s ease',
+                }}
+              >
+                <div
+                  onPointerDown={handleFloatingReviewPanelPointerDown}
+                  onPointerMove={handleFloatingReviewPanelPointerMove}
+                  onPointerUp={handleFloatingReviewPanelPointerUp}
+                  onPointerCancel={handleFloatingReviewPanelPointerCancel}
+                  onLostPointerCapture={handleFloatingReviewPanelLostCapture}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 14px',
+                    borderBottom: isReviewPanelCollapsed ? 'none' : '1px solid #f0f0f0',
+                    cursor: isFloatingReviewPanelDragging ? 'grabbing' : 'grab',
+                    userSelect: 'none',
+                    touchAction: 'none',
+                    background: 'linear-gradient(180deg, #ffffff 0%, #fafafa 100%)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Space size={8}>
+                    <DragOutlined style={{ color: '#8c8c8c' }} />
+                    <Text strong style={{ color: '#262626' }}>审核信息</Text>
+                  </Space>
+                  <Space size={4}>
+                    {!isReviewPanelCollapsed && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        拖动面板
+                      </Text>
+                    )}
+                    <Tooltip
+                      title={isReviewPanelCollapsed ? '展开审核信息' : '收起审核信息'}
+                      getPopupContainer={getEditorPopupContainer}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={isReviewPanelCollapsed ? <VerticalAlignBottomOutlined /> : <VerticalAlignTopOutlined />}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsReviewPanelCollapsed(prev => !prev);
+                        }}
+                        style={{ color: '#595959' }}
+                      />
+                    </Tooltip>
+                  </Space>
+                </div>
+                {!isReviewPanelCollapsed && (
+                  <>
+                    <div style={{ padding: '16px 14px 0', overflowY: 'auto', flex: 1, minHeight: 0 }}>
+                      {renderReviewInfoPanelContent()}
+                    </div>
+                    {renderReviewPanelFooter()}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 悬浮工具条 */}
+          {activeTool === 'defect' && (
+            <div style={{
+              position: 'absolute',
+              left: '32px',
+              top: '32px',
+              zIndex: 300
+            }}>
+              <DefectMarking
+                currentType={drawingType}
+                onTypeChange={setDrawingType}
+                onClose={() => setActiveTool('pan')}
+              />
+            </div>
+          )}
+
+          {/* 位置和尺寸工具条 */}
+          {activeTool === 'positionSize' && (
+            <div style={{
+              position: 'absolute',
+              left: '32px',
+              top: '32px',
+              zIndex: 300
+            }}>
+              <PositionAndSizeTool
+                currentType={positionSizeType}
+                onTypeChange={setPositionSizeType}
+                onClose={handlePositionSizeClose}
+              />
+            </div>
+          )}
+
+        </div>
+
+        {/* 底部状态条 */}
+        <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
+          {/* 显示图像尺寸和实时鼠标坐标 */}
+          图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
+        </div>
+      </Content >
   );
 };
 
@@ -4175,5 +5077,3 @@ const isSevere = (type: string) => {
   const severeKeywords = ['裂纹', '未熔合', '未焊透', 'crack', 'unfused', 'incomplete'];
   return severeKeywords.some(k => type.toLowerCase().includes(k));
 };
-
-export default ReportEditorPage;
