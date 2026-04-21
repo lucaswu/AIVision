@@ -131,6 +131,9 @@ interface DefectBase {
   size?: string;     // 缺陷尺寸
   quality?: string;  // 质量等级
   remark?: string;   // 备注
+  _positionMode?: 'auto' | 'manual';
+  _positionLinear?: string;
+  _positionClock?: string;
 }
 
 interface SavedRect extends DefectBase { x: number; y: number; w: number; h: number; }
@@ -484,6 +487,52 @@ function isAutoPosition(pos: string): boolean {
   return /^[^~\s]+->.+~/.test(pos) || /^\d+'-\d+'$/.test(pos);
 }
 
+function extractClockPosition(pos?: string): string {
+  if (!pos) return '';
+  const matches = pos.match(/\d+'-\d+'/g);
+  return matches && matches.length > 0 ? matches[matches.length - 1] : '';
+}
+
+function extractLinearPosition(pos?: string): string {
+  if (!pos) return '';
+  const clock = extractClockPosition(pos);
+  const withoutClock = clock ? pos.replace(/\d+'-\d+'/g, ' ') : pos;
+  const normalized = withoutClock.replace(/\s+/g, ' ').trim();
+  return normalized;
+}
+
+function parseStoredPosition(pos?: string): {
+  position: string;
+  linear: string;
+  clock: string;
+  mode: 'auto' | 'manual';
+} {
+  const normalized = (pos || '').trim();
+  if (!normalized) {
+    return { position: '', linear: '', clock: '', mode: 'auto' };
+  }
+  const linear = extractLinearPosition(normalized);
+  const clock = extractClockPosition(normalized);
+  const rebuilt = [linear, clock].filter(Boolean).join(' ').trim();
+  const linearLooksAuto = !linear || /^[^~\s]+->.+~.+(?:mm|px)$/.test(linear);
+  const withoutLinear = linear ? normalized.replace(linear, ' ') : normalized;
+  const residue = withoutLinear
+    .replace(/\d+'-\d+'/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const mode = linearLooksAuto && residue === '' ? 'auto' : 'manual';
+  return {
+    position: rebuilt || normalized,
+    linear,
+    clock,
+    mode,
+  };
+}
+
+function buildDefectPosition(linear: string, clock: string): string {
+  return [linear.trim(), clock.trim()].filter(Boolean).join(' ').trim();
+}
+
 /**
  * 根据缺陷中心点和椭圆参数，计算缺陷在时钟位置系统中所处的区间。
  * 时钟定义：12'在顶部（-π/2），顺时针方向，共12个等分区间。
@@ -505,6 +554,15 @@ function getClockPositionLabel(
   const sectorIdx = Math.floor(shifted / (2 * Math.PI / 12)) % 12;
   const nextIdx = (sectorIdx + 1) % 12;
   return `${CLOCK_LABELS[sectorIdx]}-${CLOCK_LABELS[nextIdx]}`;
+}
+
+function getClockPositionLabelForShape(
+  ax: number, ay: number,
+  shape: EllipseShape
+): string {
+  if (shape.rx <= 0 || shape.ry <= 0) return '';
+  const local = rotateVector(ax - shape.cx, ay - shape.cy, -shape.rotation);
+  return getClockPositionLabel(local.x, local.y, 0, 0, shape.rx, shape.ry);
 }
 
 /**
@@ -950,6 +1008,169 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     }
   };
 
+  const buildLiveWeldShapesFromShape = (shape: EllipseShape): WeldLocationRect[] => {
+    if (!selectedFile) return [];
+    const corrRotation = selectedFile.CorrectionRotation ?? 0;
+    const corrFlipH = selectedFile.CorrectionFlip ? -1 : 1;
+    const rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+    const rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+    const wR = (rawW > 0 && imgSize.w > 0) ? rawW / imgSize.w : 1;
+    const hR = (rawH > 0 && imgSize.h > 0) ? rawH / imgSize.h : 1;
+    const cosR = Math.cos(shape.rotation);
+    const sinR = Math.sin(shape.rotation);
+    const keypoints = Array.from({ length: 12 }, (_, i) => {
+      const angle = -Math.PI / 2 + (i * Math.PI / 6);
+      const lx = shape.rx * Math.cos(angle);
+      const ly = shape.ry * Math.sin(angle);
+      const kxDisp = shape.cx + lx * cosR - ly * sinR;
+      const kyDisp = shape.cy + lx * sinR + ly * cosR;
+      return forwardTransformPoint(kxDisp * wR, kyDisp * hR, rawW, rawH, corrRotation, corrFlipH);
+    });
+    const xs = keypoints.map(k => k.x);
+    const ys = keypoints.map(k => k.y);
+    return [{
+      x1: Math.min(...xs),
+      y1: Math.min(...ys),
+      x2: Math.max(...xs),
+      y2: Math.max(...ys),
+      keypoints,
+    }];
+  };
+
+  const recalculateDisplayedDefectMetrics = (
+    overrideWeldShapes?: WeldLocationRect[],
+    overrideDisplayShape?: EllipseShape | null
+  ) => {
+    const isEllipseToolActive = activeTool === 'positionSize' && (positionSizeType === 'elliptical' || positionSizeType === 'vertical');
+    const effectiveWeldShapes = overrideWeldShapes ?? (isEllipseToolActive ? liveEllipseWeldShapes : weldLocationShapes);
+    const activeDisplayShape = overrideDisplayShape ?? (
+      activeTool === 'positionSize' && positionSizeType === 'elliptical' && ellipseState.mode === 'editing' && ellipseState.shape
+        ? ellipseState.shape
+        : activeTool === 'positionSize' && positionSizeType === 'vertical' && verticalState.mode === 'editing' && verticalState.shape
+          ? verticalState.shape
+          : null
+    );
+    const isEllipseActive = effectiveWeldShapes.length > 0 || isEllipseToolActive;
+    const effectiveOrigin = isEllipseActive ? null : (originPoint || defectOriginPoint);
+    const effectiveOriginLabel = originPoint
+      ? '+'
+      : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
+    const calibrated = pixelRatio > 0;
+    let changed = false;
+
+    const correctedToDisplayPoint = (x: number, y: number): { x: number; y: number } => {
+      const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+      const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+      const normR = ((corrRotation % 360) + 360) % 360;
+      const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+      const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+      let px = x;
+      let py = y;
+      if ((corrRotation !== 0 || corrFlipH === -1) && rimgW > 0 && rimgH > 0) {
+        ({ x: px, y: py } = inverseTransformPoint(px, py, rimgW, rimgH, corrRotation, corrFlipH));
+      }
+      return {
+        x: widthRatio > 0 ? px / widthRatio : px,
+        y: heightRatio > 0 ? py / heightRatio : py,
+      };
+    };
+
+    const getClockStr = (centerX: number, centerY: number): string => {
+      if (activeDisplayShape) {
+        const displayCenter = correctedToDisplayPoint(centerX, centerY);
+        return getClockPositionLabelForShape(displayCenter.x, displayCenter.y, activeDisplayShape);
+      }
+      if (effectiveWeldShapes.length === 0) return '';
+      const ellipse = getNearestEllipseParams(effectiveWeldShapes, centerX, centerY);
+      if (!ellipse) return '';
+      return getClockPositionLabel(centerX, centerY, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
+    };
+
+    const buildPos = (xPosStr: string, clockStr: string): string =>
+      buildDefectPosition(xPosStr, clockStr);
+
+    const newRects = defectRects.map(dr => {
+      let updated: SavedRect = { ...dr };
+      if (calibrated && (!dr.size || dr.size.endsWith('px²')) && dr.w && dr.h) {
+        const areaPx = dr.w * dr.h;
+        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        changed = true;
+      }
+      if ((dr._positionMode ?? 'auto') === 'auto') {
+        const xPos = effectiveOrigin
+          ? formatDefectPosition(dr.x, dr.x + dr.w, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+          : '';
+        const clock = getClockStr(dr.x + dr.w / 2, dr.y + dr.h / 2);
+        const newPos = buildPos(xPos, clock);
+        if (newPos !== dr.position) {
+          updated = { ...updated, position: newPos, _positionLinear: xPos, _positionClock: clock, _positionMode: 'auto' };
+          changed = true;
+        }
+      }
+      return updated;
+    });
+
+    const newCircles = defectCircles.map(dc => {
+      let updated: SavedCircle = { ...dc };
+      if (calibrated && (!dc.size || dc.size.endsWith('px²')) && dc.r) {
+        const areaPx = Math.PI * dc.r * dc.r;
+        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        changed = true;
+      }
+      if ((dc._positionMode ?? 'auto') === 'auto') {
+        const xPos = effectiveOrigin
+          ? formatDefectPosition(dc.x - dc.r, dc.x + dc.r, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+          : '';
+        const clock = getClockStr(dc.x, dc.y);
+        const newPos = buildPos(xPos, clock);
+        if (newPos !== dc.position) {
+          updated = { ...updated, position: newPos, _positionLinear: xPos, _positionClock: clock, _positionMode: 'auto' };
+          changed = true;
+        }
+      }
+      return updated;
+    });
+
+    const newPolys = defectPolygons.map(dp => {
+      let updated: SavedPolygon = { ...dp };
+      if (calibrated && (!dp.size || dp.size.endsWith('px²')) && dp.points && dp.points.length >= 3) {
+        let areaPx = 0;
+        const pts = dp.points;
+        for (let i = 0; i < pts.length; i++) {
+          const p1 = pts[i];
+          const p2 = pts[(i + 1) % pts.length];
+          areaPx += (p1.x * p2.y - p2.x * p1.y);
+        }
+        areaPx = Math.abs(areaPx) / 2;
+        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
+        changed = true;
+      }
+      if (dp.points && dp.points.length >= 1 && (dp._positionMode ?? 'auto') === 'auto') {
+        const xs = dp.points.map((p: { x: number; y: number }) => p.x);
+        const ys = dp.points.map((p: { x: number; y: number }) => p.y);
+        const xPos = effectiveOrigin
+          ? formatDefectPosition(Math.min(...xs), Math.max(...xs), effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
+          : '';
+        const clock = getClockStr(
+          (Math.min(...xs) + Math.max(...xs)) / 2,
+          (Math.min(...ys) + Math.max(...ys)) / 2
+        );
+        const newPos = buildPos(xPos, clock);
+        if (newPos !== dp.position) {
+          updated = { ...updated, position: newPos, _positionLinear: xPos, _positionClock: clock, _positionMode: 'auto' };
+          changed = true;
+        }
+      }
+      return updated;
+    });
+
+    if (changed) {
+      setDefectRects(newRects);
+      setDefectCircles(newCircles);
+      setDefectPolygons(newPolys);
+    }
+  };
+
   const hasPixelCalibration = pixelRatio > 0;
 
   // 1. 获取报告详情
@@ -1082,9 +1303,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const normR = ((rotation % 360) + 360) % 360;
       const initRx = (normR === 90 || normR === 270) ? 60 : 120;
       const initRy = (normR === 90 || normR === 270) ? 120 : 60;
+      const initCx = imgSize.w > 0 ? imgSize.w / 2 : 0;
+      const initCy = imgSize.h > 0 ? imgSize.h / 2 : 0;
       setEllipseState({
         mode: 'placing',
-        shape: { cx: 0, cy: 0, rx: initRx, ry: initRy, rotation: 0 },
+        shape: { cx: initCx, cy: initCy, rx: initRx, ry: initRy, rotation: 0 },
         drag: {
           active: false,
           type: null,
@@ -1108,9 +1331,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setTempOrigin(null);
       positionSizeOriginDirtyRef.current = false;
 
+      const vInitCx = imgSize.w > 0 ? imgSize.w / 2 : 0;
+      const vInitCy = imgSize.h > 0 ? imgSize.h / 2 : 0;
       setVerticalState({
         mode: 'placing',
-        shape: { cx: 0, cy: 0, rx: 180, ry: 15, rotation: 0 },  // ry 固定为 15，非常扁平
+        shape: { cx: vInitCx, cy: vInitCy, rx: 180, ry: 15, rotation: 0 },  // ry 固定为 15，非常扁平
         drag: {
           active: false,
           type: null,
@@ -1555,6 +1780,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           shape: newShape
         });
         positionSizeEllipseDirtyRef.current = true;
+        setWeldLocationShapes([]); // 手动椭圆接管，清除 AI 椭圆
+        saveShapeAsWeldLocation(newShape); // 立即持久化
         message.success("已固定。可拖拽调整或重新放置");
         return;
       }
@@ -1604,6 +1831,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           mode: 'editing',
           shape: newShape
         });
+        positionSizeEllipseDirtyRef.current = true;
+        setWeldLocationShapes([]); // 手动垂直成像接管，清除 AI 椭圆
+        saveShapeAsWeldLocation(newShape); // 立即持久化
         message.success("垂直成像已固定。可拖拽平移或左右拉伸");
         return;
       }
@@ -1737,6 +1967,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           else if (drag.type === 'resize-t') newShape.ry = Math.max(10, startS.ry - localDelta.y);
         }
         setEllipseState(prev => ({ ...prev, shape: newShape }));
+        recalculateDisplayedDefectMetrics(buildLiveWeldShapesFromShape(newShape), newShape);
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
@@ -1771,6 +2002,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           newShape.rotation = 0;
         }
         setVerticalState(prev => ({ ...prev, shape: newShape }));
+        recalculateDisplayedDefectMetrics(buildLiveWeldShapesFromShape(newShape), newShape);
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'positioning' && isSettingPositioning) {
@@ -1836,19 +2068,23 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'elliptical') {
-      if (ellipseState.drag.active) {
+      if (ellipseState.drag.active && ellipseState.shape) {
         setEllipseState(prev => ({
           ...prev,
           drag: { ...prev.drag, active: false }
         }));
+        // 拖动结束后立即持久化最新椭圆形状
+        saveShapeAsWeldLocation(ellipseState.shape);
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
-      if (verticalState.drag.active) {
+      if (verticalState.drag.active && verticalState.shape) {
         setVerticalState(prev => ({
           ...prev,
           drag: { ...prev.drag, active: false }
         }));
+        // 拖动结束后立即持久化最新垂直成像形状
+        saveShapeAsWeldLocation(verticalState.shape);
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'positioning' && isSettingPositioning && tempOrigin) {
@@ -1864,6 +2100,21 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       positionSizeOriginDirtyRef.current = true;
       message.success(`定位标记已设置（坐标原点）: (${corrCoords.x}, ${corrCoords.y})`);
       setTempOrigin(null);
+      // 立即持久化原点到数据库
+      if (selectedFile) {
+        const defectPositionData = {
+          detected: true,
+          positioning_type: 0,
+          origin_x: corrCoords.x,
+          origin_y: corrCoords.y,
+          origin_text: null,
+          detections: []
+        };
+        const defectPositionStr = JSON.stringify(defectPositionData);
+        reportAPI.updateFileLocation(selectedFile.TaskFileId, { DefectPosition: defectPositionStr })
+          .catch(() => message.error('坐标原点保存失败'));
+        selectedFile.DefectPosition = defectPositionStr;
+      }
       // 不切换工具，允许用户继续调整定位标记
     }
     else if (activeTool === 'setOrigin' && isSettingOrigin && tempOrigin) {
@@ -1879,6 +2130,21 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       message.success(`坐标原点已设置: (${corrCoords.x}, ${corrCoords.y})`);
       setTempOrigin(null);
       setActiveTool('pan');
+      // 持久化原点到数据库
+      if (selectedFile) {
+        const defectPositionData = {
+          detected: true,
+          positioning_type: 0,
+          origin_x: corrCoords.x,
+          origin_y: corrCoords.y,
+          origin_text: null,
+          detections: []
+        };
+        const defectPositionStr = JSON.stringify(defectPositionData);
+        reportAPI.updateFileLocation(selectedFile.TaskFileId, { DefectPosition: defectPositionStr })
+          .catch(() => message.error('坐标原点保存失败'));
+        selectedFile.DefectPosition = defectPositionStr;
+      }
     }
     else if (activeTool === 'calibrate' && isCalibrating && calibrateLine) {
       setIsCalibrating(false);
@@ -1968,7 +2234,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setCalibratePromptModalVisible(false);
     setRecalibratePromptModalVisible(false);
     setCalibrateModalVisible(false);
-    setMeasureAfterCalibrate(false);
     setActualLength(null);
     setMeasuredPixelDistance(0);
     setCalibrateLine(null);
@@ -2009,6 +2274,41 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     startCalibration();
   };
 
+  // --- 将当前椭圆/垂直成像 shape 持久化到 DB（可在放置确认、拖动结束、关闭时调用）---
+  const saveShapeAsWeldLocation = (shape: EllipseShape) => {
+    if (!selectedFile) return;
+    const corrRotation = selectedFile.CorrectionRotation ?? 0;
+    const corrFlipH = selectedFile.CorrectionFlip ? -1 : 1;
+    const rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+    const rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+    const wR = (rawW > 0 && imgSize.w > 0) ? rawW / imgSize.w : 1;
+    const hR = (rawH > 0 && imgSize.h > 0) ? rawH / imgSize.h : 1;
+    const cosR = Math.cos(shape.rotation);
+    const sinR = Math.sin(shape.rotation);
+    const keypoints = Array.from({ length: 12 }, (_, i) => {
+      const angle = -Math.PI / 2 + (i * Math.PI / 6);
+      const lx = shape.rx * Math.cos(angle);
+      const ly = shape.ry * Math.sin(angle);
+      const kxDisp = shape.cx + lx * cosR - ly * sinR;
+      const kyDisp = shape.cy + lx * sinR + ly * cosR;
+      const { x, y } = forwardTransformPoint(kxDisp * wR, kyDisp * hR, rawW, rawH, corrRotation, corrFlipH);
+      return { id: i + 1, x, y };
+    });
+    const xs = keypoints.map(k => k.x);
+    const ys = keypoints.map(k => k.y);
+    const bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    const weldLocationData = [{ class: 'ellipse', confidence: 1.0, bbox, keypoints }];
+    const weldLocationStr = JSON.stringify(weldLocationData);
+    reportAPI.updateFileLocation(selectedFile.TaskFileId, { WeldLocation: weldLocationStr })
+      .catch(() => message.error('椭圆位置保存失败'));
+    selectedFile.WeldLocation = weldLocationStr;
+    // 同步更新本地 weldLocationShapes（关闭工具后仍可显示保存的椭圆）
+    setWeldLocationShapes([{
+      x1: bbox[0], y1: bbox[1], x2: bbox[2], y2: bbox[3],
+      keypoints: keypoints.map(k => ({ x: k.x, y: k.y }))
+    }]);
+  };
+
   // --- 位置和尺寸工具关闭：将手动标注的椭圆/原点保存到 DB 并更新本地状态 ---
   const handlePositionSizeClose = () => {
     setActiveTool('pan');
@@ -2023,9 +2323,15 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
     const payload: { WeldLocation?: string; DefectPosition?: string } = {};
 
-    // --- 提交手动椭圆 ---
-    if (positionSizeEllipseDirtyRef.current && ellipseState.shape && ellipseState.mode === 'editing') {
-      const shape = ellipseState.shape;
+    // --- 提交手动椭圆 / 垂直成像 ---
+    const activeShape =
+      (positionSizeEllipseDirtyRef.current && ellipseState.shape && ellipseState.mode === 'editing')
+        ? ellipseState.shape
+        : (positionSizeEllipseDirtyRef.current && verticalState.shape && verticalState.mode === 'editing')
+          ? verticalState.shape
+          : null;
+    if (activeShape) {
+      const shape = activeShape;
       const cosR = Math.cos(shape.rotation);
       const sinR = Math.sin(shape.rotation);
       // 生成 12 个时钟关键点（椭圆局部坐标 → display → raw → corrected）
@@ -2173,7 +2479,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const newRect: SavedRect = {
         ...pendingShape,
         x: rx1, y: ry1, w: trueW, h: trueH,
-        label, color, ...defaultExtra, size: sizeStr, position: rectFinalPos
+        label, color, ...defaultExtra, size: sizeStr, position: rectFinalPos,
+        _positionMode: 'auto', _positionLinear: posStr, _positionClock: rectClockPos
       };
       updateAllDefects([...defectRects, newRect], defectPolygons, defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'polygon') {
@@ -2226,7 +2533,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
       const newPoly: SavedPolygon = {
         points: newPoints,
-        label, color, ...defaultExtra, size: sizeStr, position: polyFinalPos
+        label, color, ...defaultExtra, size: sizeStr, position: polyFinalPos,
+        _positionMode: 'auto', _positionLinear: polyPosStr, _positionClock: polyClockPos
       };
       updateAllDefects(defectRects, [...defectPolygons, newPoly], defectCircles, true, pixelRatio);
     } else if (pendingShapeType === 'circle') {
@@ -2265,7 +2573,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         ...pendingShape,
         x: cx, y: cy,
         r: trueR,
-        label, color, ...defaultExtra, size: sizeStr, position: circleFinalPos
+        label, color, ...defaultExtra, size: sizeStr, position: circleFinalPos,
+        _positionMode: 'auto', _positionLinear: circlePosStr, _positionClock: circleClockPos
       };
       updateAllDefects(defectRects, defectPolygons, [...defectCircles, newCircle], true, pixelRatio);
     }
@@ -2333,11 +2642,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setDefectRects([]);
       setDefectCircles([]);
       setDefectPolygons([]);
-
-      // 切换图片时，定标和测量都回到初始化状态
-      if (activeTool === 'measure' || activeTool === 'calibrate') {
-        setActiveTool('pan');
-      }
 
       // 从后端加载缺陷记录
       defectRecordAPI.getByTaskFileId(selectedFile.TaskFileId).then(resp => {
@@ -2426,20 +2730,22 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
               // 计算位置字符串（基于0点的X轴有符号距离）
               // 只有当现有 position 为空或已是自动格式（+->...）时才覆盖，手动填写的位置保留
-              let posStr = dr.Position || '';
-              if (loadTimeOrigin && (!posStr || isAutoPosition(posStr))) {
+              const parsedPosition = parseStoredPosition(dr.Position || '');
+              let linearPos = parsedPosition.linear;
+              let clockPos = parsedPosition.clock;
+              if (loadTimeOrigin && parsedPosition.mode === 'auto') {
                 if (geometry?.type === 'rect' && geometry.w != null) {
-                  posStr = formatDefectPosition(geometry.x, geometry.x + geometry.w, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                  linearPos = formatDefectPosition(geometry.x, geometry.x + geometry.w, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
                 } else if (geometry?.type === 'circle' && geometry.r != null) {
-                  posStr = formatDefectPosition(geometry.x - geometry.r, geometry.x + geometry.r, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                  linearPos = formatDefectPosition(geometry.x - geometry.r, geometry.x + geometry.r, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
                 } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 1) {
                   const xs = geometry.points.map((p: { x: number }) => p.x);
-                  posStr = formatDefectPosition(Math.min(...xs), Math.max(...xs), loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
+                  linearPos = formatDefectPosition(Math.min(...xs), Math.max(...xs), loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
                 }
               }
 
-              // 追加椭圆时钟位置（大口径管，仅当 posStr 为空或自动格式时才计算）
-              if (loadTimeWeldShapes.length > 0 && (!posStr || isAutoPosition(posStr))) {
+              // 重算椭圆时钟位置（大口径管），自动位置始终替换，不在旧字符串上追加
+              if (loadTimeWeldShapes.length > 0 && parsedPosition.mode === 'auto') {
                 let defCx: number | null = null, defCy: number | null = null;
                 if (geometry?.type === 'rect' && geometry.w != null) {
                   defCx = geometry.x + geometry.w / 2;
@@ -2455,16 +2761,21 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 if (defCx !== null && defCy !== null) {
                   const ellipse = getNearestEllipseParams(loadTimeWeldShapes, defCx, defCy);
                   if (ellipse) {
-                    const clockPos = getClockPositionLabel(defCx, defCy, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
-                    if (clockPos) posStr = [posStr, clockPos].filter(Boolean).join(' ');
+                    clockPos = getClockPositionLabel(defCx, defCy, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
                   }
                 }
               }
+              const posStr = parsedPosition.mode === 'auto'
+                ? buildDefectPosition(linearPos, clockPos)
+                : parsedPosition.position;
 
               const baseInfo = {
                 label: dr.DefectName || '未知',
                 color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
                 position: posStr,
+                _positionMode: parsedPosition.mode,
+                _positionLinear: parsedPosition.mode === 'auto' ? linearPos : parsedPosition.linear,
+                _positionClock: parsedPosition.mode === 'auto' ? clockPos : parsedPosition.clock,
                 size: sizeStr,
                 quality: dr.Grade || '',
                 remark: dr.Remark || '',
@@ -2595,14 +2906,14 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       resetImageReady();
 
       autoFitFileIdRef.current = null; // 重置，允许新图片触发自动适配
-      resetWindow();
+      resetWindow(); // 每张图片恢复各自的默认窗位窗宽
       setScale(1);
       setPixelRatio(0); // 每次切换图片，重置物理尺寸定标比例
       // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
       setRotation(selectedFile.CorrectionRotation ?? 0);
       setFlipH(selectedFile.CorrectionFlip ? -1 : 1);
       setFlipV(1);
-      setIsNegative(true);
+      // 注意：不重置 isNegative（负片状态在切换图片时保留）
       setPosition({ x: 0, y: 0 });
       setCalibratePromptModalVisible(false);
       setRecalibratePromptModalVisible(false);
@@ -2619,6 +2930,24 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setOcrTargetField(null); // 切换文件时退出OCR模式
       setOcrDrawRect(null);
       setOcrDrawStart(null);
+      // 重置工具状态
+      setActiveTool('pan');
+      setIsSettingOrigin(false);
+      setIsSettingPositioning(false);
+      setPositionSizeType(null);
+      positionSizeEllipseDirtyRef.current = false;
+      positionSizeOriginDirtyRef.current = false;
+      setEllipseState({ mode: 'idle', shape: null, drag: { active: false, type: null, startMouse: { x: 0, y: 0 }, startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 } }, isVisible: false });
+      setVerticalState({ mode: 'idle', shape: null, drag: { active: false, type: null, startMouse: { x: 0, y: 0 }, startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 } }, isVisible: false });
+      setIsDrawingDefect(false);
+      setDefectStartPoint(null);
+      setCurrentDefectRect(null);
+      setCurrentDefectCircle(null);
+      setPendingShape(null);
+      setLabelModalVisible(false);
+      setSelectedLabelCode(null);
+      setHoveredDefectKey(null);
+      setExpandedDefects(new Set());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFile?.TaskFileId]);
@@ -2630,105 +2959,45 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defectRects, defectPolygons, defectCircles, pixelRatio]);
 
+  // --- 将手动绘制中的椭圆/垂直成像实时转换为矫正坐标系下的 WeldLocationRect，
+  //     供位置重计算 effect 使用（避免等到关闭工具才更新）---
+  const liveEllipseWeldShapes = useMemo((): WeldLocationRect[] => {
+    const isEllipseEditing = activeTool === 'positionSize' && positionSizeType === 'elliptical'
+      && ellipseState.mode === 'editing' && ellipseState.shape != null;
+    const isVerticalEditing = activeTool === 'positionSize' && positionSizeType === 'vertical'
+      && verticalState.mode === 'editing' && verticalState.shape != null;
+    if (!isEllipseEditing && !isVerticalEditing) return [];
+    const shape = isEllipseEditing ? ellipseState.shape! : verticalState.shape!;
+    const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+    const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+    const rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+    const rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+    const wR = (rawW > 0 && imgSize.w > 0) ? rawW / imgSize.w : 1;
+    const hR = (rawH > 0 && imgSize.h > 0) ? rawH / imgSize.h : 1;
+    const cosR = Math.cos(shape.rotation);
+    const sinR = Math.sin(shape.rotation);
+    const keypoints = Array.from({ length: 12 }, (_, i) => {
+      const angle = -Math.PI / 2 + (i * Math.PI / 6);
+      const lx = shape.rx * Math.cos(angle);
+      const ly = shape.ry * Math.sin(angle);
+      const kxDisp = shape.cx + lx * cosR - ly * sinR;
+      const kyDisp = shape.cy + lx * sinR + ly * cosR;
+      return forwardTransformPoint(kxDisp * wR, kyDisp * hR, rawW, rawH, corrRotation, corrFlipH);
+    });
+    const xs = keypoints.map(k => k.x);
+    const ys = keypoints.map(k => k.y);
+    return [{ x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys), keypoints }];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool, positionSizeType, ellipseState.mode, ellipseState.shape, verticalState.mode, verticalState.shape,
+      selectedFile?.CorrectionRotation, selectedFile?.CorrectionFlip, rawImageWidth, rawImageHeight,
+      originalSize.w, originalSize.h, imgSize.w, imgSize.h]);
+
   // --- 监听 pixelRatio / originPoint / defectOriginPoint 变化，
   //     重新计算所有缺陷的尺寸（mm/px²）和位置（+->X~Ypx/mm）---
   useEffect(() => {
-    // location_0 和 location_1 互斥：若已有 location_0 椭圆关键点，则不使用 location_1 的原点
-    const isEllipseActive = weldLocationShapes.length > 0 || (activeTool === 'positionSize' && (positionSizeType === 'elliptical' || positionSizeType === 'vertical'));
-    const effectiveOrigin = isEllipseActive ? null : (originPoint || defectOriginPoint);
-    const effectiveOriginLabel = originPoint
-      ? '+'
-      : (defectOriginMeta?.positioningType === 1 && defectOriginMeta.originText ? defectOriginMeta.originText : '+');
-    const calibrated = hasPixelCalibration;
-    let changed = false;
-
-    // 辅助：从 weldLocationShapes 取最近椭圆时钟位置
-    const getClockStr = (centerX: number, centerY: number): string => {
-      if (weldLocationShapes.length === 0) return '';
-      const ellipse = getNearestEllipseParams(weldLocationShapes, centerX, centerY);
-      if (!ellipse) return '';
-      return getClockPositionLabel(centerX, centerY, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
-    };
-    // 辅助：合并 X 轴位置串和时钟串
-    const buildPos = (xPosStr: string, clockStr: string): string =>
-      [xPosStr, clockStr].filter(Boolean).join(' ');
-
-    const newRects = defectRects.map(dr => {
-      let updated: SavedRect = { ...dr };
-      // 重新计算尺寸
-      if (calibrated && (!dr.size || dr.size.endsWith('px²')) && dr.w && dr.h) {
-        const areaPx = dr.w * dr.h;
-        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
-        changed = true;
-      }
-      // 重新计算位置（位置为空或自动格式时更新；同时计算 X 轴偏移和时钟位置）
-      if (!dr.position || isAutoPosition(dr.position)) {
-        const xPos = effectiveOrigin
-          ? formatDefectPosition(dr.x, dr.x + dr.w, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-          : '';
-        const clock = getClockStr(dr.x + dr.w / 2, dr.y + dr.h / 2);
-        const newPos = buildPos(xPos, clock);
-        if (newPos !== dr.position) { updated = { ...updated, position: newPos }; changed = true; }
-      }
-      return updated;
-    });
-
-    const newCircles = defectCircles.map(dc => {
-      let updated: SavedCircle = { ...dc };
-      if (calibrated && (!dc.size || dc.size.endsWith('px²')) && dc.r) {
-        const areaPx = Math.PI * dc.r * dc.r;
-        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
-        changed = true;
-      }
-      if (!dc.position || isAutoPosition(dc.position)) {
-        const xPos = effectiveOrigin
-          ? formatDefectPosition(dc.x - dc.r, dc.x + dc.r, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-          : '';
-        const clock = getClockStr(dc.x, dc.y);
-        const newPos = buildPos(xPos, clock);
-        if (newPos !== dc.position) { updated = { ...updated, position: newPos }; changed = true; }
-      }
-      return updated;
-    });
-
-    const newPolys = defectPolygons.map(dp => {
-      let updated: SavedPolygon = { ...dp };
-      if (calibrated && (!dp.size || dp.size.endsWith('px²')) && dp.points && dp.points.length >= 3) {
-        let areaPx = 0;
-        const pts = dp.points;
-        for (let i = 0; i < pts.length; i++) {
-          const p1 = pts[i];
-          const p2 = pts[(i + 1) % pts.length];
-          areaPx += (p1.x * p2.y - p2.x * p1.y);
-        }
-        areaPx = Math.abs(areaPx) / 2;
-        updated = { ...updated, size: `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²` };
-        changed = true;
-      }
-      if (dp.points && dp.points.length >= 1 && (!dp.position || isAutoPosition(dp.position))) {
-        const xs = dp.points.map((p: { x: number; y: number }) => p.x);
-        const ys = dp.points.map((p: { x: number; y: number }) => p.y);
-        const xPos = effectiveOrigin
-          ? formatDefectPosition(Math.min(...xs), Math.max(...xs), effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-          : '';
-        const clock = getClockStr(
-          (Math.min(...xs) + Math.max(...xs)) / 2,
-          (Math.min(...ys) + Math.max(...ys)) / 2
-        );
-        const newPos = buildPos(xPos, clock);
-        if (newPos !== dp.position) { updated = { ...updated, position: newPos }; changed = true; }
-      }
-      return updated;
-    });
-
-    if (changed) {
-      setDefectRects(newRects);
-      setDefectCircles(newCircles);
-      setDefectPolygons(newPolys);
-      // 不触发 updateHistoryState，因为这只是补充显示信息，不算用户编辑
-    }
+    recalculateDisplayedDefectMetrics();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes, activeTool, positionSizeType]);
+  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes, activeTool, positionSizeType, liveEllipseWeldShapes]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -2833,6 +3102,21 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       } else {
         // 如果没有缺陷，删除该文件的所有缺陷记录
         await defectRecordAPI.deleteByTaskFileId(selectedFile.TaskFileId);
+      }
+
+      // 3. 保存坐标原点（如手动设置过）
+      if (originPoint) {
+        const defectPositionData = {
+          detected: true,
+          positioning_type: 0,
+          origin_x: originPoint.x,
+          origin_y: originPoint.y,
+          origin_text: null,
+          detections: []
+        };
+        const defectPositionStr = JSON.stringify(defectPositionData);
+        await reportAPI.updateFileLocation(selectedFile.TaskFileId, { DefectPosition: defectPositionStr });
+        selectedFile.DefectPosition = defectPositionStr;
       }
 
       message.success("保存并确认成功");
@@ -2975,8 +3259,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const _rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
       return forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
     }
-    // originPoint 已存储为矫正后坐标系，直接显示
-    return originPoint || { x: 0, y: 0 };
+    // originPoint 已存储为矫正后坐标系，直接显示；fallback 到 AI 检测原点
+    return originPoint || defectOriginPoint || { x: 0, y: 0 };
   }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize, selectedFile, rawImageWidth, rawImageHeight]);
 
   // --- 更新缺陷信息的辅助函数 ---
@@ -2996,7 +3280,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         }
       }
       (newArr[index] as any)[field] = value;
-      (newArr[index] as any)[field] = value;
+      if (field === 'position') {
+        const parsed = parseStoredPosition(String(value || ''));
+        newArr[index]._positionMode = 'manual';
+        newArr[index]._positionLinear = parsed.linear;
+        newArr[index]._positionClock = parsed.clock;
+      }
       // 调用统一更新函数（包含历史记录）
       updateAllDefects(newArr, defectPolygons, defectCircles, true);
     } else if (type === 'polygon') {
@@ -3006,6 +3295,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         if (match) newArr[index].color = match.color;
       }
       (newArr[index] as any)[field] = value;
+      if (field === 'position') {
+        const parsed = parseStoredPosition(String(value || ''));
+        newArr[index]._positionMode = 'manual';
+        newArr[index]._positionLinear = parsed.linear;
+        newArr[index]._positionClock = parsed.clock;
+      }
       // 调用统一更新函数
       updateAllDefects(defectRects, newArr, defectCircles, true);
     } else if (type === 'circle') {
@@ -3015,6 +3310,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         if (match) newArr[index].color = match.color;
       }
       (newArr[index] as any)[field] = value;
+      if (field === 'position') {
+        const parsed = parseStoredPosition(String(value || ''));
+        newArr[index]._positionMode = 'manual';
+        newArr[index]._positionLinear = parsed.linear;
+        newArr[index]._positionClock = parsed.clock;
+      }
       // 调用统一更新函数
       updateAllDefects(defectRects, defectPolygons, newArr, true);
     }
@@ -3901,7 +4202,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
               <div style={{ textAlign: 'left', lineHeight: 1.1 }}>
                 <div>原点:</div>
                 <div style={{ color: '#fff' }}>
-                  ({displayOrigin.x}, {displayOrigin.y})
+                  ({Math.round(displayOrigin.x)}, {Math.round(displayOrigin.y)})
                 </div>
               </div>
             </div>
@@ -4313,9 +4614,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         rw = Math.abs(p2.x - p1.x); rh = Math.abs(p2.y - p1.y);
                       }
                       const displayX = widthRatio > 0 ? rx / widthRatio : rx;
-                      const displayY = widthRatio > 0 ? ry / widthRatio : ry;
+                      const displayY = heightRatio > 0 ? ry / heightRatio : ry;
                       const displayW = widthRatio > 0 ? rw / widthRatio : rw;
-                      const displayH = widthRatio > 0 ? rh / widthRatio : rh;
+                      const displayH = heightRatio > 0 ? rh / heightRatio : rh;
                       // 标签附着在矩形左上角上方
                       const labelX = displayX, labelY = displayY - 5;
 
@@ -4423,7 +4724,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         ({ x: cirX, y: cirY } = inverseTransformPoint(cirX, cirY, rimgW, rimgH, corrRotation, corrFlipH));
                       }
                       const cx = widthRatio > 0 ? cirX / widthRatio : cirX;
-                      const cy = widthRatio > 0 ? cirY / widthRatio : cirY;
+                      const cy = heightRatio > 0 ? cirY / heightRatio : cirY;
                       const r = widthRatio > 0 ? circle.r / widthRatio : circle.r;
                       const labelX = cx, labelY = cy - r - 5;
 
@@ -5072,6 +5373,119 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           {/* 显示图像尺寸和实时鼠标坐标 */}
           图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
+
+        {/* 测量距离前的尺寸定标确认弹窗 */}
+        <Modal
+          title="尺寸定标确认"
+          open={calibratePromptModalVisible}
+          onCancel={() => { setCalibratePromptModalVisible(false); setMeasureAfterCalibrate(false); }}
+          footer={null}
+          width={360}
+          centered
+          maskClosable={false}
+          getContainer={() => editorContainerRef.current || document.body}
+        >
+          <div style={{ marginBottom: 24 }}>
+            <Text>是否需要先进行尺寸定标？</Text>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => { setCalibratePromptModalVisible(false); setMeasureAfterCalibrate(false); setActiveTool('measure'); }}>
+              否，直接测量
+            </Button>
+            <Button type="primary" onClick={() => { setMeasureAfterCalibrate(true); startCalibration(); }}>
+              是，先定标
+            </Button>
+          </div>
+        </Modal>
+
+        {/* 尺寸已定标确认弹窗 */}
+        <Modal
+          title="尺寸已定标"
+          open={recalibratePromptModalVisible}
+          onCancel={() => setRecalibratePromptModalVisible(false)}
+          footer={null}
+          width={360}
+          centered
+          maskClosable={false}
+          getContainer={() => editorContainerRef.current || document.body}
+        >
+          <div style={{ marginBottom: 24 }}>
+            <Text>当前图片已完成尺寸定标，是否重新定标？</Text>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={() => setRecalibratePromptModalVisible(false)}>取消</Button>
+            <Button type="primary" onClick={() => { startCalibration(); }}>重新定标</Button>
+          </div>
+        </Modal>
+
+        {/* 像素标定弹窗 */}
+        <Modal
+          title="像素标定"
+          open={calibrateModalVisible}
+          onOk={handleCalibrateConfirm}
+          onCancel={() => { setCalibrateModalVisible(false); setCalibrateLine(null); setMeasureAfterCalibrate(false); setActiveTool('pan'); }}
+          okText="确认"
+          cancelText="取消"
+          width={300}
+          centered
+          maskClosable={false}
+          getContainer={() => editorContainerRef.current || document.body}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <Text type="secondary">选择的距离 (像素)：</Text>
+            <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: 4 }}>{measuredPixelDistance} px</div>
+          </div>
+          <div>
+            <Text type="secondary">实际长度 (毫米)：</Text>
+            <InputNumber
+              style={{ width: '100%', marginTop: 4 }}
+              placeholder="请输入实际长度"
+              value={actualLength}
+              onChange={(val) => setActualLength(val)}
+              addonAfter="mm"
+              autoFocus
+            />
+          </div>
+        </Modal>
+
+        {/* 缺陷类型选择弹窗 */}
+        <Modal
+          title="选择缺陷类型"
+          open={labelModalVisible}
+          onOk={handleLabelConfirm}
+          onCancel={() => { setLabelModalVisible(false); setPendingShape(null); setSelectedLabelCode(null); }}
+          okText="确认"
+          cancelText="取消"
+          width={320}
+          centered
+          maskClosable={false}
+          destroyOnClose
+          getContainer={() => editorContainerRef.current || document.body}
+        >
+          {!isDefectTypesFromBackend && (
+            <Alert message="缺陷类型加载失败，使用默认数据" type="warning" showIcon style={{ marginBottom: 12 }} />
+          )}
+          <div style={{ marginBottom: 16 }}>请选择当前区域的缺陷类型：</div>
+          <Select
+            style={{ width: '100%' }}
+            placeholder="请选择"
+            value={selectedLabelCode}
+            onChange={setSelectedLabelCode}
+            defaultOpen
+            listHeight={200}
+            getPopupContainer={() => editorContainerRef.current || document.body}
+          >
+            {DEFECT_TYPES.map(type => (
+              <Option key={type.code} value={type.code}>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <div style={{ width: 12, height: 12, background: type.color, marginRight: 8, borderRadius: 2 }} />
+                  {type.name}
+                </div>
+              </Option>
+            ))}
+          </Select>
+        </Modal>
+
       </Content >
   );
 };
