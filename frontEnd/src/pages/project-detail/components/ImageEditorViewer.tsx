@@ -81,6 +81,32 @@ import { useWindowLevelTool,preprocessToGrayCache } from '../tool/WindowLevelToo
 import Ruler from '../tool/Ruler';
 import DefectMarking, { DrawingType } from '../tool/DefectMarking';
 import PositionAndSizeTool, { PositionSizeType } from '../tool/PositionAndSizeTool';
+import {
+  hydrateDefectRecords,
+  parseDefectOrigin,
+  parseWeldLocationShapes,
+} from "./imageEditorDefectHydration";
+import {
+  buildInitialFilmInfo,
+  buildInitialImageTransform,
+  createEmptyHistorySnapshot,
+  createIdleEllipseToolState,
+  createIdleVerticalToolState,
+  type FilmInfoFormValues,
+} from "./imageEditorFileState";
+import {
+  buildReviewFilePayload,
+  persistDefectRecords,
+  saveReviewSession,
+  syncFilmInfoToTaskFile,
+} from "./imageEditorPersistence";
+import {
+  isSameHistorySnapshot,
+  pushHistorySnapshot,
+  removeDefectAtIndex,
+  stepHistoryBackward,
+  stepHistoryForward,
+} from "./imageEditorHistory";
 
 const { Content, Sider } = Layout;
 const { Title, Text, Link } = Typography;
@@ -877,28 +903,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   // --- 4. 椭圆工具状态 ---
   const [ellipseState, setEllipseState] = useState<EllipseToolState>({
-    mode: 'idle',
-    shape: null,
-    drag: {
-      active: false,
-      type: null,
-      startMouse: { x: 0, y: 0 },
-      startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
-    },
-    isVisible: false
+    ...createIdleEllipseToolState(),
   });
 
   // --- 5. 垂直成像工具状态 ---
   const [verticalState, setVerticalState] = useState<VerticalToolState>({
-    mode: 'idle',
-    shape: null,
-    drag: {
-      active: false,
-      type: null,
-      startMouse: { x: 0, y: 0 },
-      startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 }
-    },
-    isVisible: false
+    ...createIdleVerticalToolState(),
   });
 
   // --- 6. 定位标记成像状态（复用设置坐标原点的状态，共享同一个原点数据） ---
@@ -956,7 +966,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   // --- 原始数据引用 (用于不可用的Reset状态判断) ---
   const originalFilmInfoRef = useRef<any>({});
   const originalDefectsRef = useRef<HistorySnapshot>({
-    rects: [], polygons: [], circles: [], pixelRatio: 0
+    ...createEmptyHistorySnapshot(),
   });
 
   // --- 历史记录状态 ---
@@ -988,25 +998,18 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setPixelRatio(newPixelRatio);
 
     if (recordHistory) {
-      // 2. 截断未来分支 (如果当前不在最新)
-      const nextIndex = historyIndexRef.current + 1;
-      const currentHistory = historyRef.current.slice(0, nextIndex);
-
-      // 3. 构造新快照
       const newSnapshot: HistorySnapshot = {
         rects: JSON.parse(JSON.stringify(newRects)),
         polygons: JSON.parse(JSON.stringify(newPolys)),
         circles: JSON.parse(JSON.stringify(newCircles)),
         pixelRatio: newPixelRatio
       };
-
-      // 4. 入栈
-      const nextHistory = [...currentHistory, newSnapshot];
-
-      // 5. 限制历史长度（如50步）
-      if (nextHistory.length > 50) nextHistory.shift();
-
-      updateHistoryState(nextHistory, nextHistory.length - 1);
+      const nextState = pushHistorySnapshot(
+        historyRef.current,
+        historyIndexRef.current,
+        newSnapshot
+      );
+      updateHistoryState(nextState.history, nextState.index);
     }
   };
 
@@ -2624,17 +2627,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       prevTaskFileIdRef.current = selectedFile.TaskFileId;
 
       // 从后端加载底片信息字段
-      const initialFilmInfo = {
-        filmPixelValue: selectedFile.FilmPixelValue || '',
-        resolution: selectedFile.Resolution || '',
-        specification: selectedFile.Specification || '',
-        inspectionDate: selectedFile.InspectionDate || '',
-        weldId: selectedFile.WeldId || '',
-        filmNumber: selectedFile.FilmNumber || '',
-        filmDensity: selectedFile.FilmDensity || '',
-        sensitivity: selectedFile.Sensitivity || '',
-        normalizedSnr: selectedFile.NormalizedSnr || '',
-      };
+      const initialFilmInfo = buildInitialFilmInfo(selectedFile);
       filmInfoForm.setFieldsValue(initialFilmInfo);
       originalFilmInfoRef.current = initialFilmInfo;
 
@@ -2651,175 +2644,36 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         // 在加载回调中同步解析本张图片的0点（优先 originPoint state，降级读取 selectedFile.DefectPosition）
         // 不能依赖 defectOriginPoint state（它在 setDefectOriginPoint 之后才更新，异步竞争）
         // 同理，直接解析 WeldLocation，不能依赖 weldLocationShapes state（异步竞争）
-        const loadTimeWeldShapes: WeldLocationRect[] = (() => {
-          if (!selectedFile?.WeldLocation) return [];
-          try {
-            const dets: Array<{ bbox: number[]; keypoints: Array<{ id: number; x: number; y: number }> }> =
-              JSON.parse(selectedFile.WeldLocation);
-            if (!Array.isArray(dets) || dets.length === 0) return [];
-            return dets.map(det => {
-              const [x1, y1, x2, y2] = det.bbox;
-              const kps = (det.keypoints || []).filter(k => k.x > 1 && k.y > 1).map(k => ({ x: k.x, y: k.y }));
-              return { x1, y1, x2, y2, keypoints: kps };
-            });
-          } catch { return []; }
-        })();
+        const loadTimeWeldShapes = parseWeldLocationShapes(selectedFile?.WeldLocation);
+        const parsedDefectOrigin = parseDefectOrigin(selectedFile?.DefectPosition);
 
         let loadTimeOrigin: { x: number; y: number } | null = originPoint;
         let loadTimeOriginLabel = '+';
         // location_0 和 location_1 互斥：若 location_0 有检测结果，则不从 location_1（DefectPosition）读取原点
-        if (!loadTimeOrigin && loadTimeWeldShapes.length === 0 && selectedFile?.DefectPosition) {
-          try {
-            const dp = JSON.parse(selectedFile.DefectPosition);
-            if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
-              loadTimeOrigin = { x: dp.origin_x, y: dp.origin_y };
-            }
-          } catch { /* ignore */ }
+        if (!loadTimeOrigin && loadTimeWeldShapes.length === 0) {
+          loadTimeOrigin = parsedDefectOrigin.point;
         }
 
         if (resp.Data && resp.Data.length > 0) {
-          // 将后端 DefectRecord 转换为前端格式，根据几何类型分类
-          const loadedRects: SavedRect[] = [];
-          const loadedCircles: SavedCircle[] = [];
-          const loadedPolygons: SavedPolygon[] = [];
-
-          resp.Data.forEach((dr: DefectRecord) => {
-            // 从 Geometry 字段解析几何坐标（保持原始坐标，即矫正后坐标系）
-            let geometry: any = null;
-            try {
-              geometry = dr.Geometry ? JSON.parse(dr.Geometry) : null;
-            } catch (e) {
-              console.warn('Failed to parse defect geometry:', dr.Geometry);
-            }
-
-              let sizeStr = dr.Size || '';
-              
-              if (!sizeStr && geometry) {
-                try {
-                  const hasScale = hasPixelCalibration;
-                  if (geometry.type === 'rect' && geometry.w && geometry.h) {
-                    const areaPx = geometry.w * geometry.h;
-                    if (hasScale) {
-                      sizeStr = `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²`;
-                    } else {
-                      sizeStr = `${areaPx.toFixed(2)}px²`;
-                    }
-                  } else if (geometry.type === 'circle' && geometry.r) {
-                    const areaPx = Math.PI * geometry.r * geometry.r;
-                    if (hasScale) {
-                      sizeStr = `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²`;
-                    } else {
-                      sizeStr = `${areaPx.toFixed(2)}px²`;
-                    }
-                  } else if (geometry.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 3) {
-                    let areaPx = 0;
-                    const pts = geometry.points;
-                    for (let i = 0; i < pts.length; i++) {
-                      const p1 = pts[i];
-                      const p2 = pts[(i + 1) % pts.length];
-                      areaPx += (p1.x * p2.y - p2.x * p1.y);
-                    }
-                    areaPx = Math.abs(areaPx) / 2;
-                    if (hasScale) {
-                      sizeStr = `${(areaPx * pixelRatio * pixelRatio).toFixed(2)}mm²`;
-                    } else {
-                      sizeStr = `${areaPx.toFixed(2)}px²`;
-                    }
-                  }
-                } catch (e) {
-                  // If size calc fails, leave empty
-                }
-              }
-
-              // 计算位置字符串（基于0点的X轴有符号距离）
-              // 只有当现有 position 为空或已是自动格式（+->...）时才覆盖，手动填写的位置保留
-              const parsedPosition = parseStoredPosition(dr.Position || '');
-              let linearPos = parsedPosition.linear;
-              let clockPos = parsedPosition.clock;
-              if (loadTimeOrigin && parsedPosition.mode === 'auto') {
-                if (geometry?.type === 'rect' && geometry.w != null) {
-                  linearPos = formatDefectPosition(geometry.x, geometry.x + geometry.w, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
-                } else if (geometry?.type === 'circle' && geometry.r != null) {
-                  linearPos = formatDefectPosition(geometry.x - geometry.r, geometry.x + geometry.r, loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
-                } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 1) {
-                  const xs = geometry.points.map((p: { x: number }) => p.x);
-                  linearPos = formatDefectPosition(Math.min(...xs), Math.max(...xs), loadTimeOrigin.x, pixelRatio, loadTimeOriginLabel);
-                }
-              }
-
-              // 重算椭圆时钟位置（大口径管），自动位置始终替换，不在旧字符串上追加
-              if (loadTimeWeldShapes.length > 0 && parsedPosition.mode === 'auto') {
-                let defCx: number | null = null, defCy: number | null = null;
-                if (geometry?.type === 'rect' && geometry.w != null) {
-                  defCx = geometry.x + geometry.w / 2;
-                  defCy = geometry.y + geometry.h / 2;
-                } else if (geometry?.type === 'circle' && geometry.r != null) {
-                  defCx = geometry.x; defCy = geometry.y;
-                } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points) && geometry.points.length >= 1) {
-                  const xs = geometry.points.map((p: { x: number }) => p.x);
-                  const ys = geometry.points.map((p: { y: number }) => p.y);
-                  defCx = (Math.min(...xs) + Math.max(...xs)) / 2;
-                  defCy = (Math.min(...ys) + Math.max(...ys)) / 2;
-                }
-                if (defCx !== null && defCy !== null) {
-                  const ellipse = getNearestEllipseParams(loadTimeWeldShapes, defCx, defCy);
-                  if (ellipse) {
-                    clockPos = getClockPositionLabel(defCx, defCy, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
-                  }
-                }
-              }
-              const posStr = parsedPosition.mode === 'auto'
-                ? buildDefectPosition(linearPos, clockPos)
-                : parsedPosition.position;
-
-              const baseInfo = {
-                label: dr.DefectName || '未知',
-                color: DEFECT_TYPES.find(d => d.name === dr.DefectName)?.color || '#f5222d',
-                position: posStr,
-                _positionMode: parsedPosition.mode,
-                _positionLinear: parsedPosition.mode === 'auto' ? linearPos : parsedPosition.linear,
-                _positionClock: parsedPosition.mode === 'auto' ? clockPos : parsedPosition.clock,
-                size: sizeStr,
-                quality: dr.Grade || '',
-                remark: dr.Remark || '',
-                defectRecordId: dr.DefectRecordId,
-                // 标记该坐标来自 AI（矫正后坐标系），渲染时需逆变换
-                _isCorrectedCoord: true,
-              };
-
-            if (geometry?.type === 'circle') {
-              loadedCircles.push({
-                x: geometry.x ?? 0,
-                y: geometry.y ?? 0,
-                r: geometry.r ?? 25,
-                ...baseInfo,
-              });
-            } else if (geometry?.type === 'polygon' && Array.isArray(geometry.points)) {
-              loadedPolygons.push({
-                points: geometry.points,
-                ...baseInfo,
-              });
-            } else {
-              loadedRects.push({
-                x: geometry?.x ?? 0,
-                y: geometry?.y ?? 0,
-                w: geometry?.w ?? 50,
-                h: geometry?.h ?? 50,
-                ...baseInfo,
-              });
-            }
+          const hydratedDefects = hydrateDefectRecords({
+            defectRecords: resp.Data,
+            weldShapes: loadTimeWeldShapes,
+            originPoint: loadTimeOrigin,
+            originLabel: loadTimeOriginLabel,
+            pixelRatio,
+            hasPixelCalibration,
+            defectTypes: DEFECT_TYPES,
           });
 
-
-          setDefectRects(loadedRects);
-          setDefectCircles(loadedCircles);
-          setDefectPolygons(loadedPolygons);
+          setDefectRects(hydratedDefects.rects);
+          setDefectCircles(hydratedDefects.circles);
+          setDefectPolygons(hydratedDefects.polygons);
 
           // 初始化原始数据Ref
           const initialSnapshot = {
-            rects: JSON.parse(JSON.stringify(loadedRects)),
-            polygons: JSON.parse(JSON.stringify(loadedPolygons)),
-            circles: JSON.parse(JSON.stringify(loadedCircles)),
+            rects: JSON.parse(JSON.stringify(hydratedDefects.rects)),
+            polygons: JSON.parse(JSON.stringify(hydratedDefects.polygons)),
+            circles: JSON.parse(JSON.stringify(hydratedDefects.circles)),
             pixelRatio: 0
           };
           originalDefectsRef.current = initialSnapshot;
@@ -2830,12 +2684,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           setDefectRects([]);
           setDefectCircles([]);
           setDefectPolygons([]);
-          const emptySnapshot = {
-            rects: [],
-            polygons: [],
-            circles: [],
-            pixelRatio: 0
-          };
+          const emptySnapshot = createEmptyHistorySnapshot<SavedRect, SavedPolygon, SavedCircle>();
           originalDefectsRef.current = emptySnapshot;
           updateHistoryState([emptySnapshot], 0);
         }
@@ -2845,61 +2694,22 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         setDefectRects([]);
         setDefectCircles([]);
         setDefectPolygons([]);
-        const emptySnapshot = {
-          rects: [],
-          polygons: [],
-          circles: [],
-          pixelRatio: 0
-        };
+        const emptySnapshot = createEmptyHistorySnapshot<SavedRect, SavedPolygon, SavedCircle>();
         originalDefectsRef.current = emptySnapshot;
         updateHistoryState([emptySnapshot], 0);
         setTimeout(() => { isInitialLoadRef.current = false; }, 100);
       });
 
       // 解析焊缝位置检测结果（B路径，来自 location_0.pt，12个关键点拟合椭圆）
-      const parseWeldLocationShapes = (): WeldLocationRect[] => {
-        if (!selectedFile?.WeldLocation) return [];
-        try {
-          const detections: Array<{
-            class: string;
-            bbox: number[];
-            keypoints: Array<{ id: number; x: number; y: number }>;
-          }> = JSON.parse(selectedFile.WeldLocation);
-          if (!Array.isArray(detections) || detections.length === 0) return [];
-
-          return detections.map(det => {
-            const [x1, y1, x2, y2] = det.bbox;
-            const kps = (det.keypoints || [])
-              .filter(k => k.x > 1 && k.y > 1)
-              .map(k => ({ x: k.x, y: k.y }));
-            return { x1, y1, x2, y2, keypoints: kps };
-          });
-        } catch (e) {
-          console.warn('Failed to parse WeldLocation:', e);
-          return [];
-        }
-      };
-      const parsedWeldShapes = parseWeldLocationShapes();
+      const parsedWeldShapes = parseWeldLocationShapes(selectedFile?.WeldLocation);
       setWeldLocationShapes(parsedWeldShapes);
 
       // 解析缺陷位置检测2结果（D路径，来自 location_1.pt，center_mark 十字架或边缘标记）
       // location_0 和 location_1 互斥：若 location_0 有检测结果（椭圆关键点），则忽略 location_1 的原点
-      if (parsedWeldShapes.length === 0 && selectedFile?.DefectPosition) {
-        try {
-          const dp = JSON.parse(selectedFile.DefectPosition);
-          if (typeof dp.origin_x === 'number' && typeof dp.origin_y === 'number') {
-            setDefectOriginPoint({ x: dp.origin_x, y: dp.origin_y });
-            const posType: number | null = typeof dp.positioning_type === 'number' ? dp.positioning_type : null;
-            setDefectOriginMeta({ positioningType: posType, originText: null });
-          } else {
-            setDefectOriginPoint(null);
-            setDefectOriginMeta(null);
-          }
-        } catch (e) {
-          console.warn('Failed to parse DefectPosition:', e);
-          setDefectOriginPoint(null);
-          setDefectOriginMeta(null);
-        }
+      if (parsedWeldShapes.length === 0) {
+        const parsedOrigin = parseDefectOrigin(selectedFile?.DefectPosition);
+        setDefectOriginPoint(parsedOrigin.point);
+        setDefectOriginMeta(parsedOrigin.meta);
       } else {
         setDefectOriginPoint(null);
         setDefectOriginMeta(null);
@@ -2913,11 +2723,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setScale(1);
       setPixelRatio(0); // 每次切换图片，重置物理尺寸定标比例
       // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
-      setRotation(selectedFile.CorrectionRotation ?? 0);
-      setFlipH(selectedFile.CorrectionFlip ? -1 : 1);
-      setFlipV(1);
+      const initialImageTransform = buildInitialImageTransform(selectedFile);
+      setRotation(initialImageTransform.rotation);
+      setFlipH(initialImageTransform.flipH);
+      setFlipV(initialImageTransform.flipV);
       // 注意：不重置 isNegative（负片状态在切换图片时保留）
-      setPosition({ x: 0, y: 0 });
+      setPosition(initialImageTransform.position);
       setCalibratePromptModalVisible(false);
       setRecalibratePromptModalVisible(false);
       setCalibrateModalVisible(false);
@@ -2940,8 +2751,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setPositionSizeType(null);
       positionSizeEllipseDirtyRef.current = false;
       positionSizeOriginDirtyRef.current = false;
-      setEllipseState({ mode: 'idle', shape: null, drag: { active: false, type: null, startMouse: { x: 0, y: 0 }, startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 } }, isVisible: false });
-      setVerticalState({ mode: 'idle', shape: null, drag: { active: false, type: null, startMouse: { x: 0, y: 0 }, startShape: { cx: 0, cy: 0, rx: 0, ry: 0, rotation: 0 } }, isVisible: false });
+      setEllipseState(createIdleEllipseToolState());
+      setVerticalState(createIdleVerticalToolState());
       setIsDrawingDefect(false);
       setDefectStartPoint(null);
       setCurrentDefectRect(null);
@@ -3037,90 +2848,18 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const handleSave = async () => {
     if (!selectedFile) return;
     try {
-      const infoValues = await filmInfoForm.validateFields();
-
-      // 1. 保存底片信息
-      await reportAPI.reviewFile(selectedFile.TaskFileId, {
-        ManualResult: selectedFile.VisionResult || "{}",
-        PlateQuality: '',  // 不再使用文件级别的质量评级，改为缺陷级别的等级
-        FilmPixelValue: infoValues.filmPixelValue,
-        Resolution: infoValues.resolution,
-        Specification: infoValues.specification,
-        InspectionDate: infoValues.inspectionDate,
-        WeldId: infoValues.weldId,
-        FilmNumber: infoValues.filmNumber,
-        FilmDensity: infoValues.filmDensity,
-        Sensitivity: infoValues.sensitivity,
-        NormalizedSnr: infoValues.normalizedSnr,
+      const infoValues = await filmInfoForm.validateFields() as FilmInfoFormValues;
+      await saveReviewSession({
+        selectedFile,
+        taskFileId: selectedFile.TaskFileId,
+        filmInfoValues: infoValues,
+        originPoint,
+        reportApi: reportAPI,
+        defectRecordApi: defectRecordAPI,
+        defectRects,
+        defectPolygons,
+        defectCircles,
       });
-
-      // 2. 保存缺陷记录（替换式更新）
-      // Position 保持算法计算的位置，Geometry 存储几何坐标
-      const allDefects = [
-        ...defectRects.map(d => ({
-          TaskFileId: selectedFile.TaskFileId,
-          DefectName: d.label,
-          Position: d.position || '',  // 算法位置，空则保持空
-          Geometry: JSON.stringify({
-            type: 'rect',
-            x: d.x,
-            y: d.y,
-            w: d.w,
-            h: d.h,
-          }),
-          Size: d.size || '',
-          Grade: d.quality || '',
-          Remark: d.remark || '',
-        })),
-        ...defectPolygons.map(d => ({
-          TaskFileId: selectedFile.TaskFileId,
-          DefectName: d.label,
-          Position: d.position || '',
-          Geometry: JSON.stringify({
-            type: 'polygon',
-            points: d.points,
-          }),
-          Size: d.size || '',
-          Grade: d.quality || '',
-          Remark: d.remark || '',
-        })),
-        ...defectCircles.map(d => ({
-          TaskFileId: selectedFile.TaskFileId,
-          DefectName: d.label,
-          Position: d.position || '',
-          Geometry: JSON.stringify({
-            type: 'circle',
-            x: d.x,
-            y: d.y,
-            r: d.r,
-          }),
-          Size: d.size || '',
-          Grade: d.quality || '',
-          Remark: d.remark || '',
-        })),
-      ];
-
-      if (allDefects.length > 0) {
-        await defectRecordAPI.replace(selectedFile.TaskFileId, allDefects);
-      } else {
-        // 如果没有缺陷，删除该文件的所有缺陷记录
-        await defectRecordAPI.deleteByTaskFileId(selectedFile.TaskFileId);
-      }
-
-      // 3. 保存坐标原点（如手动设置过）
-      if (originPoint) {
-        const defectPositionData = {
-          detected: true,
-          positioning_type: 0,
-          origin_x: originPoint.x,
-          origin_y: originPoint.y,
-          origin_text: null,
-          detections: []
-        };
-        const defectPositionStr = JSON.stringify(defectPositionData);
-        await reportAPI.updateFileLocation(selectedFile.TaskFileId, { DefectPosition: defectPositionStr });
-        selectedFile.DefectPosition = defectPositionStr;
-      }
 
       message.success("保存并确认成功");
       refreshFiles();
@@ -3146,30 +2885,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     async () => {
       if (!selectedFile) return;
       try {
-        const values = await filmInfoForm.validateFields();
-        await reportAPI.reviewFile(selectedFile.TaskFileId, {
-          ManualResult: selectedFile.VisionResult || "{}",
-          PlateQuality: '',
-          FilmPixelValue: values.filmPixelValue,
-          Resolution: values.resolution,
-          Specification: values.specification,
-          InspectionDate: values.inspectionDate,
-          WeldId: values.weldId,
-          FilmNumber: values.filmNumber,
-          FilmDensity: values.filmDensity,
-          Sensitivity: values.sensitivity,
-          NormalizedSnr: values.normalizedSnr,
-        });
-        // 同步更新内存中的对象，避免切换图片后表单被重置为旧值
-        selectedFile.FilmPixelValue = values.filmPixelValue;
-        selectedFile.Resolution = values.resolution;
-        selectedFile.Specification = values.specification;
-        selectedFile.InspectionDate = values.inspectionDate;
-        selectedFile.WeldId = values.weldId;
-        selectedFile.FilmNumber = values.filmNumber;
-        selectedFile.FilmDensity = values.filmDensity;
-        selectedFile.Sensitivity = values.sensitivity;
-        selectedFile.NormalizedSnr = values.normalizedSnr;
+        const values = await filmInfoForm.validateFields() as FilmInfoFormValues;
+        await reportAPI.reviewFile(
+          selectedFile.TaskFileId,
+          buildReviewFilePayload(selectedFile, values)
+        );
+        syncFilmInfoToTaskFile(selectedFile, values);
         console.log('底片信息已自动保存');
       } catch (err) {
         console.error('自动保存底片信息失败:', err);
@@ -3183,41 +2904,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     async () => {
       if (!selectedFile) return;
       try {
-        const allDefects = [
-          ...defectRects.map(d => ({
-            TaskFileId: selectedFile.TaskFileId,
-            DefectName: d.label,
-            Position: d.position || '',
-            Geometry: JSON.stringify({ type: 'rect', x: d.x, y: d.y, w: d.w, h: d.h }),
-            Size: d.size || '',
-            Grade: d.quality || '',
-            Remark: d.remark || '',
-          })),
-          ...defectPolygons.map(d => ({
-            TaskFileId: selectedFile.TaskFileId,
-            DefectName: d.label,
-            Position: d.position || '',
-            Geometry: JSON.stringify({ type: 'polygon', points: d.points }),
-            Size: d.size || '',
-            Grade: d.quality || '',
-            Remark: d.remark || '',
-          })),
-          ...defectCircles.map(d => ({
-            TaskFileId: selectedFile.TaskFileId,
-            DefectName: d.label,
-            Position: d.position || '',
-            Geometry: JSON.stringify({ type: 'circle', x: d.x, y: d.y, r: d.r }),
-            Size: d.size || '',
-            Grade: d.quality || '',
-            Remark: d.remark || '',
-          })),
-        ];
-
-        if (allDefects.length > 0) {
-          await defectRecordAPI.replace(selectedFile.TaskFileId, allDefects);
-        } else {
-          await defectRecordAPI.deleteByTaskFileId(selectedFile.TaskFileId);
-        }
+        await persistDefectRecords({
+          taskFileId: selectedFile.TaskFileId,
+          defectRects,
+          defectPolygons,
+          defectCircles,
+          defectRecordApi: defectRecordAPI,
+        });
         console.log('缺陷记录已自动保存');
       } catch (err) {
         console.error('自动保存缺陷记录失败:', err);
@@ -3326,19 +3019,14 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   };
 
   const deleteDefect = (type: 'rect' | 'polygon' | 'circle', index: number) => {
-    if (type === 'rect') {
-      const newArr = [...defectRects];
-      newArr.splice(index, 1);
-      updateAllDefects(newArr, defectPolygons, defectCircles, true);
-    } else if (type === 'polygon') {
-      const newArr = [...defectPolygons];
-      newArr.splice(index, 1);
-      updateAllDefects(defectRects, newArr, defectCircles, true);
-    } else if (type === 'circle') {
-      const newArr = [...defectCircles];
-      newArr.splice(index, 1);
-      updateAllDefects(defectRects, defectPolygons, newArr, true);
-    }
+    const nextState = removeDefectAtIndex(
+      type,
+      index,
+      defectRects,
+      defectPolygons,
+      defectCircles
+    );
+    updateAllDefects(nextState.rects, nextState.polygons, nextState.circles, true, pixelRatio);
   };
 
   // --- OCR 框选识别 ---
@@ -3428,26 +3116,33 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   // --- 撤销/重做/重置 功能 ---
 
   const handleUndo = () => {
-    if (historyIndexRef.current > 0) {
-      const prevIndex = historyIndexRef.current - 1;
-      const snapshot = historyRef.current[prevIndex];
-      // 恢复快照，但不记录历史（recordHistory=false）
-      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false, snapshot.pixelRatio);
-      // 单独更新索引
-      setHistoryIndex(prevIndex);
-      historyIndexRef.current = prevIndex;
+    const previous = stepHistoryBackward(historyRef.current, historyIndexRef.current);
+    if (previous) {
+      updateAllDefects(
+        previous.snapshot.rects,
+        previous.snapshot.polygons,
+        previous.snapshot.circles,
+        false,
+        previous.snapshot.pixelRatio
+      );
+      setHistoryIndex(previous.index);
+      historyIndexRef.current = previous.index;
       message.success("已撤销");
     }
   };
 
   const handleRedo = () => {
-    if (historyIndexRef.current < historyRef.current.length - 1) {
-      const nextIndex = historyIndexRef.current + 1;
-      const snapshot = historyRef.current[nextIndex];
-      // 恢复快照，不记录历史
-      updateAllDefects(snapshot.rects, snapshot.polygons, snapshot.circles, false, snapshot.pixelRatio);
-      setHistoryIndex(nextIndex);
-      historyIndexRef.current = nextIndex;
+    const next = stepHistoryForward(historyRef.current, historyIndexRef.current);
+    if (next) {
+      updateAllDefects(
+        next.snapshot.rects,
+        next.snapshot.polygons,
+        next.snapshot.circles,
+        false,
+        next.snapshot.pixelRatio
+      );
+      setHistoryIndex(next.index);
+      historyIndexRef.current = next.index;
       message.success("已重做");
     }
   };
@@ -3473,8 +3168,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const isResetDisabled = useMemo(() => {
     if (!selectedFile) return true;
     const current = { rects: defectRects, polygons: defectPolygons, circles: defectCircles, pixelRatio };
-    // 忽略 undefined 差异
-    return JSON.stringify(current) === JSON.stringify(originalDefectsRef.current);
+    return isSameHistorySnapshot(current, originalDefectsRef.current);
   }, [defectRects, defectPolygons, defectCircles, pixelRatio, selectedFile]);
 
   const getEditorPopupContainer = () => editorContainerRef.current || document.body;

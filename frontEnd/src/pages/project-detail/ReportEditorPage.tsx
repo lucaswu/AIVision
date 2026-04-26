@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ImageEditorViewer } from "./components/ImageEditorViewer";
 import {
   List,
@@ -22,9 +22,7 @@ import {
   SwapOutlined,
   RightOutlined as CollapseRightOutlined,
 } from "@ant-design/icons";
-import { useRequest } from "ahooks";
-import { reportAPI } from "../../utils/api";
-import { TaskFile } from "../../utils/data";
+import { useReportEditorState } from "./hooks/useReportEditorState";
 
 const { Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -47,87 +45,46 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
   projectSidebarCollapsed = false,
   onProjectSidebarCollapseChange,
 }) => {
-  const [selectedFile, setSelectedFile] = useState<TaskFile | null>(null);
-  const [viewMode, setViewMode] = useState<'single' | 'compare'>('single');
-  const [compareSelectedFiles, setCompareSelectedFiles] = useState<[TaskFile | null, TaskFile | null]>([null, null]);
   // 所有模式（单图 + 对比左 + 对比右）共享同一份 Blob LRU 缓存
   // 单图↔对比模式互切时可直接命中已加载的图片，无需重新下载
   const blobCacheRef = useRef<Map<string, File>>(new Map());
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
 
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const reportTitleRef = useRef<HTMLDivElement>(null);
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(280);
   const [isLeftSidebarCollapsed, setIsLeftSidebarCollapsed] = useState(false);
 
-  const { data: reportResp } = useRequest(() => reportAPI.getReportDetail(taskId));
-  const report = reportResp?.Data;
+  const {
+    report,
+    files,
+    filesLoading,
+    refreshFiles,
+    selectedFile,
+    viewMode,
+    compareSelectedFiles,
+    selectedIds,
+    currentPage,
+    pageSize,
+    confirmedCount,
+    unconfirmedCount,
+    progressPercent,
+    paginatedFiles,
+    setCurrentPage,
+    setPageSizeAndReset,
+    setSelectedFile,
+    setViewMode,
+    selectFileForCurrentMode,
+    handleSelectAll,
+    handleSelectOne,
+    handleBatchConfirm,
+  } = useReportEditorState({ taskId });
 
   useEffect(() => {
     if (reportTitleRef.current) {
       const measuredWidth = reportTitleRef.current.offsetWidth + 40;
       setLeftSidebarWidth(Math.max(measuredWidth, 240));
     }
-  }, [report?.ReportName, taskId, reportResp]);
-
-  const {
-    data: filesResp,
-    loading: filesLoading,
-    refresh: refreshFiles,
-  } = useRequest(() => reportAPI.getReportFiles(taskId));
-  const files: TaskFile[] = filesResp?.Data || [];
-
-  const confirmedCount = files.filter(f => f.ReviewStatus === "CONFIRMED").length;
-  const unconfirmedCount = files.length - confirmedCount;
-  const progressPercent = files.length > 0 ? Math.round((confirmedCount / files.length) * 100) : 0;
-
-  const paginatedFiles = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return files.slice(start, start + pageSize);
-  }, [files, currentPage, pageSize]);
-
-  useEffect(() => {
-    if (files.length > 0 && !selectedFile) {
-      setSelectedFile(files[0]);
-    }
-  }, [files]);
-
-  useEffect(() => {
-    setCompareSelectedFiles(([left, right]) => {
-      const nextLeft = left && files.some(f => f.TaskFileId === left.TaskFileId) ? left : null;
-      const nextRight = right && files.some(f => f.TaskFileId === right.TaskFileId) ? right : null;
-      if (nextLeft === left && nextRight === right) return [left, right];
-      return [nextLeft, nextRight];
-    });
-  }, [files]);
-
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) setSelectedIds(new Set(files.map(f => f.TaskFileId)));
-    else setSelectedIds(new Set());
-  };
-
-  const handleSelectOne = (id: string, checked: boolean) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-
-  const handleBatchConfirm = async () => {
-    if (selectedIds.size === 0) { message.warning("请先选择要确认的文件"); return; }
-    try {
-      await reportAPI.batchConfirmFiles(Array.from(selectedIds));
-      message.success(`成功批量确认 ${selectedIds.size} 个文件`);
-      setSelectedIds(new Set());
-      refreshFiles();
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  }, [report?.ReportName, taskId]);
 
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
@@ -266,12 +223,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                   <span style={{ fontSize: 12, color: '#8c8c8c' }}>对比模式</span>
                   <Switch
                     checked={viewMode === 'compare'}
-                    onChange={(checked) => {
-                      setViewMode(checked ? 'compare' : 'single');
-                      if (checked && selectedFile) {
-                        setCompareSelectedFiles([selectedFile, null]);
-                      }
-                    }}
+                    onChange={(checked) => setViewMode(checked ? 'compare' : 'single')}
                     size="small"
                   />
                 </Space>
@@ -284,16 +236,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
                 dataSource={paginatedFiles}
                 renderItem={(file) => (
                   <List.Item
-                    onClick={() => {
-                      if (viewMode === 'single') {
-                        setSelectedFile(file);
-                      } else {
-                        setCompareSelectedFiles(prev => {
-                          if (!prev[0] || (prev[0] && prev[1])) return [file, null];
-                          return [prev[0], file];
-                        });
-                      }
-                    }}
+                    onClick={() => selectFileForCurrentMode(file)}
                     style={{
                       cursor: "pointer",
                       padding: "10px 16px",
@@ -354,7 +297,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
               <Select
                 size="small"
                 value={pageSize}
-                onChange={(size) => { setPageSize(size); setCurrentPage(1); }}
+                onChange={setPageSizeAndReset}
                 placement="topLeft"
                 options={[
                   { label: '10条/页', value: 10 },

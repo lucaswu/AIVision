@@ -154,6 +154,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
             <Button
               type="text"
               icon={<EyeOutlined />}
+              aria-label="查看"
               onClick={() => onPreview(record.TaskId)}
             />
           </Tooltip>
@@ -161,6 +162,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
             <Button
               type="text"
               icon={<FileSearchOutlined />}
+              aria-label="审核"
               onClick={() => onReview(record.TaskId)}
               disabled={record.Status === "ARCHIVED"}
             />
@@ -169,6 +171,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
             <Button
               type="text"
               icon={<DownloadOutlined />}
+              aria-label="下载"
               onClick={() => {
                 const url = reportAPI.downloadReport(record.ReportId);
                 const link = document.createElement('a');
@@ -184,6 +187,7 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
             <Button
               type="text"
               icon={<InboxOutlined />}
+              aria-label={record.Status === "ARCHIVED" ? "取消归档" : "归档"}
               onClick={() => {
                 const newStatus = record.Status === "ARCHIVED";
                 reportAPI.archiveReport(record.ReportId, !newStatus).then(() => {
@@ -264,5 +268,4 @@ const ReportsPage: React.FC<ReportsPageProps> = ({
 };
 
 export default ReportsPage;
-
 
