@@ -111,6 +111,7 @@ interface ImageEditorViewerProps {
   onToggleFullScreen?: () => void;
   sharedBlobCacheRef?: React.MutableRefObject<Map<string, File>>;
   onFileSaved?: () => void;
+  onSelectFile?: (file: TaskFile) => void;
 }
 
 type FilmInfoOcrField =
@@ -620,6 +621,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   onToggleFullScreen,
   sharedBlobCacheRef,
   onFileSaved,
+  onSelectFile,
 }) => {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -2238,6 +2240,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setMeasuredPixelDistance(0);
     setCalibrateLine(null);
     setActiveTool('calibrate');
+    message.info('请在图像上按住鼠标拖动，绘制定标线');
   };
 
   const handleMeasureToolClick = () => {
@@ -3481,13 +3484,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   const handleSelectPreviousFile = () => {
     if (selectedFileIndex > 0) {
-      console.log("Navigation disabled in internal viewer");
+      onSelectFile?.(files[selectedFileIndex - 1]);
     }
   };
 
   const handleSelectNextFile = () => {
     if (selectedFileIndex >= 0 && selectedFileIndex < files.length - 1) {
-      console.log("Navigation disabled in internal viewer");
+      onSelectFile?.(files[selectedFileIndex + 1]);
     }
   };
 

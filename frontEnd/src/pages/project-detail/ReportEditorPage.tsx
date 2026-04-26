@@ -388,6 +388,7 @@ const ReportEditorPage: React.FC<ReportEditorPageProps> = ({
             projectId={projectId}
             sharedBlobCacheRef={blobCacheRef}
             onFileSaved={refreshFiles}
+            onSelectFile={setSelectedFile}
           />
         ) : (
           <div style={{ display: 'flex', height: '100%', width: '100%' }}>
