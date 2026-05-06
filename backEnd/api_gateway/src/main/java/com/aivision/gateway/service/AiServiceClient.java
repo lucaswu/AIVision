@@ -65,7 +65,7 @@ public class AiServiceClient {
     private int timeoutMinutes;
 
     // 轮询间隔（毫秒）
-    private static final long POLL_INTERVAL_MS = 2000;
+    private static final long POLL_INTERVAL_MS = 500;
     
     // 缓存的类别名称
     private List<String> cachedClassNames = null;
@@ -101,6 +101,13 @@ public class AiServiceClient {
     public Map<String, String> callBatchVisionAi(List<String> relativeStoredPaths, String taskId, 
                                                 Consumer<Integer> progressCallback, 
                                                 Consumer<List<String>> errorLogCallback) {
+        return callBatchVisionAi(relativeStoredPaths, taskId, progressCallback, errorLogCallback, null);
+    }
+
+    public Map<String, String> callBatchVisionAi(List<String> relativeStoredPaths, String taskId,
+                                                Consumer<Integer> progressCallback,
+                                                Consumer<List<String>> errorLogCallback,
+                                                StatusCallback statusCallback) {
         if (relativeStoredPaths == null || relativeStoredPaths.isEmpty()) {
             return new HashMap<>();
         }
@@ -112,7 +119,7 @@ public class AiServiceClient {
             submitInferenceTask(taskId, relativeStoredPaths);
             
             // 2. 轮询等待完成
-            waitForCompletion(taskId, relativeStoredPaths.size(), progressCallback, errorLogCallback);
+            waitForCompletion(taskId, relativeStoredPaths.size(), progressCallback, errorLogCallback, statusCallback);
             
             // 3. 获取并解析结果
             return fetchAndParseResults(taskId, relativeStoredPaths);
@@ -124,6 +131,11 @@ public class AiServiceClient {
             }
             throw new RuntimeException("调用推理服务失败", e);
         }
+    }
+
+    @FunctionalInterface
+    interface StatusCallback {
+        void accept(String status, String stage, int progress, int total, String currentFile);
     }
 
     /**
@@ -171,6 +183,13 @@ public class AiServiceClient {
     private void waitForCompletion(String taskId, int totalFiles, 
                                    Consumer<Integer> progressCallback, 
                                    Consumer<List<String>> errorLogCallback) {
+        waitForCompletion(taskId, totalFiles, progressCallback, errorLogCallback, null);
+    }
+
+    private void waitForCompletion(String taskId, int totalFiles,
+                                   Consumer<Integer> progressCallback,
+                                   Consumer<List<String>> errorLogCallback,
+                                   StatusCallback statusCallback) {
         String statusUrl = inferenceServiceUrl + "/inference/" + taskId + "/status";
         long startTime = System.currentTimeMillis();
         long timeoutMs = timeoutMinutes * 60 * 1000L;
@@ -194,6 +213,14 @@ public class AiServiceClient {
                 JsonNode statusNode = objectMapper.readTree(response.getBody());
                 String status = statusNode.path("status").asText();
                 int progress = statusNode.path("progress").asInt();
+                int total = statusNode.path("total").asInt(totalFiles);
+                String currentFile = statusNode.path("current_file").asText(null);
+                String stage = statusNode.path("stage").asText("");
+                logger.info("推理任务状态: taskId={}, status={}, progress={}/{}, stage={}, currentFile={}",
+                    taskId, status, progress, total, stage, currentFile);
+                if (statusCallback != null) {
+                    statusCallback.accept(status, stage, progress, total, currentFile);
+                }
                 
                 // 更新进度
                 if (progress > lastProgress && progressCallback != null) {

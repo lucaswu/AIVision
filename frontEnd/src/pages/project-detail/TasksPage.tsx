@@ -76,7 +76,7 @@ const TasksPage: React.FC<TasksPageProps> = ({
     () => taskAPI.getTasks(projectId),
     {
       refreshDeps: [projectId],
-      pollingInterval: 3000,
+      pollingInterval: 1000,
     }
   );
 

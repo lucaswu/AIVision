@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
 public class TaskProcessService {
     
     private static final Logger logger = LoggerFactory.getLogger(TaskProcessService.class);
+    private static final int RUNNING_PROGRESS_BASELINE = 12;
     private final ObjectMapper objectMapper = new ObjectMapper();
     
     @Autowired
@@ -121,15 +122,39 @@ public class TaskProcessService {
                         int progress = visionProgress.get();
                         currentTask.setProcessedFiles(progress);
                         currentTask.setSuccessFiles(progress);
+                        int percent = mapProcessedFilesToProgress(progress, totalFiles);
+                        currentTask.setProgress(percent);
                         // 如果推理全部完成（即达到 100%），强制设置为 99%，
                         // 这样只有在后续写入数据库完成后才会变为 100%
                         if (progress == totalFiles && totalFiles > 0) {
                             currentTask.setProgress(99);
                         }
                         taskRepository.save(currentTask);
+                        logger.info("任务进度更新: taskId={}, processed={}/{}, progress={}%", taskId, progress, totalFiles, currentTask.getProgress());
                     }
                 } catch (Exception e) {
                     logger.warn("更新进度失败: taskId={}", taskId);
+                }
+            };
+
+            AiServiceClient.StatusCallback statusCallback = (status, stage, progress, total, currentFile) -> {
+                try {
+                    if (progress > 0) {
+                        return;
+                    }
+                    Task currentTask = taskRepository.findById(taskId).orElse(null);
+                    if (currentTask == null) {
+                        return;
+                    }
+                    int stageProgress = mapStageToProgress(stage);
+                    if (stageProgress > currentTask.getProgress()) {
+                        currentTask.setProgress(stageProgress);
+                        taskRepository.save(currentTask);
+                        logger.info("任务阶段进度更新: taskId={}, stage={}, progress={}%, currentFile={}",
+                            taskId, stage, stageProgress, currentFile);
+                    }
+                } catch (Exception e) {
+                    logger.warn("更新阶段进度失败: taskId={}, stage={}", taskId, stage);
                 }
             };
 
@@ -153,7 +178,8 @@ public class TaskProcessService {
                     } catch (Exception e) {
                         logger.error("保存错误日志失败: taskId={}", taskId);
                     }
-                }
+                },
+                statusCallback
             );
 
             logger.info("AI 服务调用完成: taskId={}, visionResults={}", taskId, visionResults.size());
@@ -272,6 +298,35 @@ public class TaskProcessService {
             logger.error("任务处理异常: taskId={}, error={}", taskId, e.getMessage(), e);
             handleTaskFailure(taskId, e.getMessage());
         }
+    }
+
+    private int mapStageToProgress(String stage) {
+        if (stage == null) {
+            return 0;
+        }
+        switch (stage) {
+            case "accepted":
+                return 2;
+            case "initializing":
+                return 8;
+            case "running":
+                return RUNNING_PROGRESS_BASELINE;
+            default:
+                return 0;
+        }
+    }
+
+    private int mapProcessedFilesToProgress(int processedFiles, int totalFiles) {
+        if (totalFiles <= 0) {
+            return 0;
+        }
+        if (processedFiles <= 0) {
+            return RUNNING_PROGRESS_BASELINE;
+        }
+        double ratio = processedFiles / (double) totalFiles;
+        int percent = RUNNING_PROGRESS_BASELINE
+            + (int) Math.floor(ratio * (99 - RUNNING_PROGRESS_BASELINE));
+        return Math.min(99, Math.max(RUNNING_PROGRESS_BASELINE, percent));
     }
     
     /**

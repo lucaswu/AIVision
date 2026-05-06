@@ -496,6 +496,8 @@ class InferencePipelineRunner:
         for idx, image_input in enumerate(tqdm(image_inputs, desc="推理中")):
             image_path = image_input.original_path
             processing_path = image_input.processing_path
+            if self.output_dir:
+                self._update_progress_file(self.output_dir, idx, total, image_path.name, stage="running")
             try:
                 # 输入预处理：16bit / DICOM 先转换为 8bit，再进入后续既有流程
                 rois, weld_location, defect_position, width, height, correction_info, corrected_img = \
@@ -591,18 +593,19 @@ class InferencePipelineRunner:
 
             # Update progress after both detection and OCR are done for this image
             if self.output_dir:
-                self._update_progress_file(self.output_dir, idx + 1, total, image_path.name)
+                self._update_progress_file(self.output_dir, idx + 1, total, image_path.name, stage="running")
 
         return results
 
-    def _update_progress_file(self, output_dir: Path, current: int, total: int, last_file: str):
+    def _update_progress_file(self, output_dir: Path, current: int, total: int, last_file: str, stage: str = "running"):
         progress_file = output_dir / "progress.json"
         try:
             with open(progress_file, "w") as f:
                 json.dump({
                     "current": current,
                     "total": total,
-                    "last_file": last_file
+                    "last_file": last_file,
+                    "stage": stage,
                 }, f)
         except Exception:
             pass  # Ignore write errors to avoid crashing inference
