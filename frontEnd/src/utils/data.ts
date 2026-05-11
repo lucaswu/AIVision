@@ -26,6 +26,7 @@ export interface Directory {
   ParentDirectoryId?: string;
   Path: string;
   Level: number;
+  SortOrder?: number;
   CreateTime: string;
   UpdatedAt: string;
   Children?: Directory[];
@@ -163,6 +164,7 @@ export interface FileTreeNode {
   FileType?: string;
   UploadDate?: string;
   Children?: FileTreeNode[];
+  SortOrder?: number;
   // 给前端用
   Path: string;
 }
@@ -189,6 +191,12 @@ export interface CreateProjectRequest {
 export interface CreateDirectoryRequest {
   Name: string;
   ParentDirectoryId?: string;
+  SortOrder?: number;
+}
+
+export interface UpdateDirectoryRequest {
+  Name?: string;
+  SortOrder?: number;
 }
 
 export interface CreateTaskRequest {

@@ -13,12 +13,14 @@ import {
   Upload,
   Tag,
   Input,
+  InputNumber,
   Select,
-  Image,
   Breadcrumb,
   List,
   Spin,
   Progress,
+  Alert,
+  Tooltip,
 } from "antd";
 import {
   UploadOutlined,
@@ -28,10 +30,11 @@ import {
   DeleteOutlined,
   PlusOutlined,
   EyeOutlined,
-  FolderOpenOutlined,
   InboxOutlined,
   FolderAddOutlined,
   CaretDownOutlined,
+  EditOutlined,
+  ExclamationCircleOutlined,
 } from "@ant-design/icons";
 import type {
   TableColumnsType,
@@ -39,7 +42,6 @@ import type {
   UploadProps,
   UploadFile,
 } from "antd";
-import { useParams } from "react-router-dom";
 import { useRequest } from "ahooks";
 import { fileAPI, directoryAPI, getUserId } from "../../utils/api";
 import { FileTreeNode } from "../../utils/data";
@@ -49,6 +51,7 @@ import HighBitPreviewImage from "@/components/HighBitPreviewImage";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
+const DEFAULT_DIRECTORY_SORT_ORDER = 99;
 
 function formatUploadSize(size: number): string {
   if (size >= 1024 * 1024 * 1024) {
@@ -88,6 +91,19 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadProgressText, setUploadProgressText] = useState("");
   const [uploadProgressDetail, setUploadProgressDetail] = useState("");
+  const [createDirectoryVisible, setCreateDirectoryVisible] = useState(false);
+  const [createDirectoryName, setCreateDirectoryName] = useState("");
+  const [createDirectorySortOrder, setCreateDirectorySortOrder] = useState<number>(DEFAULT_DIRECTORY_SORT_ORDER);
+  const [creatingDirectory, setCreatingDirectory] = useState(false);
+  const [editDirectoryVisible, setEditDirectoryVisible] = useState(false);
+  const [editingDirectory, setEditingDirectory] = useState<FileTreeNode | null>(null);
+  const [editDirectoryName, setEditDirectoryName] = useState("");
+  const [editDirectorySortOrder, setEditDirectorySortOrder] = useState<number>(DEFAULT_DIRECTORY_SORT_ORDER);
+  const [updatingDirectory, setUpdatingDirectory] = useState(false);
+  const [deleteDirectoryVisible, setDeleteDirectoryVisible] = useState(false);
+  const [deletingDirectory, setDeletingDirectory] = useState<FileTreeNode | null>(null);
+  const [deleteDirectoryConfirmName, setDeleteDirectoryConfirmName] = useState("");
+  const [deleteDirectoryLoading, setDeleteDirectoryLoading] = useState(false);
 
   // 获取文件树数据
   const {
@@ -105,13 +121,37 @@ const FilesPage: React.FC<FilesPageProps> = ({
 
   const allDirectories = filesResponse?.Data || [];
 
-  // 默认选择第一个目录
+  // 递归查找指定路径的目录
+  const findDirectoryByPath = useCallback((
+    nodes: FileTreeNode[],
+    path: string
+  ): FileTreeNode | undefined => {
+    for (const node of nodes) {
+      if (node.Type === "directory" && node.Path === path) {
+        return node;
+      }
+      if (node.Children) {
+        const found = findDirectoryByPath(node.Children, path);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }, []);
+
+  // 默认选择第一个目录，或在当前目录被删除后重新落到可用目录
   useEffect(() => {
-    if (allDirectories.length > 0 && !selectedPath) {
+    if (allDirectories.length === 0) {
+      if (selectedPath) {
+        setSelectedPath("");
+      }
+      return;
+    }
+
+    if (!selectedPath || !findDirectoryByPath(allDirectories, selectedPath)) {
       const firstDirectory = allDirectories[0];
       setSelectedPath(firstDirectory.Path);
     }
-  }, [allDirectories, selectedPath]);
+  }, [allDirectories, findDirectoryByPath, selectedPath]);
 
   // 递归计算目录下的总文件数
   const calculateTotalFiles = (node: FileTreeNode): number => {
@@ -126,70 +166,100 @@ const FilesPage: React.FC<FilesPageProps> = ({
     return count;
   };
 
+  const sortDirectoryNodes = (nodes: FileTreeNode[]): FileTreeNode[] => {
+    return [...nodes].sort((a, b) => {
+      const sortOrderA = a.SortOrder ?? DEFAULT_DIRECTORY_SORT_ORDER;
+      const sortOrderB = b.SortOrder ?? DEFAULT_DIRECTORY_SORT_ORDER;
+      if (sortOrderA !== sortOrderB) {
+        return sortOrderA - sortOrderB;
+      }
+      return a.Name.localeCompare(b.Name, "zh-CN");
+    });
+  };
+
+  function handleOpenCreateDirectory() {
+    setCreateDirectoryVisible(true);
+    setCreateDirectoryName("");
+    setCreateDirectorySortOrder(DEFAULT_DIRECTORY_SORT_ORDER);
+  }
+
+  function handleOpenEditDirectory(directory: FileTreeNode) {
+    setEditingDirectory(directory);
+    setEditDirectoryName(directory.Name);
+    setEditDirectorySortOrder(directory.SortOrder ?? DEFAULT_DIRECTORY_SORT_ORDER);
+    setEditDirectoryVisible(true);
+  }
+
+  function handleOpenDeleteDirectory(directory: FileTreeNode) {
+    setDeletingDirectory(directory);
+    setDeleteDirectoryConfirmName("");
+    setDeleteDirectoryVisible(true);
+  }
+
   // 递归转换为Ant Design树形数据格式
   const convertToTreeData = (nodes: FileTreeNode[]): TreeDataNode[] => {
-    return nodes
-      .filter((node) => node.Type === "directory")
+    return sortDirectoryNodes(nodes.filter((node) => node.Type === "directory"))
       .map((node) => {
         const hasDirectoryChildren = node.Children?.some(
           (c) => c.Type === "directory"
         );
         const totalFiles = calculateTotalFiles(node);
         return {
-      title: (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            width: "100%",
-          }}
-        >
-          <Space size={8}>
+          title: (
+            <div className="custom-tree-node">
+              <Space size={8} className="custom-tree-node-name">
                 <FolderOutlined style={{ color: "#1890ff" }} />
-            <span style={{ fontSize: "14px", fontWeight: 500 }}>
-              {node.Name}
-            </span>
-          </Space>
-              {totalFiles > 0 && (
-                <div
-                  style={{
-                    background: "#e6f7ff",
-                    padding: "0 8px",
-                    borderRadius: "10px",
-                    fontSize: "11px",
-                    color: "#1890ff",
-                    fontWeight: 600,
-                    lineHeight: "18px",
-                    minWidth: "24px",
-                    textAlign: "center",
-                    border: "1px solid #91d5ff",
-                  }}
-                >
-                  {totalFiles}
-                </div>
-              )}
-        </div>
-      ),
-      key: node.Id,
+                <span title={node.Name}>{node.Name}</span>
+              </Space>
+              <Space size={4} className="custom-tree-node-meta" onClick={(event) => event.stopPropagation()}>
+                {totalFiles > 0 && (
+                  <span className="custom-tree-file-count">
+                    {totalFiles}
+                  </span>
+                )}
+                {!isReadOnly && (
+                  <span className="custom-tree-node-actions">
+                    <Tooltip title="编辑目录">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => handleOpenEditDirectory(node)}
+                      />
+                    </Tooltip>
+                    <Tooltip title="删除目录">
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleOpenDeleteDirectory(node)}
+                      />
+                    </Tooltip>
+                  </span>
+                )}
+              </Space>
+            </div>
+          ),
+          key: node.Id,
           isLeaf: !hasDirectoryChildren,
           children: hasDirectoryChildren
             ? convertToTreeData(node.Children!)
             : undefined,
-      data: node,
+          data: node,
         };
       });
   };
 
   const treeData = useMemo(() => {
     return convertToTreeData(allDirectories);
-  }, [allDirectories]);
+  }, [allDirectories, convertToTreeData]);
 
   // 展平所有目录用于下拉选择
   const flattenedDirectories = useMemo(() => {
     const flatten = (nodes: FileTreeNode[]): FileTreeNode[] => {
       let result: FileTreeNode[] = [];
-      nodes.forEach((node) => {
+      sortDirectoryNodes(nodes.filter((node) => node.Type === "directory")).forEach((node) => {
         if (node.Type === "directory") {
           result.push(node);
           if (node.Children) {
@@ -200,24 +270,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
       return result;
     };
     return flatten(allDirectories);
-  }, [allDirectories]);
-
-  // 递归查找指定路径的目录
-  const findDirectoryByPath = (
-    nodes: FileTreeNode[],
-    path: string
-  ): FileTreeNode | undefined => {
-    for (const node of nodes) {
-      if (node.Type === "directory" && node.Path === path) {
-        return node;
-      }
-      if (node.Children) {
-        const found = findDirectoryByPath(node.Children, path);
-        if (found) return found;
-      }
-    }
-    return undefined;
-  };
+  }, [allDirectories, sortDirectoryNodes]);
 
   // 获取当前选中路径下的文件列表（过滤掉目录）
   const currentFiles = useMemo(() => {
@@ -233,7 +286,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
     }
 
     return [];
-  }, [allDirectories, selectedPath]);
+  }, [allDirectories, findDirectoryByPath, selectedPath]);
 
   // 前端分页
   const paginatedFiles = useMemo(() => {
@@ -289,42 +342,96 @@ const FilesPage: React.FC<FilesPageProps> = ({
     });
   };
 
-  const handleCreateDirectory = () => {
-    let directoryName = "";
+  const handleCreateDirectory = async () => {
+    const directoryName = createDirectoryName.trim();
+    if (!directoryName) {
+      message.error("目录名称不能为空");
+      return;
+    }
 
-    Modal.confirm({
-      title: "创建目录",
-      content: (
-        <div>
-          <p>请输入目录名称：</p>
-          <Input
-            placeholder="请输入目录名称"
-            onChange={(e) => {
-              directoryName = e.target.value;
-            }}
-            onPressEnter={() => {
-              // 可以通过回车确认
-            }}
-          />
-        </div>
-      ),
-      async onOk() {
-        if (!directoryName.trim()) {
-          message.error("目录名称不能为空");
-          return;
-        }
+    setCreatingDirectory(true);
+    try {
+      await directoryAPI.createDirectory(projectId, {
+        Name: directoryName,
+        SortOrder: createDirectorySortOrder,
+      });
+      message.success("目录创建成功");
+      setCreateDirectoryName("");
+      setCreateDirectorySortOrder(DEFAULT_DIRECTORY_SORT_ORDER);
+      await refresh();
+    } catch (error) {
+      // 错误已在API层处理
+    } finally {
+      setCreatingDirectory(false);
+    }
+  };
 
-        try {
-          await directoryAPI.createDirectory(projectId, {
-            Name: directoryName.trim(),
-          });
-          message.success("目录创建成功");
-          refresh();
-        } catch (error) {
-          // 错误已在API层处理
-        }
-      },
-    });
+  const handleUpdateDirectory = async () => {
+    if (!editingDirectory) return;
+
+    const directoryName = editDirectoryName.trim();
+    if (!directoryName) {
+      message.error("目录名称不能为空");
+      return;
+    }
+
+    setUpdatingDirectory(true);
+    try {
+      const oldPath = editingDirectory.Path;
+      const parentPath = getParentDirectoryPath(oldPath);
+      const newPath = parentPath ? `${parentPath}/${directoryName}` : `/${directoryName}`;
+
+      await directoryAPI.updateDirectory(editingDirectory.Id, projectId, {
+        Name: directoryName,
+        SortOrder: editDirectorySortOrder,
+      });
+      message.success("目录更新成功");
+      setEditDirectoryVisible(false);
+      setEditingDirectory(null);
+      if (selectedPath === oldPath || selectedPath.startsWith(`${oldPath}/`)) {
+        setSelectedPath(selectedPath.replace(oldPath, newPath));
+      }
+      await refresh();
+    } catch (error) {
+      // 错误已在API层处理
+    } finally {
+      setUpdatingDirectory(false);
+    }
+  };
+
+  const getParentDirectoryPath = (path: string): string => {
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length <= 1) {
+      return "";
+    }
+    return `/${parts.slice(0, -1).join("/")}`;
+  };
+
+  const handleDeleteDirectory = async () => {
+    if (!deletingDirectory) return;
+
+    if (deleteDirectoryConfirmName.trim() !== deletingDirectory.Name) {
+      message.error("请输入正确的目录名称以确认删除");
+      return;
+    }
+
+    setDeleteDirectoryLoading(true);
+    try {
+      await directoryAPI.deleteDirectory(deletingDirectory.Id, projectId);
+      message.success("目录删除成功");
+      setDeleteDirectoryVisible(false);
+      setDeleteDirectoryConfirmName("");
+      if (selectedPath === deletingDirectory.Path || selectedPath.startsWith(`${deletingDirectory.Path}/`)) {
+        setSelectedPath(getParentDirectoryPath(deletingDirectory.Path));
+        setCurrentPage(1);
+      }
+      setDeletingDirectory(null);
+      await refresh();
+    } catch (error) {
+      // 错误已在API层处理
+    } finally {
+      setDeleteDirectoryLoading(false);
+    }
   };
 
   const getSelectedDirectoryId = (path: string): string | undefined => {
@@ -822,16 +929,16 @@ const FilesPage: React.FC<FilesPageProps> = ({
         <Space>
           {!isReadOnly && (
             <>
-          <Button icon={<PlusOutlined />} onClick={handleCreateDirectory}>
-            新建目录
-          </Button>
-          <Button
-            type="primary"
-            icon={<UploadOutlined />}
-            onClick={() => openUploadModal("file")}
-          >
-            上传文件
-          </Button>
+              <Button icon={<PlusOutlined />} onClick={handleOpenCreateDirectory}>
+                新建目录
+              </Button>
+              <Button
+                type="primary"
+                icon={<UploadOutlined />}
+                onClick={() => openUploadModal("file")}
+              >
+                上传文件
+              </Button>
               <Button
                 type="primary"
                 icon={<FolderAddOutlined />}
@@ -921,6 +1028,146 @@ const FilesPage: React.FC<FilesPageProps> = ({
           </Card>
         </Col>
       </Row>
+
+      <Modal
+        title={
+          <Space>
+            <ExclamationCircleOutlined style={{ color: "#faad14" }} />
+            <span>创建目录</span>
+          </Space>
+        }
+        open={createDirectoryVisible}
+        onOk={handleCreateDirectory}
+        onCancel={() => setCreateDirectoryVisible(false)}
+        okText="确定"
+        cancelText="取消"
+        confirmLoading={creatingDirectory}
+        destroyOnClose
+        centered
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%", paddingTop: 8 }}>
+          <div>
+            <Text>请输入目录名称：</Text>
+            <Input
+              placeholder="请输入目录名称"
+              value={createDirectoryName}
+              onChange={(event) => setCreateDirectoryName(event.target.value)}
+              onPressEnter={handleCreateDirectory}
+              style={{ marginTop: 8 }}
+              autoFocus
+            />
+          </div>
+          <div>
+            <Text>请输入排序号：</Text>
+            <InputNumber
+              placeholder="请输入排序号"
+              min={0}
+              precision={0}
+              value={createDirectorySortOrder}
+              onChange={(value) => setCreateDirectorySortOrder(value ?? DEFAULT_DIRECTORY_SORT_ORDER)}
+              onPressEnter={handleCreateDirectory}
+              style={{ width: "100%", marginTop: 8 }}
+            />
+          </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={
+          <Space>
+            <EditOutlined style={{ color: "#1890ff" }} />
+            <span>编辑目录</span>
+          </Space>
+        }
+        open={editDirectoryVisible}
+        onOk={handleUpdateDirectory}
+        onCancel={() => setEditDirectoryVisible(false)}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={updatingDirectory}
+        destroyOnClose
+        centered
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%", paddingTop: 8 }}>
+          <div>
+            <Text>目录名称：</Text>
+            <Input
+              placeholder="请输入目录名称"
+              value={editDirectoryName}
+              onChange={(event) => setEditDirectoryName(event.target.value)}
+              onPressEnter={handleUpdateDirectory}
+              style={{ marginTop: 8 }}
+              autoFocus
+            />
+          </div>
+          <div>
+            <Text>排序号：</Text>
+            <InputNumber
+              placeholder="请输入排序号"
+              min={0}
+              precision={0}
+              value={editDirectorySortOrder}
+              onChange={(value) => setEditDirectorySortOrder(value ?? DEFAULT_DIRECTORY_SORT_ORDER)}
+              onPressEnter={handleUpdateDirectory}
+              style={{ width: "100%", marginTop: 8 }}
+            />
+          </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={
+          <Space>
+            <ExclamationCircleOutlined style={{ color: "#ff4d4f", fontSize: 22 }} />
+            <span>确认删除目录</span>
+          </Space>
+        }
+        open={deleteDirectoryVisible}
+        onOk={handleDeleteDirectory}
+        onCancel={() => setDeleteDirectoryVisible(false)}
+        okText="确认删除"
+        cancelText="取消"
+        confirmLoading={deleteDirectoryLoading}
+        okButtonProps={{
+          danger: true,
+          disabled: deleteDirectoryConfirmName.trim() !== deletingDirectory?.Name,
+        }}
+        centered
+      >
+        <div style={{ paddingTop: 8 }}>
+          <div style={{ marginBottom: 16, fontSize: 16, fontWeight: 500 }}>
+            {deletingDirectory?.Name}
+          </div>
+          <Alert
+            type="error"
+            style={{
+              backgroundColor: "#fff1f0",
+              border: "1px solid #ffa39e",
+              borderRadius: 8,
+              marginBottom: 24,
+            }}
+            message={
+              <div style={{ color: "#cf1322" }}>
+                <div style={{ marginBottom: 4 }}>
+                  • 将删除目录中的所有文件 ({deletingDirectory ? calculateTotalFiles(deletingDirectory) : 0}个文件)
+                </div>
+                <div style={{ marginBottom: 4 }}>• 将删除所有子目录</div>
+                <div style={{ fontWeight: 600 }}>• 此操作不可恢复，请谨慎操作</div>
+              </div>
+            }
+          />
+          <div style={{ marginBottom: 8, color: "#595959" }}>
+            请输入目录名称以确认删除：
+          </div>
+          <Input
+            placeholder={deletingDirectory?.Name}
+            value={deleteDirectoryConfirmName}
+            onChange={(event) => setDeleteDirectoryConfirmName(event.target.value)}
+            onPressEnter={handleDeleteDirectory}
+            style={{ height: 44, borderRadius: 6 }}
+          />
+        </div>
+      </Modal>
 
       <Modal
         title={uploadType === "file" ? "上传文件" : "上传目录"}

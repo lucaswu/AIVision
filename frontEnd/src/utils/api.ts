@@ -8,6 +8,7 @@ import {
   ApiResponse,
   CreateProjectRequest,
   CreateDirectoryRequest,
+  UpdateDirectoryRequest,
   CreateTaskRequest,
   TaskSubmitRequest,
   Report,
@@ -170,6 +171,12 @@ export const directoryAPI = {
   createDirectory: (projectId: string, data: CreateDirectoryRequest) =>
     request<Directory>("/api/v1/directories/create", {
       method: "POST",
+      headers: { "project-id": projectId },
+      body: JSON.stringify(data),
+    }),
+  updateDirectory: (directoryId: string, projectId: string, data: UpdateDirectoryRequest) =>
+    request<void>(`/api/v1/directories/${directoryId}`, {
+      method: "PUT",
       headers: { "project-id": projectId },
       body: JSON.stringify(data),
     }),

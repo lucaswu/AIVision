@@ -14,7 +14,52 @@
   border: 1px solid #91d5ff;
 }
 .custom-tree-node {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
+}
+
+.custom-tree-node-name {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.custom-tree-node-name span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-tree-node-meta {
+  flex-shrink: 0;
+}
+
+.custom-tree-node-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.custom-file-tree .ant-tree-treenode:hover .custom-tree-node-actions,
+.custom-file-tree .ant-tree-node-selected .custom-tree-node-actions {
+  opacity: 1;
+}
+
+.custom-tree-file-count {
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 10px;
+  color: #1890ff;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  min-width: 24px;
+  padding: 0 8px;
+  text-align: center;
 }
 
 /* 修复表格滚动时固定列背景色缺失问题 */

@@ -21,10 +21,10 @@ import javax.validation.Valid;
 @CrossOrigin(origins = "*")
 @Tag(name = "目录管理", description = "AI Vision 项目目录管理相关接口 V1")
 public class DirectoryController {
-    
+
     @Autowired
     private DirectoryService directoryService;
-    
+
     /**
      * 创建目录
      * POST /api/v1/directories/create
@@ -60,10 +60,10 @@ public class DirectoryController {
     public ResponseEntity<ApiResponse<CreateDirectoryResponse>> createDirectory(
         @Parameter(description = "项目ID", required = true, example = "70072504-0da8-4638-8f53-4ca031da7604", in = ParameterIn.HEADER)
         @RequestHeader("project-id") String projectId,
-        
+
         @Parameter(description = "用户ID", required = true, example = "user001", in = ParameterIn.HEADER)
         @RequestHeader("user-id") String userId,
-        
+
         @io.swagger.v3.oas.annotations.parameters.RequestBody(
             description = "创建目录请求",
             required = true,
@@ -78,7 +78,7 @@ public class DirectoryController {
             )
         )
         @Valid @RequestBody CreateDirectoryRequest request) {
-        
+
         try {
             // 验证必要参数
             if (projectId == null || projectId.trim().isEmpty()) {
@@ -87,21 +87,44 @@ public class DirectoryController {
             if (userId == null || userId.trim().isEmpty()) {
                 return ResponseEntity.badRequest().body(ApiResponse.error(400, "用户ID不能为空"));
             }
-            
-            String dirId = directoryService.createDirectory(projectId, userId, request.getName(), request.getParentDirectoryId());
+
+            String dirId = directoryService.createDirectory(projectId, userId, request.getName(), request.getParentDirectoryId(), request.getSortOrder());
             Directory directory = directoryService.getDirectoryById(dirId, projectId, userId);
-            
-            CreateDirectoryResponse data = new CreateDirectoryResponse(dirId, directory.getDirPath());
+
+            CreateDirectoryResponse data = new CreateDirectoryResponse(dirId, directory.getDirPath(), directory.getSortOrder());
             return ResponseEntity.ok(ApiResponse.success("目录创建成功", data));
-            
+
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
-            
+
         } catch (RuntimeException e) {
             return ResponseEntity.status(409).body(ApiResponse.error(409, e.getMessage()));
-            
+
         } catch (Exception e) {
             return ResponseEntity.status(500).body(ApiResponse.error(500, "服务器内部错误: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 更新目录
+     * PUT /api/v1/directories/{dirId}
+     */
+    @PutMapping("/{dirId}")
+    @Operation(summary = "更新目录", description = "更新目录名称或排序号")
+    public ResponseEntity<ApiResponse<Void>> updateDirectory(
+            @PathVariable String dirId,
+            @RequestHeader("project-id") String projectId,
+            @RequestHeader("user-id") String userId,
+            @Valid @RequestBody UpdateDirectoryRequest request) {
+        try {
+            directoryService.updateDirectory(dirId, projectId, userId, request.getName(), request.getSortOrder());
+            return ResponseEntity.ok(ApiResponse.success("目录更新成功", null));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(409).body(ApiResponse.error(409, e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, "服务器内部错误"));
         }
     }
 
@@ -110,7 +133,7 @@ public class DirectoryController {
      * DELETE /api/v1/directories/{dirId}
      */
     @DeleteMapping("/{dirId}")
-    @Operation(summary = "删除目录", description = "删除目录（必须为空目录）")
+    @Operation(summary = "删除目录", description = "递归删除目录及其子目录、文件")
     public ResponseEntity<ApiResponse<Void>> deleteDirectory(
             @PathVariable String dirId,
             @RequestHeader("project-id") String projectId,
@@ -124,4 +147,4 @@ public class DirectoryController {
             return ResponseEntity.status(500).body(ApiResponse.error(500, "服务器内部错误"));
         }
     }
-} 
+}

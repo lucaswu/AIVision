@@ -431,8 +431,8 @@ public class ProjectService {
             }
         }
         
-        // 获取项目下的所有目录，按层级和名称排序
-        List<Directory> directories = directoryRepository.findByProjectIdAndStatusOrderByDirLevelAscDirNameAsc(
+        // 获取项目下的所有目录，按层级、排序号和名称排序
+        List<Directory> directories = directoryRepository.findByProjectIdAndStatusOrderByDirLevelAscSortOrderAscDirNameAsc(
             projectId, Directory.Status.ACTIVE);
         
         // 获取项目下的所有文件
@@ -487,6 +487,9 @@ public class ProjectService {
         // 添加子目录
         List<Directory> subDirectories = childrenMap.get(directory.getDirId());
         if (subDirectories != null) {
+            subDirectories.sort(Comparator
+                .comparing((Directory dir) -> Optional.ofNullable(dir.getSortOrder()).orElse(99))
+                .thenComparing(Directory::getDirName, Comparator.nullsLast(String::compareTo)));
             for (Directory subDir : subDirectories) {
                 ProjectFileTreeResponse.TreeNode subDirNode = buildDirectoryTree(subDir, childrenMap, fileMap);
                 children.add(subDirNode);
@@ -516,6 +519,7 @@ public class ProjectService {
             directory.getDirName(),
             directory.getProjectId(),
             directory.getUserId(),
+            directory.getSortOrder(),
             children
         );
         
