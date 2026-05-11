@@ -489,6 +489,98 @@ const clearDirectorySubtreeSelections = (
   });
 };
 
+const addDirectorySubtreeFileSelections = (
+  node: FileTreeNode,
+  selectedItems: SelectedItemsState
+): number => {
+  if (node.Type === "file") {
+    selectedItems.files.set(node.Id, { name: node.Name, path: node.Path });
+    return 1;
+  }
+
+  let selectedFileCount = 0;
+  node.Children?.forEach((child) => {
+    selectedFileCount += addDirectorySubtreeFileSelections(child, selectedItems);
+  });
+
+  if (selectedFileCount === 0) {
+    selectedItems.directories.set(node.Id, { name: node.Name, path: node.Path });
+  } else {
+    selectedItems.directories.delete(node.Id);
+  }
+
+  return selectedFileCount;
+};
+
+const removeAncestorDirectorySelections = (
+  filePath: string | undefined,
+  selectedItems: SelectedItemsState
+) => {
+  if (!filePath) {
+    return;
+  }
+
+  Array.from(selectedItems.directories.entries()).forEach(([id, directory]) => {
+    if (
+      directory.path &&
+      (filePath === directory.path || filePath.startsWith(`${directory.path}/`))
+    ) {
+      selectedItems.directories.delete(id);
+    }
+  });
+};
+
+const getDirectoryCheckState = (
+  nodes: FileTreeNode[],
+  selectedItems: SelectedItemsState
+) => {
+  const checkedDirectoryIds = new Set<string>();
+  const halfCheckedDirectoryIds = new Set<string>();
+
+  const walk = (node: FileTreeNode): { totalFiles: number; selectedFiles: number; hasSelection: boolean } => {
+    if (node.Type === "file") {
+      const selected = selectedItems.files.has(node.Id);
+      return {
+        totalFiles: 1,
+        selectedFiles: selected ? 1 : 0,
+        hasSelection: selected,
+      };
+    }
+
+    let totalFiles = 0;
+    let selectedFiles = 0;
+    let hasSelection = selectedItems.directories.has(node.Id);
+
+    node.Children?.forEach((child) => {
+      const childState = walk(child);
+      totalFiles += childState.totalFiles;
+      selectedFiles += childState.selectedFiles;
+      hasSelection = hasSelection || childState.hasSelection;
+    });
+
+    if (totalFiles === 0) {
+      if (selectedItems.directories.has(node.Id)) {
+        checkedDirectoryIds.add(node.Id);
+      }
+    } else if (selectedFiles === totalFiles) {
+      checkedDirectoryIds.add(node.Id);
+    } else if (selectedFiles > 0 || hasSelection) {
+      halfCheckedDirectoryIds.add(node.Id);
+    }
+
+    return { totalFiles, selectedFiles, hasSelection };
+  };
+
+  nodes.forEach(walk);
+
+  checkedDirectoryIds.forEach((id) => halfCheckedDirectoryIds.delete(id));
+
+  return {
+    checkedDirectoryIds: Array.from(checkedDirectoryIds),
+    halfCheckedDirectoryIds: Array.from(halfCheckedDirectoryIds),
+  };
+};
+
 const CreateTaskView: React.FC<CreateTaskViewProps> = ({
   onBack,
   projectId,
@@ -692,19 +784,32 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({
     [filesResp]
   );
 
-  const autoCheckedDirectoryIds = useMemo(
+  const directoryCheckState = useMemo(
+    () => getDirectoryCheckState(filesResp?.Data || [], selectedItems),
+    [filesResp, selectedItems]
+  );
+
+  const ancestorDirectoryIdsForFiles = useMemo(
     () => getAncestorDirectoryIdsForFiles(selectedItems.files, directoryPathIdMap),
     [selectedItems.files, directoryPathIdMap]
   );
 
-  const treeCheckedKeys = useMemo(
-    () => Array.from(new Set([
+  const treeCheckedKeys = useMemo(() => ({
+    checked: Array.from(new Set([
       ...Array.from<string>(selectedItems.files.keys()),
       ...Array.from<string>(selectedItems.directories.keys()),
-      ...autoCheckedDirectoryIds,
+      ...directoryCheckState.checkedDirectoryIds,
+      ...ancestorDirectoryIdsForFiles,
     ])),
-    [selectedItems.files, selectedItems.directories, autoCheckedDirectoryIds]
-  );
+    halfChecked: directoryCheckState.halfCheckedDirectoryIds.filter(
+      (id) => !ancestorDirectoryIdsForFiles.includes(id)
+    ),
+  }), [
+    selectedItems.files,
+    selectedItems.directories,
+    directoryCheckState,
+    ancestorDirectoryIdsForFiles,
+  ]);
 
   const handleCheck = (checkedKeys: any, info: any) => {
     const newSelected: SelectedItemsState = {
@@ -715,14 +820,16 @@ const FileSelectionModal: React.FC<FileSelectionModalProps> = ({
 
     if (info.checked) {
       if (node.Type === 'directory') {
-        newSelected.directories.set(node.Id, { name: node.Name, path: node.Path });
+        addDirectorySubtreeFileSelections(node, newSelected);
       } else {
+        removeAncestorDirectorySelections(node.Path, newSelected);
         newSelected.files.set(node.Id, { name: node.Name, path: node.Path });
       }
     } else {
       if (node.Type === 'directory') {
         clearDirectorySubtreeSelections(node, newSelected);
       } else {
+        removeAncestorDirectorySelections(node.Path, newSelected);
         newSelected.files.delete(node.Id);
       }
     }
