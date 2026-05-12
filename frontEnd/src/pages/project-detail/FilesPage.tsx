@@ -52,6 +52,7 @@ import HighBitPreviewImage from "@/components/HighBitPreviewImage";
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
 const DEFAULT_DIRECTORY_SORT_ORDER = 99;
+const ROOT_DIRECTORY_PATH = "";
 
 function formatUploadSize(size: number): string {
   if (size >= 1024 * 1024 * 1024) {
@@ -83,6 +84,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [uploadType, setUploadType] = useState<"file" | "directory">("file");
+  const [uploadTargetPath, setUploadTargetPath] = useState<string>(ROOT_DIRECTORY_PATH);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewFile, setPreviewFile] = useState<any | null>(null);
   // 新增状态管理上传文件列表
@@ -526,17 +528,38 @@ const FilesPage: React.FC<FilesPageProps> = ({
   }, []);
 
   const openUploadModal = (type: "file" | "directory") => {
+    const selectedDirectoryExists = Boolean(getSelectedDirectoryId(selectedPath));
+    const firstDirectoryPath = flattenedDirectories[0]?.Path ?? ROOT_DIRECTORY_PATH;
+
     setUploadType(type);
     setUploadModalVisible(true);
+    setUploadTargetPath(
+      type === "file"
+        ? selectedDirectoryExists
+          ? selectedPath
+          : firstDirectoryPath
+        : selectedDirectoryExists
+          ? selectedPath
+          : ROOT_DIRECTORY_PATH
+    );
     setFileList([]);
     resetUploadProgress();
   };
 
   // 文件上传处理 - 支持文件和目录
   const handleFileUpload = async () => {
-    const rootDirectoryId = getSelectedDirectoryId(selectedPath);
+    const isRootUploadTarget = uploadTargetPath === ROOT_DIRECTORY_PATH;
+    const rootDirectoryId = isRootUploadTarget
+      ? undefined
+      : getSelectedDirectoryId(uploadTargetPath);
+
     if (!rootDirectoryId && uploadType === "file") {
-      message.error("请先选择一个目标目录");
+      message.error("上传文件必须选择已创建的目标目录");
+      return;
+    }
+
+    if (!isRootUploadTarget && !rootDirectoryId) {
+      message.error("目标目录不存在，请重新选择");
       return;
     }
 
@@ -649,8 +672,8 @@ const FilesPage: React.FC<FilesPageProps> = ({
               currentParentId = pathIdMap.get(thisPath);
             } else {
               // 构建在项目中的绝对逻辑路径用于查找
-              const absolutePathInProject = selectedPath
-                ? `${selectedPath}/${thisPath}`
+              const absolutePathInProject = uploadTargetPath
+                ? `${uploadTargetPath}/${thisPath}`
                 : `/${thisPath}`;
               
               console.log(`查找已存在的目录: ${absolutePathInProject}`);
@@ -894,6 +917,11 @@ const FilesPage: React.FC<FilesPageProps> = ({
     const dirId = getSelectedDirectoryId(selectedPath);
     return dirId ? [dirId] : [];
   }, [selectedPath, allDirectories]);
+
+  const canConfirmUpload =
+    fileList.length > 0 &&
+    !uploading &&
+    (uploadType === "directory" || Boolean(getSelectedDirectoryId(uploadTargetPath)));
 
   const breadcrumbItems = useMemo(() => {
     const items = [
@@ -1182,7 +1210,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
         maskClosable={!uploading}
         keyboard={!uploading}
         okButtonProps={{
-          disabled: fileList.length === 0 || uploading,
+          disabled: !canConfirmUpload,
         }}
         cancelButtonProps={{
           disabled: uploading,
@@ -1192,13 +1220,19 @@ const FilesPage: React.FC<FilesPageProps> = ({
           <div style={{ marginBottom: 16 }}>
             <Text strong>目标目录：</Text>
             <Select
-              value={selectedPath}
-              onChange={setSelectedPath}
+              value={uploadTargetPath}
+              onChange={setUploadTargetPath}
               style={{ width: "100%", marginTop: 8 }}
-              placeholder="请选择目标目录 (根目录可留空)"
-              allowClear
+              placeholder={uploadType === "file" ? "请选择已创建的目标目录" : "请选择目标目录"}
               disabled={uploading}
             >
+              <Select.Option
+                key="root"
+                value={ROOT_DIRECTORY_PATH}
+                disabled={uploadType === "file"}
+              >
+                /（根目录，仅支持上传目录）
+              </Select.Option>
               {flattenedDirectories.map((dir) => (
                 <Select.Option key={dir.Id} value={dir.Path}>
                   {dir.Path}
