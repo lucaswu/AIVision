@@ -43,7 +43,7 @@ import { useNavigate } from "react-router-dom";
 import { taskAPI, fileAPI } from "../../utils/api";
 import { Task, TaskStatus, FileTreeNode, TaskSubmitRequest } from "../../utils/data";
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text, Paragraph, Link } = Typography;
 
 interface TasksPageProps {
   projectId: string;
@@ -83,6 +83,11 @@ const TasksPage: React.FC<TasksPageProps> = ({
   const tasks = tasksResponse?.Data?.Tasks || [];
   const totalTasks = tasksResponse?.Data?.TotalCount || 0;
 
+  const openReportReview = (taskId: string) => {
+    const params = new URLSearchParams({ taskId, view: "review" });
+    navigate(`/projects/${projectId}/reports?${params.toString()}`);
+  };
+
   // 2. 任务列表列定义
   const columns: TableColumnsType<Task> = [
     {
@@ -90,7 +95,14 @@ const TasksPage: React.FC<TasksPageProps> = ({
       dataIndex: "Name",
       key: "Name",
       width: 200,
-      render: (text) => <Text strong>{text}</Text>,
+      render: (text, record) =>
+        record.Status === TaskStatus.COMPLETED ? (
+          <Link strong onClick={() => openReportReview(record.Id)}>
+            {text}
+          </Link>
+        ) : (
+          <Text strong>{text}</Text>
+        ),
     },
     {
       title: "文件数",
@@ -163,11 +175,11 @@ const TasksPage: React.FC<TasksPageProps> = ({
             </Tooltip>
           )}
           {record.Status === TaskStatus.COMPLETED && (
-            <Tooltip title="查看报告">
+            <Tooltip title="审核报告">
               <Button 
                 type="text" 
                 icon={<FileTextOutlined />} 
-                onClick={() => navigate(`/projects/${projectId}/reports`)}
+                onClick={() => openReportReview(record.Id)}
               />
             </Tooltip>
           )}

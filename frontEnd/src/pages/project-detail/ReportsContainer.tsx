@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import ReportsPage from "./ReportsPage";
 import ReportEditorPage from "./ReportEditorPage";
 import ReportPreviewPage from "./ReportPreviewPage";
@@ -11,6 +12,19 @@ interface ReportsContainerProps {
   onProjectSidebarCollapseChange?: (collapsed: boolean) => void;
 }
 
+type ReportsContainerView = "list" | "editor" | "preview";
+
+const getViewFromRoute = (
+  taskId: string | null,
+  viewParam: string | null
+): ReportsContainerView => {
+  if (!taskId) {
+    return "list";
+  }
+
+  return viewParam === "preview" ? "preview" : "editor";
+};
+
 const ReportsContainer: React.FC<ReportsContainerProps> = ({
   projectId,
   projectName,
@@ -18,22 +32,43 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
   projectSidebarCollapsed,
   onProjectSidebarCollapseChange,
 }) => {
-  const [view, setView] = useState<"list" | "editor" | "preview">("list");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const routeTaskId = searchParams.get("taskId");
+  const routeView = searchParams.get("view");
+
+  const [view, setView] = useState<ReportsContainerView>(() =>
+    getViewFromRoute(routeTaskId, routeView)
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => routeTaskId);
+
+  useEffect(() => {
+    setSelectedTaskId(routeTaskId);
+    setView(getViewFromRoute(routeTaskId, routeView));
+  }, [routeTaskId, routeView]);
+
+  const setRouteView = (nextView: Exclude<ReportsContainerView, "list">, taskId: string) => {
+    setSearchParams({
+      taskId,
+      view: nextView === "editor" ? "review" : "preview",
+    });
+  };
 
   const handleReview = (taskId: string) => {
     setSelectedTaskId(taskId);
     setView("editor");
+    setRouteView("editor", taskId);
   };
 
   const handlePreview = (taskId: string) => {
     setSelectedTaskId(taskId);
     setView("preview");
+    setRouteView("preview", taskId);
   };
 
   const handleBack = () => {
     setView("list");
     setSelectedTaskId(null);
+    setSearchParams({});
   };
 
   if (view === "editor" && selectedTaskId) {
@@ -43,7 +78,7 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
         projectId={projectId}
         projectName={projectName}
         onBack={handleBack}
-        onPreview={() => setView("preview")}
+        onPreview={() => selectedTaskId && handlePreview(selectedTaskId)}
         projectSidebarCollapsed={projectSidebarCollapsed}
         onProjectSidebarCollapseChange={onProjectSidebarCollapseChange}
       />
@@ -57,7 +92,7 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
         projectId={projectId}
         projectName={projectName || "项目"}
         onBack={handleBack}
-        onReview={() => setView("editor")}
+        onReview={() => selectedTaskId && handleReview(selectedTaskId)}
       />
     );
   }
@@ -73,4 +108,3 @@ const ReportsContainer: React.FC<ReportsContainerProps> = ({
 };
 
 export default ReportsContainer;
-
