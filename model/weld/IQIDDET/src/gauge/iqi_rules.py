@@ -8,8 +8,29 @@ from dataclasses import dataclass
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-DEFAULT_ALLOWED_NUMBERS = frozenset({6, 10, 11, 12, 13, 14, 15})
-DEFAULT_ALLOWED_NUMBERS_SPEC = "6,10-15"
+DEFAULT_ALLOWED_NUMBERS = frozenset(range(1, 20))
+DEFAULT_ALLOWED_NUMBERS_SPEC = "1-19"
+
+GENERAL_MARKER_NUMBERS = frozenset({1, 6, 10, 13})
+SPECIAL_MARKER_NUMBERS = frozenset(range(1, 20))
+
+MATERIAL_ALIASES: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "FE": ("FE", ()),
+    "NI": ("NI", ()),
+    "SS": ("SS", ()),
+    "CU": ("CU", ()),
+    "TI": ("TI", ()),
+    "AL": ("AL", ()),
+    "ZR": ("ZR", ()),
+    "EE": ("FE", ("EE->FE",)),
+    "N1": ("NI", ("N1->NI",)),
+    "NL": ("NI", ("NL->NI",)),
+    "E": ("FE", ("E+J->FE",)),
+    "I": ("NI", ("I+J->NI",)),
+}
+MATERIAL_TOKEN_REGEX = "|".join(sorted(MATERIAL_ALIASES.keys(), key=len, reverse=True))
+GENERAL_MARKER_PATTERN = re.compile(rf"(?P<number>[0-9OIL]{{1,2}})(?P<material>{MATERIAL_TOKEN_REGEX})")
+SPECIAL_MARKER_PATTERN = re.compile(rf"(?P<material>{MATERIAL_TOKEN_REGEX})(?P<number>[0-9OIL]{{1,2}})")
 
 RESULT_CODE_TABLE: Dict[int, Tuple[str, str]] = {
     0: ("success", "识别成功"),
@@ -19,14 +40,14 @@ RESULT_CODE_TABLE: Dict[int, Tuple[str, str]] = {
     2001: ("ocr_no_text", "像质计标识识别失败：ROI 内未检测到文本"),
     2002: ("marker_missing_jb", "像质计标识识别失败：未识别到 J / JB"),
     2003: ("marker_format_invalid", "像质计标识识别失败：无法组成合法标识"),
-    2004: ("marker_type_unknown", "像质计标识识别失败：类型既不是 FE 也不是 NI"),
-    2005: ("marker_number_missing", "像质计标识识别失败：未解析出两位数字"),
+    2004: ("marker_type_unknown", "像质计标识识别失败：无法判定标记顺序或材料"),
+    2005: ("marker_number_missing", "像质计标识识别失败：未解析出丝号数字"),
     2006: ("marker_ambiguous", "像质计标识识别失败：存在多个冲突候选"),
     2007: ("marker_number_out_of_range", "像质计标识识别失败：数字不在允许范围内"),
     3001: ("wire_infer_failed", "像质丝识别失败"),
     3002: ("wire_count_missing", "像质丝识别失败：未得到有效丝数"),
-    3003: ("wire_count_insufficient_uniform", "均匀像质计等级无效：像质丝数量必须大于 2"),
-    3004: ("wire_count_insufficient_gradient", "渐变像质计等级无效：像质丝数量必须大于等于 1"),
+    3003: ("wire_count_insufficient_general", "通用像质计等级无效：像质丝数量必须在 1 到 7 之间"),
+    3004: ("wire_count_insufficient_special", "专用像质计等级无效：像质丝数量必须大于等于 1"),
     3005: ("grade_out_of_range", "像质计等级计算结果越界"),
     9001: ("internal_error", "内部异常"),
 }
@@ -47,16 +68,6 @@ class PlateCandidate:
     number: int
     corrections: Tuple[str, ...]
     source_text: str
-
-
-@dataclass(frozen=True)
-class TypeEvidence:
-    iqi_type: str
-    standard_prefix: str
-    corrections: Tuple[str, ...]
-    raw_marker: str
-    position: int
-    exact: bool
 
 
 @dataclass(frozen=True)
@@ -322,119 +333,12 @@ def _parse_digit_token(token: str, allow_i: bool) -> Optional[NumberEvidence]:
     return NumberEvidence(number=int("".join(mapped)), corrections=tuple(corrections))
 
 
-def _find_type_evidences(sequence: str, require_jb: bool) -> List[TypeEvidence]:
-    seq = normalize_text(sequence)
-    evidences: List[TypeEvidence] = []
-
-    def add_exact(raw_marker: str, iqi_type: str, standard_prefix: str, corrections: Sequence[str]) -> None:
-        start = 0
-        while True:
-            idx = seq.find(raw_marker, start)
-            if idx < 0:
-                break
-            evidences.append(
-                TypeEvidence(
-                    iqi_type=iqi_type,
-                    standard_prefix=standard_prefix,
-                    corrections=tuple(corrections),
-                    raw_marker=raw_marker,
-                    position=idx,
-                    exact=True,
-                )
-            )
-            start = idx + 1
-
-    add_exact("FE", "uniform", "FE", [])
-    add_exact("NI", "gradient", "NI", [])
-    add_exact("EE", "uniform", "FE", ["EE->FE"])
-    add_exact("N1", "gradient", "NI", ["N1->NI"])
-    add_exact("NL", "gradient", "NI", ["NL->NI"])
-
-    if "J" in seq:
-        if "E" in seq:
-            evidences.append(
-                TypeEvidence(
-                    iqi_type="uniform",
-                    standard_prefix="FE",
-                    corrections=("E+J->FE",),
-                    raw_marker="",
-                    position=-1,
-                    exact=False,
-                )
-            )
-        if "I" in seq:
-            evidences.append(
-                TypeEvidence(
-                    iqi_type="gradient",
-                    standard_prefix="NI",
-                    corrections=("I+J->NI",),
-                    raw_marker="",
-                    position=-1,
-                    exact=False,
-                )
-            )
-    elif require_jb:
-        return []
-
-    unique: Dict[Tuple[str, str, Tuple[str, ...], str, int, bool], TypeEvidence] = {}
-    for evidence in evidences:
-        key = (
-            evidence.iqi_type,
-            evidence.standard_prefix,
-            evidence.corrections,
-            evidence.raw_marker,
-            evidence.position,
-            evidence.exact,
-        )
-        unique[key] = evidence
-    return list(unique.values())
+def _canonical_material_token(raw_material: str) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    token = normalize_text(raw_material)
+    return MATERIAL_ALIASES.get(token)
 
 
-def _collect_preferred_numbers(sequence: str, evidences: Sequence[TypeEvidence]) -> List[NumberEvidence]:
-    seq = normalize_text(sequence)
-    outputs: Dict[int, NumberEvidence] = {}
-    for evidence in evidences:
-        if not evidence.exact or not evidence.raw_marker:
-            continue
-
-        start = evidence.position + len(evidence.raw_marker)
-        for token in (seq[start:start + 2], seq[start:start + 1]):
-            parsed = _parse_digit_token(token, allow_i=True)
-            if parsed is not None:
-                outputs.setdefault(parsed.number, parsed)
-
-        before_end = evidence.position
-        for token in (seq[max(0, before_end - 2):before_end], seq[max(0, before_end - 1):before_end]):
-            parsed = _parse_digit_token(token, allow_i=True)
-            if parsed is not None:
-                outputs.setdefault(parsed.number, parsed)
-    return list(outputs.values())
-
-
-def _collect_generic_numbers(sequence: str) -> List[NumberEvidence]:
-    seq = normalize_text(sequence)
-    outputs: Dict[int, NumberEvidence] = {}
-    for idx in range(0, max(len(seq) - 1, 0)):
-        pair = seq[idx:idx + 2]
-        parsed = _parse_digit_token(pair, allow_i=False)
-        if parsed is None:
-            continue
-        outputs.setdefault(parsed.number, parsed)
-
-    for idx, ch in enumerate(seq):
-        if not ch.isdigit():
-            continue
-        prev_is_digit = idx > 0 and seq[idx - 1].isdigit()
-        next_is_digit = idx + 1 < len(seq) and seq[idx + 1].isdigit()
-        if prev_is_digit or next_is_digit:
-            continue
-        parsed = _parse_digit_token(ch, allow_i=False)
-        if parsed is not None:
-            outputs.setdefault(parsed.number, parsed)
-    return list(outputs.values())
-
-
-def _build_candidates_from_sequence(
+def _build_candidates_from_marker_sequence(
     sequence: str,
     require_jb: bool,
     allowed_numbers: Optional[Sequence[int]] = None,
@@ -445,33 +349,89 @@ def _build_candidates_from_sequence(
     if require_jb and "J" not in seq:
         return [], [2002]
 
-    type_evidences = _find_type_evidences(seq, require_jb=require_jb)
-    if not type_evidences:
-        return [], [2004 if "J" in seq or not require_jb else 2002]
+    candidates: List[PlateCandidate] = []
+    saw_valid_structure = False
+    saw_out_of_range = False
 
-    preferred_numbers = _collect_preferred_numbers(seq, type_evidences)
-    number_evidences = preferred_numbers if preferred_numbers else _collect_generic_numbers(seq)
-    if not number_evidences:
-        return [], [2005]
+    for match in GENERAL_MARKER_PATTERN.finditer(seq):
+        saw_valid_structure = True
+        parsed_number = _parse_digit_token(match.group("number"), allow_i=True)
+        if parsed_number is None:
+            continue
+        number = parsed_number.number
+        material_info = _canonical_material_token(match.group("material"))
+        if material_info is None:
+            continue
+        material, material_corrections = material_info
+        if number not in GENERAL_MARKER_NUMBERS:
+            saw_out_of_range = True
+            continue
+        if not is_allowed_number(number, allowed_numbers):
+            saw_out_of_range = True
+            continue
+        corrections = tuple(material_corrections) + tuple(parsed_number.corrections)
+        candidates.append(
+            PlateCandidate(
+                code=f"{number}{material}JB",
+                iqi_type="general",
+                number=number,
+                corrections=tuple(corrections),
+                source_text=seq,
+            )
+        )
 
-    valid_numbers = [entry for entry in number_evidences if is_allowed_number(entry.number, allowed_numbers)]
-    if not valid_numbers:
+    for match in SPECIAL_MARKER_PATTERN.finditer(seq):
+        saw_valid_structure = True
+        parsed_number = _parse_digit_token(match.group("number"), allow_i=True)
+        if parsed_number is None:
+            continue
+        number = parsed_number.number
+        material_info = _canonical_material_token(match.group("material"))
+        if material_info is None:
+            continue
+        material, material_corrections = material_info
+        if number not in SPECIAL_MARKER_NUMBERS:
+            saw_out_of_range = True
+            continue
+        if not is_allowed_number(number, allowed_numbers):
+            saw_out_of_range = True
+            continue
+        corrections = tuple(material_corrections) + tuple(parsed_number.corrections)
+        candidates.append(
+            PlateCandidate(
+                code=f"{material}{number}JB",
+                iqi_type="special",
+                number=number,
+                corrections=tuple(corrections),
+                source_text=seq,
+            )
+        )
+
+    if candidates:
+        return candidates, []
+
+    if saw_out_of_range:
         return [], [2007]
 
-    candidates: List[PlateCandidate] = []
-    for evidence in type_evidences:
-        for number_entry in valid_numbers:
-            code = f"{evidence.standard_prefix}{number_entry.number:02d}JB" if require_jb else f"{evidence.standard_prefix}{number_entry.number:02d}"
-            candidates.append(
-                PlateCandidate(
-                    code=code,
-                    iqi_type=evidence.iqi_type,
-                    number=number_entry.number,
-                    corrections=tuple(list(evidence.corrections) + list(number_entry.corrections)),
-                    source_text=seq,
-                )
-            )
-    return candidates, []
+    has_material = re.search(MATERIAL_TOKEN_REGEX, seq) is not None
+    has_digit = any(ch.isdigit() for ch in seq)
+    if saw_valid_structure and has_material and not has_digit:
+        return [], [2005]
+    if saw_valid_structure or has_material or has_digit:
+        return [], [2004]
+    return [], [2003]
+
+
+def _build_candidates_from_sequence(
+    sequence: str,
+    require_jb: bool,
+    allowed_numbers: Optional[Sequence[int]] = None,
+) -> Tuple[List[PlateCandidate], List[int]]:
+    return _build_candidates_from_marker_sequence(
+        sequence,
+        require_jb=require_jb,
+        allowed_numbers=allowed_numbers,
+    )
 
 
 def infer_plate_from_texts(
@@ -645,7 +605,7 @@ def compute_iqi_grade(
     wire_count: Optional[int],
     allowed_numbers: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
-    if iqi_type not in {"uniform", "gradient"} or number is None:
+    if iqi_type not in {"general", "special"} or number is None:
         return {
             **build_result_status(2003 if number is not None else 2005),
             "grade": 0,
@@ -666,16 +626,22 @@ def compute_iqi_grade(
             "wire_count": None,
         }
 
-    if iqi_type == "uniform":
-        if wire_count > 2:
-            grade = int(number)
+    if iqi_type == "general":
+        if int(number) not in GENERAL_MARKER_NUMBERS:
+            return {
+                **build_result_status(2007),
+                "grade": 0,
+                "wire_count": int(wire_count),
+            }
+        if 1 <= int(wire_count) <= 7:
+            grade = int(number) + int(wire_count) - 1
             code = 0
         else:
             grade = 0
             code = 3003
     else:
-        if wire_count >= 1:
-            grade = int(number) + int(wire_count) - 1
+        if int(wire_count) >= 1:
+            grade = int(number)
             code = 0
         else:
             grade = 0

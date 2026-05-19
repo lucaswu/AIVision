@@ -9,13 +9,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-try:
-    import pydicom
-except ImportError:  # pragma: no cover
-    pydicom = None
-
-SUPPORTED_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".dcm", ".dicom", ".dic", ".diconde")
-DICOM_EXTENSIONS = {".dcm", ".dicom", ".dic", ".diconde"}
+SUPPORTED_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
 
 def ensure_dir(path: Path) -> None:
@@ -56,39 +50,10 @@ def collect_images(
 
 
 def load_image(path: Path) -> np.ndarray:
-    if path.suffix.lower() in DICOM_EXTENSIONS:
-        return load_dicom_image(path)
-
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Failed to read image: {path}")
     return image
-
-
-def load_dicom_image(path: Path) -> np.ndarray:
-    if pydicom is None:
-        raise FileNotFoundError("pydicom not available for DICOM loading")
-
-    ds = pydicom.dcmread(str(path), force=True)
-    if not hasattr(ds, "PixelData"):
-        raise FileNotFoundError(f"No PixelData in DICOM: {path}")
-
-    image = ds.pixel_array
-    if image.ndim == 3:
-        image = image[0]
-    elif image.ndim == 4:
-        image = image[0, 0]
-
-    image = image.astype(np.float32)
-    slope = float(getattr(ds, "RescaleSlope", 1.0))
-    intercept = float(getattr(ds, "RescaleIntercept", 0.0))
-    image = image * slope + intercept
-
-    if str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1":
-        image = image.max() + image.min() - image
-
-    image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
 
 
 def resize_long_side(image: np.ndarray, target_long_side: Optional[int]) -> Tuple[np.ndarray, float]:

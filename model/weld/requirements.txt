@@ -2,41 +2,56 @@
 # AIVision Python 推理服务依赖
 # ==============================================================================
 
-# Core ML/DL - PyTorch with CUDA 12.8 support
---extra-index-url https://download.pytorch.org/whl/cu128
-torch
-torchvision
+# Core ML/DL - match local conda env py10 (CUDA 12.1)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
 
 # YOLO & Object Detection
-ultralytics>=8.0.0
+ultralytics==8.4.19
 
 # RF-DETR
-rfdetr==1.4.1
-transformers>=4.38.0,<4.45.0
-peft==0.7.1
+transformers==4.46.2
+peft==0.19.1
+supervision==0.27.0
+pycocotools==2.0.11
+polygraphy==0.49.26
+# rfdetr/rf100vl/roboflow are installed separately with --no-deps in Docker.
+# roboflow==1.2.13 hard-pins opencv-python-headless==4.10.0.84 in metadata,
+# while the py10 runtime intentionally ends on opencv-python-headless==4.13.0.92.
+pillow-avif-plugin==1.5.5
+pi-heif==1.2.0
+filetype==1.2.0
+python-dotenv==1.2.1
+requests-toolbelt==1.0.0
+matplotlib==3.8.4
 
 # Computer Vision
-opencv-python>=4.8.0
-Pillow>=10.0.0
-scikit-image>=0.21.0
-pydicom>=2.4.0
+opencv-contrib-python==4.10.0.84
+opencv-python==4.13.0.92
+opencv-python-headless==4.13.0.92
+Pillow==12.1.1
+scikit-image==0.25.2
+pydicom==3.0.2
 
 # Data Processing
-numpy>=1.24.0,<2.0.0
-scikit-learn>=1.3.0
-tqdm>=4.65.0
-PyYAML>=6.0
-numba>=0.58.0
+numpy==2.2.6
+scipy==1.15.3
+pandas==2.3.3
+scikit-learn==1.7.2
+tqdm==4.65.2
+PyYAML==6.0.2
+numba==0.63.1
 
 # API Server (FastAPI)
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
 python-multipart>=0.0.6
 httpx>=0.26.0
 
 # Utilities
-pydantic>=2.5.0
+pydantic==2.12.5
 
 # OCR (integrated PaddleOCR pipeline)
 paddleocr==3.4.0
-pandas>=2.0.0
+paddlex==3.4.2

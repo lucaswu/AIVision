@@ -19,6 +19,27 @@ import os
 import ssl
 from dataclasses import dataclass
 
+import torch
+
+
+def _patch_torch_load_for_legacy_checkpoints() -> None:
+    """Keep trusted local YOLO checkpoints loadable on PyTorch 2.6+."""
+    if getattr(torch.load, "_legacy_weights_only_patched", False):
+        return
+
+    original_load = torch.load
+
+    def legacy_load(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return original_load(*args, **kwargs)
+
+    legacy_load._legacy_weights_only_patched = True
+    torch.load = legacy_load
+
+
+_patch_torch_load_for_legacy_checkpoints()
+
 # Globally disable SSL verification for local dev
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['PYTHONHTTPSVERIFY'] = '0'
@@ -49,8 +70,11 @@ from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, 
 from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc1  # noqa: E402
 # IQI Grade Inferencer (replaces legacy OCR runner)
 IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
-if str(IQIDDET_ROOT) not in sys.path:
-    sys.path.insert(0, str(IQIDDET_ROOT))
+IQIDDET_SRC_ROOT = IQIDDET_ROOT / "src"
+for _iqi_import_path in (str(IQIDDET_SRC_ROOT), str(IQIDDET_ROOT)):
+    if _iqi_import_path in sys.path:
+        sys.path.remove(_iqi_import_path)
+sys.path[:0] = [str(IQIDDET_SRC_ROOT), str(IQIDDET_ROOT)]
 try:
     from gauge.iqi_inferencer import (  # noqa: E402
         IQIInferencer,
@@ -346,6 +370,8 @@ def parse_args() -> argparse.Namespace:
                         help="FClip 检查点路径")
     parser.add_argument("--fclip-config", default="IQIDDET/models/fclip_config.yaml",
                         help="FClip 模型配置 YAML")
+    parser.add_argument("--fclip-params", default="IQIDDET/params.yaml",
+                        help="FClip 参数 YAML")
     parser.add_argument("--fclip-device", default=None, help="FClip 推理设备")
     # OCR（文字识别，用于像质计标识读取）
     parser.add_argument("--ocr-device", choices=["cpu", "gpu"], default="gpu",
@@ -361,7 +387,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ocr-rec-model-name", default="en_PP-OCRv5_mobile_rec",
                         help="PaddleOCR 文字识别模型名称")
     parser.add_argument("--ocr-rec-model-dir", default=None,
-                        help="本地 PaddleOCR 文字识别模型目录（如 IQIDDET/models/OCR_rec_inference_best_accuracy）")
+                        help="本地 PaddleOCR 文字识别模型目录（如 IQIDDET/models/OCR_rec_inference_best_accuracy0325）")
     parser.add_argument("--enable-ocr-orientation", action="store_true",
                         help="启用文本裁剪方向矫正")
     parser.add_argument("--ocr-orientation-model",
@@ -369,8 +395,8 @@ def parse_args() -> argparse.Namespace:
                         help="文本方向矫正模型权重(.pth)")
     parser.add_argument("--ocr-orientation-device", default="cuda:0",
                         help="文本方向矫正推理设备")
-    parser.add_argument("--ocr-number-range", default="6,10-15",
-                        help="允许的像质计标号范围，如 6,10-15")
+    parser.add_argument("--ocr-number-range", default="1-19",
+                        help="允许的像质计标号范围，如 1-19")
 
     return parser.parse_args()
 
@@ -882,9 +908,6 @@ def main():
                 def _abs(p):
                     return str(Path(p).resolve()) if p else p
 
-                # 当提供本地 rec_model_dir 时，不传 rec_model_name，
-                # 让 PaddleOCR 直接从目录内 inference.yml 读取 model_name，
-                # 避免默认 model_name 与本地模型不匹配导致 AssertionError。
                 iqi_inferencer = IQIInferencer(
                     gauge_weights=_abs(args.gauge_weights),
                     fclip_ckpt=_abs(args.fclip_ckpt),
@@ -896,7 +919,7 @@ def main():
                     ocr_device=args.ocr_device,
                     ocr_det_model_name=args.ocr_det_model_name,
                     ocr_det_model_dir=_abs(args.ocr_det_model_dir),
-                    ocr_rec_model_name=None if args.ocr_rec_model_dir else args.ocr_rec_model_name,
+                    ocr_rec_model_name=args.ocr_rec_model_name,
                     ocr_rec_model_dir=_abs(args.ocr_rec_model_dir),
                     ocr_det_limit_side_len=args.ocr_det_limit_side_len,
                     ocr_det_limit_type=args.ocr_det_limit_type,
@@ -906,6 +929,7 @@ def main():
                     ocr_number_range=args.ocr_number_range,
                     fclip_device=args.fclip_device,
                     fclip_model_config=_abs(args.fclip_config),
+                    fclip_params=_abs(args.fclip_params),
                 )
             except Exception as iqi_init_err:
                 print(f"[警告] IQIInferencer 初始化失败，跳过 IQI 推理: {iqi_init_err}")

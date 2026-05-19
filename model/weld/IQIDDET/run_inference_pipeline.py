@@ -7,12 +7,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from gauge.iqi_inferencer import (
     IQIInferencer,
@@ -34,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IQI debug inference pipeline.")
     parser.add_argument("--image-path", help="Single image path to process.")
     parser.add_argument("--image-dir", help="Batch image directory to process.")
-    parser.add_argument("--image-list", help="Optional text file with image paths (one per line).")
+    parser.add_argument("--image-list", help="Optional text file with image paths or directories (one per line).")
     parser.add_argument("--output-dir", default="outputs/iqi_debug", help="Output root directory.")
     parser.add_argument("--results-json", default="iqi_results.json", help="Per-image JSON filename.")
     parser.add_argument("--stats-json", "--ocr-stats-json", dest="stats_json", default="iqi_stats.json", help="Summary JSON filename.")
@@ -56,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--gauge-class", type=int, help="Optional class id filter.")
 
-    parser.add_argument("--fclip-ckpt", help="FClip checkpoint used for wire count inference.")
+    parser.add_argument("--fclip-ckpt", required=True, help="FClip checkpoint used for wire count inference.")
     parser.add_argument("--fclip-device", default=None, help="FClip device, e.g. cuda:0/cpu.")
     parser.add_argument("--fclip-config", default="models/fclip_config.yaml", help="FClip model yaml.")
     parser.add_argument("--fclip-params", default="params.yaml", help="FClip params yaml.")
@@ -100,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ocr-number-range",
         default=DEFAULT_ALLOWED_NUMBERS_SPEC,
-        help="Allowed IQI OCR marker numbers, e.g. 6,10-15.",
+        help="Allowed IQI OCR marker numbers, e.g. 1-19.",
     )
 
     parser.add_argument(
@@ -194,6 +200,8 @@ def _build_timer_summary(results: list[dict[str, Any]]) -> Dict[str, Any]:
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
+    if not output_dir.is_absolute():
+        output_dir = (Path.cwd() / output_dir).resolve()
     ensure_dir(output_dir)
     vis_dir = output_dir / "vis"
     if args.vis:
@@ -298,6 +306,8 @@ def main() -> None:
         "ocr_det_model_dir": args.ocr_det_model_dir,
         "ocr_rec_model_name": args.ocr_rec_model_name,
         "ocr_rec_model_dir": args.ocr_rec_model_dir,
+        "ocr_det_limit_side_len": args.ocr_det_limit_side_len,
+        "ocr_det_limit_type": args.ocr_det_limit_type,
         "ocr_number_range": args.ocr_number_range,
         "enable_ocr_orientation": args.enable_ocr_orientation,
         "ocr_orientation_model": args.ocr_orientation_model,

@@ -7,12 +7,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from gauge.iqi_inferencer import (
     IQIInferencer,
@@ -66,6 +72,10 @@ def parse_args() -> argparse.Namespace:
         help="Image enhancement mode before OCR/FClip.",
     )
     parser.add_argument("--no-rotate", action="store_true", help="Disable width>height -> CCW90 rotation.")
+    parser.add_argument("--enable-correction", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--correction-model", help=argparse.SUPPRESS)
+    parser.add_argument("--correction-device", help=argparse.SUPPRESS)
+    parser.add_argument("--correction-verbose", action="store_true", help=argparse.SUPPRESS)
 
     parser.add_argument(
         "--ocr-device",
@@ -84,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ocr-number-range",
         default=DEFAULT_ALLOWED_NUMBERS_SPEC,
-        help="Allowed OCR marker numbers, e.g. 6,10-15.",
+        help="Allowed OCR marker numbers, e.g. 1-19.",
     )
 
     parser.add_argument("--enable-ocr-orientation", action="store_true", help="Enable text-crop orientation correction before OCR recognition.")
@@ -149,6 +159,10 @@ def main() -> None:
         gauge_class=args.gauge_class,
         enhance_mode=args.enhance_mode,
         rotate_roi=not args.no_rotate,
+        enable_correction=args.enable_correction,
+        correction_model=args.correction_model,
+        correction_device=args.correction_device,
+        correction_verbose=args.correction_verbose,
         ocr_device=args.ocr_device,
         ocr_det_model_name=args.ocr_det_model_name,
         ocr_det_model_dir=args.ocr_det_model_dir,

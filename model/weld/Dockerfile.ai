@@ -18,6 +18,8 @@ ENV TORCH_HOME=/app/cache/torch
 ENV HF_HOME=/app/cache/huggingface
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# IQIDDET/src contains the current IQI rules; keep it before the legacy IQIDDET root.
+ENV PYTHONPATH=/app/model/IQIDDET/src:/app/model/IQIDDET:/app/model
 # 确保 PaddlePaddle 能找到系统 cuDNN 库
 ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
@@ -52,21 +54,22 @@ WORKDIR /app
 
 # ── PaddlePaddle 安装 ─────────────────────────────────────────────────────────
 # 根据 USE_GPU 决定安装 GPU 版还是 CPU 版
-# CUDA 12.1 镜像兼容 cu118/cu123 版 PaddlePaddle，使用 3.0 GPU 版本
+# CUDA 12.1 镜像下固定为 py10 环境验证过的 PaddlePaddle 版本。
 ARG INSTALL_PADDLE=true
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$INSTALL_PADDLE" = "true" ]; then \
     if [ "$USE_GPU" = "true" ]; then \
-        pip install paddlepaddle-gpu==3.1.0 \
-            -i https://www.paddlepaddle.org.cn/packages/stable/cu123/ \
+        pip install paddlepaddle-gpu==3.3.0 \
+            -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ \
             --extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple \
             --trusted-host www.paddlepaddle.org.cn \
             --trusted-host paddle-whl.bj.bcebos.com \
             --trusted-host pypi.tuna.tsinghua.edu.cn; \
     else \
-        pip install paddlepaddle==3.1.0 \
-            -i https://mirrors.aliyun.com/pypi/simple/ \
-            --trusted-host mirrors.aliyun.com; \
+        pip install paddlepaddle==3.3.0 \
+            -i https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
+            --trusted-host www.paddlepaddle.org.cn \
+            --trusted-host paddle-whl.bj.bcebos.com; \
     fi \
     fi
 
@@ -75,7 +78,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # 复制依赖文件并安装（构建上下文为 model/ 目录）
 COPY weld/requirements.txt .
-# PaddleOCR 3.4 与 PaddlePaddle 3.0 兼容，不再有 opencv 版本冲突，直接安装
+COPY weld/requirements-rfdetr-nodeps.txt .
+# 其余 Python 依赖版本与本机 py10 环境对齐；PaddlePaddle 已在上一步按 CPU/GPU 单独安装。
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$USE_GPU" = "false" ]; then \
     sed -i '/--extra-index-url/d' requirements.txt; \
@@ -83,7 +87,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt \
         -i https://pypi.tuna.tsinghua.edu.cn/simple \
         --trusted-host pypi.tuna.tsinghua.edu.cn && \
-    pip install paddleocr==3.4.0 \
+    pip install --no-deps -r requirements-rfdetr-nodeps.txt \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        --trusted-host pypi.tuna.tsinghua.edu.cn && \
+    pip install --force-reinstall --no-deps \
+        opencv-contrib-python==4.10.0.84 \
+        opencv-python==4.13.0.92 \
+        opencv-python-headless==4.13.0.92 \
         -i https://pypi.tuna.tsinghua.edu.cn/simple \
         --trusted-host pypi.tuna.tsinghua.edu.cn
 
@@ -92,6 +102,7 @@ RUN mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights
 
 # 复制焊缝模型代码
 COPY weld/ /app/model/
+RUN rm -rf /app/model/IQIDDET/gauge
 
 # 将模型权重文件显式复制到 /app/model/weights/（本地 weight/ → 容器 weights/）
 COPY weld/weight/ /app/model/weights/

@@ -536,7 +536,7 @@ EXPORT_DIR=/home/cht/code/IQIdet/OCRtrain/runs/iqi_en_PP-OCRv5_mobile_rec/infere
 bash OCRtrain/tools/export_rec.sh
 ```
 
-7. 导出完成后，在 `run_inference_pipeline.py` 里使用：
+7. 导出完成后，在统一入口 `run_iqi_grade_infer.py` 里使用：
 
 ```bash
 --ocr-rec-model-dir /home/cht/code/IQIdet/OCRtrain/runs/iqi_en_PP-OCRv5_mobile_rec/inference

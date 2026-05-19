@@ -21,8 +21,9 @@ class RegionOCRService:
 
     def __init__(
         self,
-        ocr_det_model_dir: str = "models/PP-OCRv5_server_det",
-        ocr_rec_model_dir: str = "models/OCR_rec_inference_best_accuracy",
+        ocr_det_model_dir: Optional[str] = None,
+        ocr_det_model_name: str = "PP-OCRv5_server_det",
+        ocr_rec_model_dir: str = "models/OCR_rec_inference_best_accuracy0325",
         ocr_rec_model_name: str = "en_PP-OCRv5_mobile_rec",
         ocr_device: str = "gpu",
         enhance_mode: str = "windowing",
@@ -32,14 +33,14 @@ class RegionOCRService:
         ocr_orientation_verbose: bool = False,
         python_bin: Optional[str] = None,
     ):
-        self.repo_root = Path(__file__).resolve().parents[1]
+        self.repo_root = Path(__file__).resolve().parents[2]
         self.enhance_mode = str(enhance_mode)
         self.ocr_orientation_verbose = bool(ocr_orientation_verbose)
         self._infer_lock = threading.Lock()
         self.ocr_backend = PaddleOCRSubprocessClient(
             device=ocr_device,
-            det_model_name="PP-OCRv5_server_det",
-            det_model_dir=str(self._resolve_path(ocr_det_model_dir)),
+            det_model_name=ocr_det_model_name,
+            det_model_dir=str(self._resolve_path(ocr_det_model_dir)) if ocr_det_model_dir else None,
             rec_model_name=ocr_rec_model_name,
             rec_model_dir=str(self._resolve_path(ocr_rec_model_dir)),
             python_bin=python_bin or sys.executable,

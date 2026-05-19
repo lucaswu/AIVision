@@ -9,7 +9,7 @@ opencv-python
 PyYAML
 docopt
 tqdm
-ultralytics
+ultralytics>=8.3.0
 optuna
 paddleocr
 

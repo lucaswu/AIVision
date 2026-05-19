@@ -40,7 +40,7 @@ class PaddleOCRSubprocessClient:
         self.python_bin = python_bin or sys.executable
         self.det_limit_side_len = int(det_limit_side_len) if det_limit_side_len is not None else None
         self.det_limit_type = str(det_limit_type) if det_limit_type else None
-        self.repo_root = Path(__file__).resolve().parents[1]
+        self.repo_root = Path(__file__).resolve().parents[2]
         self.worker_script = Path(__file__).with_name("ocr_paddle_worker.py")
         self.process: Optional[subprocess.Popen[str]] = None
         self._start()
@@ -51,12 +51,11 @@ class PaddleOCRSubprocessClient:
             str(self.worker_script),
             "--device",
             self.device,
+            "--det-model-name",
+            self.det_model_name,
+            "--rec-model-name",
+            self.rec_model_name,
         ]
-        # 只有非 None 时才传参数；det/rec_model_dir 存在时 model_name 可为 None
-        if self.det_model_name:
-            cmd.extend(["--det-model-name", self.det_model_name])
-        if self.rec_model_name:
-            cmd.extend(["--rec-model-name", self.rec_model_name])
         if self.det_model_dir:
             cmd.extend(["--det-model-dir", str(self.det_model_dir)])
         if self.rec_model_dir:

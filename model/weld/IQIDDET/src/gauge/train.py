@@ -66,7 +66,7 @@ def build_train_args(cfg: Dict[str, Any], augment: Dict[str, Any]) -> Dict[str, 
     project = cfg.get("project", "logs/gauge")
     project_path = Path(project)
     if not project_path.is_absolute():
-        repo_root = Path(__file__).resolve().parents[1]
+        repo_root = Path(__file__).resolve().parents[2]
         project_path = (repo_root / project_path).resolve()
     project = str(project_path)
     run_name = cfg["run_name"]

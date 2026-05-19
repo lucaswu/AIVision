@@ -70,6 +70,6 @@ gauge_train:
   cache: false
   val: true
   save_period: -1
-  augment: gauge/config/augment.yaml
+  augment: src/gauge/config/augment.yaml
   metrics_path: metrics/gauge_metrics.json
   extra_args: {}

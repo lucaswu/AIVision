@@ -329,6 +329,7 @@ def _build_runtime_args(
         gauge_select="conf",
         fclip_ckpt=os.environ.get("FCLIP_CKPT", "IQIDDET/models/fclip67.pth.tar"),
         fclip_config=os.environ.get("FCLIP_CONFIG", "IQIDDET/models/fclip_config.yaml"),
+        fclip_params=os.environ.get("FCLIP_PARAMS", "IQIDDET/params.yaml"),
         fclip_device=None,
         ocr_device="gpu" if _cuda_available else "cpu",
         ocr_det_model_name="PP-OCRv5_server_det",
@@ -336,11 +337,11 @@ def _build_runtime_args(
         ocr_det_limit_side_len=960,
         ocr_det_limit_type="max",
         ocr_rec_model_name="en_PP-OCRv5_mobile_rec",
-        ocr_rec_model_dir=os.environ.get("OCR_REC_MODEL_DIR", "IQIDDET/models/OCR_rec_inference_best_accuracy"),
+        ocr_rec_model_dir=os.environ.get("OCR_REC_MODEL_DIR", "IQIDDET/models/OCR_rec_inference_best_accuracy0325"),
         enable_ocr_orientation=True,
         ocr_orientation_model=os.environ.get("OCR_ORIENTATION_MODEL", "IQIDDET/models/ocr_orientation_model.pth"),
         ocr_orientation_device="cuda:0" if _cuda_available else "cpu",
-        ocr_number_range="6,10-15",
+        ocr_number_range="1-19",
     )
 
     # Align default path semantics with the CLI script.
@@ -371,6 +372,7 @@ def _build_runtime_signature(args: argparse.Namespace) -> Tuple[Any, ...]:
         args.gauge_weights,
         args.fclip_ckpt,
         args.fclip_config,
+        args.fclip_params,
         args.gauge_device,
         args.ocr_device,
         args.ocr_det_model_name,
@@ -457,7 +459,7 @@ def _create_runtime_bundle(args: argparse.Namespace) -> Dict[str, Any]:
                     ocr_device=args.ocr_device,
                     ocr_det_model_name=args.ocr_det_model_name,
                     ocr_det_model_dir=_abs(args.ocr_det_model_dir),
-                    ocr_rec_model_name=None if args.ocr_rec_model_dir else args.ocr_rec_model_name,
+                    ocr_rec_model_name=args.ocr_rec_model_name,
                     ocr_rec_model_dir=_abs(args.ocr_rec_model_dir),
                     ocr_det_limit_side_len=args.ocr_det_limit_side_len,
                     ocr_det_limit_type=args.ocr_det_limit_type,
@@ -467,6 +469,7 @@ def _create_runtime_bundle(args: argparse.Namespace) -> Dict[str, Any]:
                     ocr_number_range=args.ocr_number_range,
                     fclip_device=args.fclip_device,
                     fclip_model_config=_abs(args.fclip_config),
+                    fclip_params=_abs(args.fclip_params),
                 )
             except Exception as iqi_init_err:
                 print(f"[runtime] [警告] IQIInferencer 初始化失败，跳过 IQI 推理: {iqi_init_err}")
@@ -720,8 +723,11 @@ async def cancel_task(task_id: str):
 # ==============================================================================
 
 _IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
-if str(_IQIDDET_ROOT) not in sys.path:
-    sys.path.insert(0, str(_IQIDDET_ROOT))
+_IQIDDET_SRC_ROOT = _IQIDDET_ROOT / "src"
+for _iqi_import_path in (str(_IQIDDET_SRC_ROOT), str(_IQIDDET_ROOT)):
+    if _iqi_import_path in sys.path:
+        sys.path.remove(_iqi_import_path)
+sys.path[:0] = [str(_IQIDDET_SRC_ROOT), str(_IQIDDET_ROOT)]
 
 from gauge.region_ocr_api import (
     RecognizeRequest as _BaseRecognizeRequest,
@@ -860,7 +866,7 @@ def _init_ocr_cpu() -> None:
         os.environ.get("OCR_DET_MODEL_DIR", "IQIDDET/models/PP-OCRv5_server_det")
     )
     rec_model_dir = _abs_model_path(
-        os.environ.get("OCR_REC_MODEL_DIR", "IQIDDET/models/OCR_rec_inference_best_accuracy")
+        os.environ.get("OCR_REC_MODEL_DIR", "IQIDDET/models/OCR_rec_inference_best_accuracy0325")
     )
     orientation_model = _abs_model_path(
         os.environ.get("OCR_ORIENTATION_MODEL", "IQIDDET/models/ocr_orientation_model.pth")
@@ -1179,13 +1185,14 @@ def _sync_run_inference_via_script(request: InferenceRequest):
             "--gauge-weights",        os.environ.get("GAUGE_WEIGHTS",        "IQIDDET/models/guagerotation.pt"),
             "--fclip-ckpt",           os.environ.get("FCLIP_CKPT",           "IQIDDET/models/fclip67.pth.tar"),
             "--fclip-config",         os.environ.get("FCLIP_CONFIG",         "IQIDDET/models/fclip_config.yaml"),
-            "--ocr-rec-model-dir",    os.environ.get("OCR_REC_MODEL_DIR",    "IQIDDET/models/OCR_rec_inference_best_accuracy"),
+            "--fclip-params",         os.environ.get("FCLIP_PARAMS",         "IQIDDET/params.yaml"),
+            "--ocr-rec-model-dir",    os.environ.get("OCR_REC_MODEL_DIR",    "IQIDDET/models/OCR_rec_inference_best_accuracy0325"),
             "--ocr-det-model-dir",    os.environ.get("OCR_DET_MODEL_DIR",    "IQIDDET/models/PP-OCRv5_server_det"),
             "--enable-ocr-orientation",
             "--ocr-orientation-model", os.environ.get("OCR_ORIENTATION_MODEL", "IQIDDET/models/ocr_orientation_model.pth"),
             "--ocr-orientation-device", iqi_device,
             "--ocr-device",           "gpu" if _cuda_available else "cpu",
-            "--ocr-number-range",     "6,10-15",
+            "--ocr-number-range",     "1-19",
         ]
         print(f"[Task {task_id}] 启用IQI像质计识别 (device={iqi_device})")
     else:
