@@ -331,6 +331,11 @@ export const userAPI = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  ssoJwtLogin: (data: { token: string }) =>
+    request<any>("/api/v1/users/sso-login-jwt", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 // 缺陷类型相关API

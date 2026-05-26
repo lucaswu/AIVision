@@ -56,6 +56,18 @@ default-user:
   user-id: default-user
   user-name: 默认用户
 
+# SSO JWT Configuration
+sso:
+  jwt:
+    enabled: ${SSO_JWT_ENABLED:false}
+    public-key: ${SSO_JWT_PUBLIC_KEY:}
+    public-key-file: ${SSO_JWT_PUBLIC_KEY_FILE:classpath:sso_public_key.pem}
+    issuer: ${SSO_JWT_ISSUER:external-system}
+    audience: ${SSO_JWT_AUDIENCE:ai-vision}
+    allowed-clock-skew-seconds: ${SSO_JWT_ALLOWED_CLOCK_SKEW_SECONDS:60}
+    auto-create-users: ${SSO_JWT_AUTO_CREATE_USERS:true}
+    default-role: ${SSO_JWT_DEFAULT_ROLE:INSPECTOR}
+
 # File Upload Configuration
 file-upload:
   allowed-image-types:

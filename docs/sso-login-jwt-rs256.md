@@ -1,0 +1,501 @@
+# AI Vision SSO 单点登录方案：JWT + RS256
+
+本文档用于指导外部系统和 AI Vision 内部开发，将 SSO 单点登录升级为标准的 `JWT + RS256` 非对称签名方案。
+
+## 1. 方案目标
+
+外部系统用户已登录后，外部系统签发一个 JWT，并使用自己的 RSA 私钥进行 `RS256` 签名。AI Vision 只保存外部系统提供的 RSA 公钥，用公钥验证 JWT 的真实性。
+
+推荐跳转形式：
+
+```text
+https://<AI_VISION_DOMAIN>/sso-login?token=<JWT>
+```
+
+其中：
+
+- 外部系统持有：RSA 私钥
+- AI Vision 持有：RSA 公钥
+- 外部系统负责：生成 JWT、签名、跳转
+- AI Vision 负责：验签、校验过期时间、校验签发方、创建或匹配本系统用户
+
+## 2. 为什么使用 RS256
+
+当前共享密钥方案是 `HMAC-SHA256`，双方都要保存同一个 `SSO_SHARED_SECRET`。任意一方泄露密钥，都可以伪造登录参数。
+
+`RS256` 使用非对称密钥：
+
+- 外部系统用私钥签名。
+- AI Vision 用公钥验签。
+- 公钥泄露不会导致伪造登录。
+- AI Vision 不需要保存外部系统私钥。
+
+注意：这里使用的是“私钥签名、公钥验签”，不是“公钥加密、私钥解密”。公钥加密不能证明数据来自可信系统。
+
+## 3. 登录流程
+
+```text
+1. 用户登录外部系统
+2. 外部系统生成 JWT payload
+3. 外部系统使用 RSA 私钥对 JWT 做 RS256 签名
+4. 外部系统跳转到 AI Vision：
+   /sso-login?token=<JWT>
+5. AI Vision 前端读取 token
+6. AI Vision 前端调用后端：
+   POST /api/v1/users/sso-login-jwt
+7. AI Vision 后端使用外部系统公钥验证 JWT
+8. 验证通过后，根据用户名查找或创建本系统用户
+9. AI Vision 返回本系统登录态
+10. 前端写入 localStorage 并跳转到 redirect 页面
+```
+
+## 4. JWT 内容规范
+
+### 4.1 Header
+
+```json
+{
+  "alg": "RS256",
+  "typ": "JWT"
+}
+```
+
+### 4.2 Payload
+
+推荐字段：
+
+```json
+{
+  "iss": "external-system",
+  "aud": "ai-vision",
+  "sub": "zhangsan",
+  "username": "zhangsan",
+  "role": "INSPECTOR",
+  "redirect": "/projects",
+  "iat": 1760000000,
+  "exp": 1760000300,
+  "nonce": "8f3a2c9b6d1e4a7f"
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 示例 | 说明 |
+| --- | --- | --- | --- |
+| `iss` | 是 | `external-system` | JWT 签发方，AI Vision 会校验。 |
+| `aud` | 是 | `ai-vision` | JWT 接收方，AI Vision 会校验。 |
+| `sub` | 是 | `zhangsan` | 用户唯一标识，建议使用外部系统用户名或用户 ID。 |
+| `username` | 否 | `zhangsan` | 用户名。若不传，AI Vision 可使用 `sub` 作为用户名。 |
+| `role` | 否 | `INSPECTOR` | 用户角色，支持 `INSPECTOR`、`ADMIN`。普通用户建议传 `INSPECTOR`。 |
+| `redirect` | 否 | `/projects` | 登录成功后进入 AI Vision 的页面。 |
+| `iat` | 是 | `1760000000` | 签发时间，单位是秒。 |
+| `exp` | 是 | `1760000300` | 过期时间，单位是秒。建议有效期 5 分钟以内。 |
+| `nonce` | 否 | `8f3a2c9b6d1e4a7f` | 随机串，建议每次生成。需要防重放时由 AI Vision 记录已使用 nonce。 |
+
+### 4.3 角色约定
+
+AI Vision 当前支持：
+
+```text
+ADMIN
+INSPECTOR
+```
+
+建议外部系统默认传：
+
+```text
+INSPECTOR
+```
+
+如果 AI Vision 中用户已存在，建议以内置数据库中的角色为准，不自动覆盖已有用户角色。
+
+## 5. 密钥生成和交换
+
+由外部系统生成 RSA 密钥对。
+
+生成私钥：
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out sso_private_key.pem
+```
+
+生成公钥：
+
+```bash
+openssl rsa -in sso_private_key.pem -pubout -out sso_public_key.pem
+```
+
+交付规则：
+
+- `sso_private_key.pem`：只保存在外部系统，不能提供给 AI Vision。
+- `sso_public_key.pem`：提供给 AI Vision，用于验签。
+
+公钥示例：
+
+```text
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQE...
+-----END PUBLIC KEY-----
+```
+
+## 6. 外部系统生成 JWT
+
+### 6.1 Java 示例
+
+示例使用 `java-jwt`：
+
+```xml
+<dependency>
+    <groupId>com.auth0</groupId>
+    <artifactId>java-jwt</artifactId>
+    <version>4.4.0</version>
+</dependency>
+```
+
+生成 JWT：
+
+```java
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
+
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.KeyFactory;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Date;
+import java.util.UUID;
+
+public class AiVisionSsoJwtBuilder {
+    public static void main(String[] args) throws Exception {
+        String aiVisionBaseUrl = "https://<AI_VISION_DOMAIN>";
+
+        RSAPrivateKey privateKey = loadPrivateKey("sso_private_key.pem");
+        Algorithm algorithm = Algorithm.RSA256(null, privateKey);
+
+        Instant now = Instant.now();
+        String username = "zhangsan";
+        String redirect = "/projects";
+
+        String token = JWT.create()
+                .withIssuer("external-system")
+                .withAudience("ai-vision")
+                .withSubject(username)
+                .withClaim("username", username)
+                .withClaim("role", "INSPECTOR")
+                .withClaim("redirect", redirect)
+                .withClaim("nonce", UUID.randomUUID().toString().replace("-", ""))
+                .withIssuedAt(Date.from(now))
+                .withExpiresAt(Date.from(now.plusSeconds(300)))
+                .sign(algorithm);
+
+        String url = aiVisionBaseUrl + "/sso-login?token=" + java.net.URLEncoder.encode(token, "UTF-8");
+        System.out.println(url);
+    }
+
+    private static RSAPrivateKey loadPrivateKey(String path) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(path)));
+        pem = pem.replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+
+        byte[] decoded = Base64.getDecoder().decode(pem);
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decoded);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        return (RSAPrivateKey) keyFactory.generatePrivate(keySpec);
+    }
+}
+```
+
+如果使用 `openssl genrsa` 生成了 `-----BEGIN RSA PRIVATE KEY-----` 格式的 PKCS#1 私钥，部分 Java 库读取会不方便。可以转换为 PKCS#8：
+
+```bash
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+  -in sso_private_key.pem \
+  -out sso_private_key_pkcs8.pem
+```
+
+### 6.2 Node.js 示例
+
+安装依赖：
+
+```bash
+npm install jsonwebtoken
+```
+
+生成 JWT：
+
+```javascript
+const fs = require("fs");
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+
+const aiVisionBaseUrl = "https://<AI_VISION_DOMAIN>";
+const privateKey = fs.readFileSync("sso_private_key.pem", "utf8");
+
+const username = "zhangsan";
+
+const token = jwt.sign(
+  {
+    username,
+    role: "INSPECTOR",
+    redirect: "/projects",
+    nonce: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+  },
+  privateKey,
+  {
+    algorithm: "RS256",
+    issuer: "external-system",
+    audience: "ai-vision",
+    subject: username,
+    expiresIn: "5m",
+  }
+);
+
+const url = `${aiVisionBaseUrl}/sso-login?token=${encodeURIComponent(token)}`;
+console.log(url);
+```
+
+如果 Node.js 版本没有 `crypto.randomUUID`，可改用：
+
+```javascript
+const crypto = require("crypto");
+const nonce = crypto.randomBytes(16).toString("hex");
+```
+
+## 7. AI Vision 内部开发改造
+
+### 7.1 前端改造
+
+当前 HMAC 方案的跳转地址为：
+
+```text
+/sso-login?username=...&timestamp=...&signature=...
+```
+
+RS256 JWT 方案建议改为：
+
+```text
+/sso-login?token=<JWT>
+```
+
+前端逻辑：
+
+```typescript
+const params = new URLSearchParams(location.search);
+const token = params.get("token");
+
+const res = await userAPI.ssoJwtLogin({ token });
+
+localStorage.setItem("token", res.Data.token);
+localStorage.setItem("userId", res.Data.userId);
+localStorage.setItem("username", res.Data.username);
+localStorage.setItem("role", res.Data.role);
+
+navigate(res.Data.redirect || "/projects", { replace: true });
+```
+
+建议新增 API：
+
+```typescript
+ssoJwtLogin: (data: { token: string }) =>
+  request<any>("/api/v1/users/sso-login-jwt", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+```
+
+### 7.2 后端接口
+
+建议新增接口：
+
+```http
+POST /api/v1/users/sso-login-jwt
+Content-Type: application/json
+
+{
+  "token": "<JWT>"
+}
+```
+
+返回格式继续复用当前登录响应：
+
+```json
+{
+  "Code": 200,
+  "Message": "SSO登录成功",
+  "Data": {
+    "userId": "xxx",
+    "username": "zhangsan",
+    "role": "INSPECTOR",
+    "token": "本系统登录token",
+    "redirect": "/projects"
+  }
+}
+```
+
+如果暂时不修改 `UserLoginResponse`，也可以由前端从 JWT 中读取 `redirect`，但更建议后端验签后返回可信的 `redirect`。
+
+### 7.3 后端配置
+
+建议新增配置：
+
+```yaml
+sso:
+  jwt:
+    enabled: ${SSO_JWT_ENABLED:false}
+    public-key: ${SSO_JWT_PUBLIC_KEY:}
+    public-key-file: ${SSO_JWT_PUBLIC_KEY_FILE:}
+    issuer: ${SSO_JWT_ISSUER:external-system}
+    audience: ${SSO_JWT_AUDIENCE:ai-vision}
+    allowed-clock-skew-seconds: ${SSO_JWT_ALLOWED_CLOCK_SKEW_SECONDS:60}
+    auto-create-users: ${SSO_JWT_AUTO_CREATE_USERS:true}
+    default-role: ${SSO_JWT_DEFAULT_ROLE:INSPECTOR}
+```
+
+环境变量示例：
+
+```bash
+SSO_JWT_ENABLED=true
+SSO_JWT_PUBLIC_KEY_FILE=/app/config/sso_public_key.pem
+SSO_JWT_ISSUER=external-system
+SSO_JWT_AUDIENCE=ai-vision
+SSO_JWT_ALLOWED_CLOCK_SKEW_SECONDS=60
+SSO_JWT_AUTO_CREATE_USERS=true
+SSO_JWT_DEFAULT_ROLE=INSPECTOR
+```
+
+### 7.4 后端验签逻辑
+
+后端必须校验：
+
+1. `alg` 必须是 `RS256`。
+2. JWT 签名必须能用配置的公钥验证通过。
+3. `iss` 必须等于配置的 `SSO_JWT_ISSUER`。
+4. `aud` 必须包含配置的 `SSO_JWT_AUDIENCE`。
+5. `exp` 未过期。
+6. `iat` 不应明显晚于服务器当前时间。
+7. `sub` 或 `username` 必须存在。
+8. `role` 如果存在，必须是 AI Vision 支持的角色。
+9. `redirect` 必须是站内相对路径，不能是外部 URL。
+10. 如需防重放，`nonce` 必须未使用过，验证成功后记录为已使用。
+
+### 7.5 Java 后端验签示例
+
+示例使用 `java-jwt`：
+
+```java
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.JWTVerifier;
+import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.interfaces.DecodedJWT;
+
+Algorithm algorithm = Algorithm.RSA256(publicKey, null);
+
+JWTVerifier verifier = JWT.require(algorithm)
+        .withIssuer("external-system")
+        .withAudience("ai-vision")
+        .acceptLeeway(60)
+        .build();
+
+DecodedJWT jwt = verifier.verify(token);
+
+String username = jwt.getClaim("username").asString();
+if (username == null || username.trim().isEmpty()) {
+    username = jwt.getSubject();
+}
+
+String role = jwt.getClaim("role").asString();
+String redirect = jwt.getClaim("redirect").asString();
+String nonce = jwt.getClaim("nonce").asString();
+```
+
+### 7.6 用户匹配规则
+
+建议规则：
+
+```text
+1. 优先使用 username claim
+2. username 为空时使用 sub
+3. 按 username 查询 AI Vision users 表
+4. 用户存在：使用 AI Vision 数据库中的 role/status
+5. 用户不存在且允许自动创建：创建 ACTIVE 用户
+6. 用户不存在且不允许自动创建：拒绝登录
+7. 用户状态不是 ACTIVE：拒绝登录
+```
+
+### 7.7 redirect 安全规则
+
+只允许站内相对路径：
+
+允许：
+
+```text
+/projects
+/projects/123/files
+```
+
+拒绝：
+
+```text
+https://example.com
+//example.com
+javascript:alert(1)
+```
+
+后端建议兜底：
+
+```text
+redirect 为空或非法时，使用 /projects
+```
+
+## 8. 推荐错误码和错误信息
+
+| 场景 | HTTP 状态 | Message |
+| --- | --- | --- |
+| 未启用 SSO JWT | 400 | `SSO JWT登录未启用` |
+| token 为空 | 400 | `SSO token不能为空` |
+| 签名无效 | 400 | `SSO token签名无效` |
+| token 过期 | 400 | `SSO token已过期` |
+| issuer 不匹配 | 400 | `SSO token签发方无效` |
+| audience 不匹配 | 400 | `SSO token接收方无效` |
+| 用户不存在且不允许自动创建 | 400 | `用户不存在` |
+| 用户被禁用 | 400 | `账号已被禁用` |
+
+## 9. 测试用例建议
+
+AI Vision 内部建议覆盖：
+
+1. 正确 JWT 可以登录成功。
+2. 正确 JWT 且用户不存在时自动创建用户。
+3. 签名被篡改时拒绝。
+4. `exp` 过期时拒绝。
+5. `iss` 不匹配时拒绝。
+6. `aud` 不匹配时拒绝。
+7. `role` 非法时拒绝。
+8. 已禁用用户拒绝登录。
+9. 非法 `redirect` 自动回退到 `/projects`。
+10. 如果启用 nonce 防重放，同一个 `nonce` 第二次使用时拒绝。
+
+## 10. 与当前 HMAC 方案的关系
+
+当前已有方案：
+
+```text
+/sso-login?username=...&role=...&timestamp=...&nonce=...&redirect=...&signature=...
+```
+
+推荐升级方案：
+
+```text
+/sso-login?token=<JWT>
+```
+
+过渡期可以同时支持两种方式：
+
+- 如果 URL 中有 `token`，走 JWT + RS256。
+- 如果 URL 中没有 `token`，保留旧 HMAC 参数方式。
+
+生产环境建议最终只保留 JWT + RS256。

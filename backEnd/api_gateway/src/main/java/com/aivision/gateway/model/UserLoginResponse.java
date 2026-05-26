@@ -17,11 +17,19 @@ public class UserLoginResponse {
     @Schema(description = "访问令牌")
     private String token;
 
+    @Schema(description = "登录成功后的站内跳转地址")
+    private String redirect;
+
     public UserLoginResponse(String userId, String username, String role, String token) {
+        this(userId, username, role, token, null);
+    }
+
+    public UserLoginResponse(String userId, String username, String role, String token, String redirect) {
         this.userId = userId;
         this.username = username;
         this.role = role;
         this.token = token;
+        this.redirect = redirect;
     }
 
     // Getters
@@ -29,5 +37,5 @@ public class UserLoginResponse {
     public String getUsername() { return username; }
     public String getRole() { return role; }
     public String getToken() { return token; }
+    public String getRedirect() { return redirect; }
 }
-

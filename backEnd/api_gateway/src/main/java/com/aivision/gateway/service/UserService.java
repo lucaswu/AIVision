@@ -1,5 +1,15 @@
 package com.aivision.gateway.service;
 
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.JWTVerifier;
+import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.exceptions.AlgorithmMismatchException;
+import com.auth0.jwt.exceptions.JWTDecodeException;
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.exceptions.SignatureVerificationException;
+import com.auth0.jwt.exceptions.TokenExpiredException;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import com.aivision.gateway.config.SsoProperties;
 import com.aivision.gateway.model.*;
 import com.aivision.gateway.repository.ProjectRepository;
 import com.aivision.gateway.repository.UserProjectPermissionRepository;
@@ -8,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -15,7 +26,15 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.KeyFactory;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,6 +53,9 @@ public class UserService implements CommandLineRunner {
     
     @Autowired
     private ProjectRepository projectRepository;
+
+    @Autowired
+    private SsoProperties ssoProperties;
 
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -83,6 +105,50 @@ public class UserService implements CommandLineRunner {
                 user.getUsername(),
                 user.getRole().name(),
                 token
+        );
+    }
+
+    /**
+     * SSO JWT登录
+     */
+    @Transactional
+    public UserLoginResponse ssoJwtLogin(SsoJwtLoginRequest request) {
+        SsoProperties.Jwt jwtProperties = ssoProperties.getJwt();
+        if (!jwtProperties.isEnabled()) {
+            throw new IllegalArgumentException("SSO JWT登录未启用");
+        }
+
+        String token = trimToNull(request.getToken());
+        if (token == null) {
+            throw new IllegalArgumentException("SSO token不能为空");
+        }
+
+        DecodedJWT jwt = verifySsoJwt(token, jwtProperties);
+        validateRequiredJwtClaims(jwt, jwtProperties);
+
+        String claimUsername = trimToNull(jwt.getClaim("username").asString());
+        String username = claimUsername != null ? claimUsername : trimToNull(jwt.getSubject());
+        if (username == null) {
+            throw new IllegalArgumentException("SSO token用户不能为空");
+        }
+
+        String tokenRole = trimToNull(jwt.getClaim("role").asString());
+        User.Role role = parseRole(tokenRole != null ? tokenRole : jwtProperties.getDefaultRole());
+        String redirect = sanitizeRedirect(jwt.getClaim("redirect").asString());
+
+        User user = userRepository.findByUsername(username)
+                .orElseGet(() -> createSsoUser(username, role, jwtProperties));
+
+        if (!User.Status.ACTIVE.equals(user.getStatus())) {
+            throw new IllegalArgumentException("账号已被禁用");
+        }
+
+        return new UserLoginResponse(
+                user.getUserId(),
+                user.getUsername(),
+                user.getRole().name(),
+                UUID.randomUUID().toString(),
+                redirect
         );
     }
 
@@ -235,6 +301,141 @@ public class UserService implements CommandLineRunner {
         userRepository.deleteById(userId);
     }
 
+    private DecodedJWT verifySsoJwt(String token, SsoProperties.Jwt jwtProperties) {
+        try {
+            DecodedJWT decoded = JWT.decode(token);
+            if (!"RS256".equalsIgnoreCase(decoded.getAlgorithm())) {
+                throw new IllegalArgumentException("SSO token签名无效");
+            }
+
+            Algorithm algorithm = Algorithm.RSA256(loadPublicKey(jwtProperties), null);
+            JWTVerifier verifier = JWT.require(algorithm)
+                    .acceptLeeway(Math.max(0, jwtProperties.getAllowedClockSkewSeconds()))
+                    .build();
+            return verifier.verify(token);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (TokenExpiredException e) {
+            throw new IllegalArgumentException("SSO token已过期");
+        } catch (SignatureVerificationException | AlgorithmMismatchException e) {
+            throw new IllegalArgumentException("SSO token签名无效");
+        } catch (JWTDecodeException e) {
+            throw new IllegalArgumentException("SSO token格式无效");
+        } catch (JWTVerificationException e) {
+            throw new IllegalArgumentException("SSO token校验失败");
+        } catch (Exception e) {
+            logger.error("SSO JWT公钥加载或验签失败", e);
+            throw new IllegalArgumentException("SSO token签名无效");
+        }
+    }
+
+    private void validateRequiredJwtClaims(DecodedJWT jwt, SsoProperties.Jwt jwtProperties) {
+        String expectedIssuer = trimToNull(jwtProperties.getIssuer());
+        if (expectedIssuer != null && !expectedIssuer.equals(jwt.getIssuer())) {
+            throw new IllegalArgumentException("SSO token签发方无效");
+        }
+
+        String expectedAudience = trimToNull(jwtProperties.getAudience());
+        if (expectedAudience != null
+                && (jwt.getAudience() == null || !jwt.getAudience().contains(expectedAudience))) {
+            throw new IllegalArgumentException("SSO token接收方无效");
+        }
+
+        if (jwt.getExpiresAt() == null) {
+            throw new IllegalArgumentException("SSO token过期时间不能为空");
+        }
+
+        Date issuedAt = jwt.getIssuedAt();
+        if (issuedAt == null) {
+            throw new IllegalArgumentException("SSO token签发时间不能为空");
+        }
+
+        long nowMillis = System.currentTimeMillis();
+        long allowedFutureMillis = Math.max(0, jwtProperties.getAllowedClockSkewSeconds()) * 1000L;
+        if (issuedAt.getTime() - nowMillis > allowedFutureMillis) {
+            throw new IllegalArgumentException("SSO token签发时间无效");
+        }
+    }
+
+    private User createSsoUser(String username, User.Role role, SsoProperties.Jwt jwtProperties) {
+        if (!jwtProperties.isAutoCreateUsers()) {
+            throw new IllegalArgumentException("用户不存在");
+        }
+
+        User user = new User();
+        user.setUserId(UUID.randomUUID().toString());
+        user.setUsername(username);
+        user.setPassword(passwordEncoder.encode(UUID.randomUUID().toString()));
+        user.setRole(role);
+        user.setStatus(User.Status.ACTIVE);
+        return userRepository.save(user);
+    }
+
+    private User.Role parseRole(String role) {
+        String normalizedRole = trimToNull(role);
+        if (normalizedRole == null) {
+            normalizedRole = User.Role.INSPECTOR.name();
+        }
+
+        try {
+            return User.Role.valueOf(normalizedRole.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("SSO token用户角色无效");
+        }
+    }
+
+    private String sanitizeRedirect(String redirect) {
+        String value = trimToNull(redirect);
+        if (value == null || !value.startsWith("/") || value.startsWith("//")) {
+            return "/projects";
+        }
+        return value;
+    }
+
+    private RSAPublicKey loadPublicKey(SsoProperties.Jwt jwtProperties) throws Exception {
+        String publicKey = trimToNull(jwtProperties.getPublicKey());
+        if (publicKey == null) {
+            publicKey = loadPublicKeyFile(jwtProperties.getPublicKeyFile());
+        }
+        if (publicKey == null) {
+            throw new IllegalArgumentException("SSO JWT公钥未配置");
+        }
+
+        String normalized = publicKey
+                .replace("\\n", "\n")
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+
+        byte[] decoded = Base64.getDecoder().decode(normalized);
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decoded);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        return (RSAPublicKey) keyFactory.generatePublic(keySpec);
+    }
+
+    private String loadPublicKeyFile(String publicKeyFile) throws Exception {
+        String path = trimToNull(publicKeyFile);
+        if (path == null) {
+            return null;
+        }
+
+        if (path.startsWith("classpath:")) {
+            String resourcePath = path.substring("classpath:".length());
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            return new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        }
+
+        return new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private UserResponse toUserResponse(User user, List<UserResponse.UserProjectPermissionDTO> permissions) {
         UserResponse response = new UserResponse();
         response.setUserId(user.getUserId());
@@ -246,4 +447,3 @@ public class UserService implements CommandLineRunner {
         return response;
     }
 }
-

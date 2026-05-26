@@ -33,6 +33,17 @@ public class UserController {
         }
     }
 
+    @PostMapping("/sso-login-jwt")
+    @Operation(summary = "SSO JWT单点登录")
+    public ResponseEntity<ApiResponse<UserLoginResponse>> ssoJwtLogin(@Valid @RequestBody SsoJwtLoginRequest request) {
+        try {
+            UserLoginResponse response = userService.ssoJwtLogin(request);
+            return ResponseEntity.ok(ApiResponse.success("SSO登录成功", response));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
+        }
+    }
+
     @PostMapping
     @Operation(summary = "创建用户")
     public ResponseEntity<ApiResponse<UserResponse>> createUser(@Valid @RequestBody CreateUserRequest request) {
@@ -89,5 +100,4 @@ public class UserController {
         }
     }
 }
-
 

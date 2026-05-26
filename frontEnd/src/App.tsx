@@ -10,6 +10,7 @@ import UserAddEdit from "./pages/UserAddEdit";
 import ProjectDetail from "./pages/ProjectDetail";
 import CreateProject from "./pages/CreateProject";
 import Login from "./pages/Login";
+import SsoLogin from "./pages/SsoLogin";
 import { rootSidebarItems } from "./utils/constans";
 import { projectAPI } from "./utils/api";
 import { useRequest } from "ahooks";
@@ -112,6 +113,7 @@ function AppContent() {
     >
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/sso-login" element={<SsoLogin />} />
         <Route
           path="/*"
           element={
