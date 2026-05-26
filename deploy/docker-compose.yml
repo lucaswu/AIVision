@@ -66,6 +66,9 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minio123456@!}
       - MINIO_BUCKET=${MINIO_BUCKET:-ai-vision-files}
 
+      # SSO JWT
+      - SSO_JWT_ENABLED=${SSO_JWT_ENABLED:-true}
+
       # JVM优化参数
       - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport
     networks:
