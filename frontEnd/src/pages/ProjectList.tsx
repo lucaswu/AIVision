@@ -21,6 +21,7 @@ import {
   ExclamationCircleOutlined,
   FileOutlined,
   CalendarOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import { useRequest } from "ahooks";
 import {
@@ -37,6 +38,7 @@ export default function ProjectList() {
     current: 1,
     pageSize: 10,
   });
+  const [searchText, setSearchText] = useState("");
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -62,7 +64,13 @@ export default function ProjectList() {
     });
   }, [projectsResponse]);
 
-  const total = projects.length;
+  const filteredProjects = useMemo(() => {
+    if (!searchText.trim()) return projects;
+    const keyword = searchText.trim().toLowerCase();
+    return projects.filter((p) => p.Name.toLowerCase().includes(keyword));
+  }, [projects, searchText]);
+
+  const total = filteredProjects.length;
   const userRole = localStorage.getItem("role");
   const isAdmin = userRole === "ADMIN";
 
@@ -198,7 +206,7 @@ export default function ProjectList() {
   ];
 
   // 分页后的数据
-  const paginatedData = projects.slice(
+  const paginatedData = filteredProjects.slice(
     (pagination.current - 1) * pagination.pageSize,
     pagination.current * pagination.pageSize
   );
@@ -219,17 +227,30 @@ export default function ProjectList() {
           </Title>
           <Text type="secondary">管理您的检测项目和文件</Text>
         </div>
-        {isAdmin && (
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            size="large"
-            onClick={handleCreateProject}
-            style={{ height: 48, borderRadius: 8, padding: "0 24px" }}
-          >
-            新增项目
-          </Button>
-        )}
+        <Space size={12}>
+          <Input
+            placeholder="搜索项目名称"
+            prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
+            allowClear
+            value={searchText}
+            onChange={(e) => {
+              setSearchText(e.target.value);
+              setPagination((p) => ({ ...p, current: 1 }));
+            }}
+            style={{ width: 260, height: 48, borderRadius: 8 }}
+          />
+          {isAdmin && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              size="large"
+              onClick={handleCreateProject}
+              style={{ height: 48, borderRadius: 8, padding: "0 24px" }}
+            >
+              新增项目
+            </Button>
+          )}
+        </Space>
         </div>
 
       <Card
