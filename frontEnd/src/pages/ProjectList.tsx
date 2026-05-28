@@ -148,7 +148,7 @@ export default function ProjectList() {
       render: (text: string, record: Project) => (
         <Button
           type="link"
-          style={{ padding: 0, height: "auto", fontWeight: 500 }}
+          style={{ padding: 0, height: "auto", fontWeight: 500, whiteSpace: "normal", textAlign: "left", lineHeight: "1.5" }}
           onClick={() => handleViewProject(record)}
         >
           {text}
