@@ -93,6 +93,19 @@ public class DirectoryService {
             return existingDir.get().getDirId();
         }
 
+        // 检查是否存在已软删除的同名目录：若有则复用（直接插入新行会违反 unique_dir_name_per_parent 约束）
+        Optional<Directory> deletedDir = directoryRepository.findByProjectIdAndParentIdAndDirNameAndStatus(
+            projectId, finalParentId, normalizedName, Directory.Status.DELETED);
+        if (deletedDir.isPresent()) {
+            Directory reactivated = deletedDir.get();
+            reactivated.setStatus(Directory.Status.ACTIVE);
+            reactivated.setDirPath(dirPath);
+            reactivated.setDirLevel(dirLevel);
+            reactivated.setSortOrder(normalizedSortOrder);
+            directoryRepository.save(reactivated);
+            return reactivated.getDirId();
+        }
+
         // 6. 创建新目录
         String dirId = UUID.randomUUID().toString();
         Directory directory = new Directory(dirId, projectId, userId, finalParentId, normalizedName, dirPath, dirLevel, normalizedSortOrder);
