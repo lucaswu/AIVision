@@ -571,6 +571,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
     const totalFiles = fileList.length;
     const totalBytes = fileList.reduce((sum, file) => sum + getUploadFileSize(file), 0);
     let successMessage = "";
+    let totalFailed = 0;
 
     setUploading(true);
     updateUploadProgress(0, totalBytes, 0, totalFiles, "正在准备上传...");
@@ -745,8 +746,9 @@ const FilesPage: React.FC<FilesPageProps> = ({
                 },
               }
             );
-            console.log(`目录 ${fullPath} 文件上传成功，数量: ${uploadRes.Data.SuccessCount}`);
+            console.log(`目录 ${fullPath} 文件上传成功: ${uploadRes.Data.SuccessCount}, 失败: ${uploadRes.Data.FailedCount}`);
             totalSuccess += uploadRes.Data.SuccessCount;
+            totalFailed += uploadRes.Data.FailedCount ?? 0;
             uploadedBytes += batchBytes;
             uploadedFiles += filesInDir.length;
             updateUploadProgress(
@@ -759,7 +761,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
           }
         }
         updateUploadProgress(totalBytes, totalBytes, totalFiles, totalFiles, "上传完成", { isFinal: true });
-        successMessage = `目录上传完成，共成功上传 ${totalSuccess} 个文件`;
+        successMessage = `目录上传完成，共成功上传 ${totalSuccess} 个文件${totalFailed > 0 ? `，${totalFailed} 个文件上传失败` : ""}`;
       }
 
       // 重置状态并刷新
@@ -767,7 +769,11 @@ const FilesPage: React.FC<FilesPageProps> = ({
       setUploadModalVisible(false);
       resetUploadProgress();
       if (successMessage) {
-        message.success(successMessage);
+        if (uploadType === "directory" && totalFailed > 0) {
+          message.warning(successMessage);
+        } else {
+          message.success(successMessage);
+        }
       }
       await refresh(); // 等待数据刷新
     } catch (error: any) {

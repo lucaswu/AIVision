@@ -209,15 +209,19 @@ public class FileService {
             String fullPath = objectPath; // 逻辑路径
             
             // 3. 保存文件到存储服务 (Local or MinIO)
-            try (InputStream inputStream = file.getInputStream()) {
-                storageStrategy.upload(inputStream, fullPath, file.getContentType(), file.getSize());
+            String contentType = file.getContentType();
+            if (contentType == null || contentType.trim().isEmpty()) {
+                contentType = "application/octet-stream";
             }
-            
+            try (InputStream inputStream = file.getInputStream()) {
+                storageStrategy.upload(inputStream, fullPath, contentType, file.getSize());
+            }
+
             // 4. 保存到数据库（只存元数据，不存内容）
             File fileEntity = new File(
                 fileId, projectId, userId, directoryId,
                 originalFilename, storedName, fullPath,
-                file.getSize(), file.getContentType(), fileExtension
+                file.getSize(), contentType, fileExtension
             );
             
             fileRepository.save(fileEntity);
@@ -232,6 +236,7 @@ public class FileService {
                 fileId, originalFilename, file.getSize(), fullPath));
                 
         } catch (Exception e) {
+            logger.error("文件处理失败: {}, 错误: {}", originalFilename, e.getMessage(), e);
             failedFiles.add(new FileUploadResponse.FailedFileInfo(
                 originalFilename, "文件上传失败: " + e.getMessage()));
         }
