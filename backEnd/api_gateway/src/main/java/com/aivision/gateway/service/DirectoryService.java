@@ -93,18 +93,10 @@ public class DirectoryService {
             return existingDir.get().getDirId();
         }
 
-        // 检查是否存在已软删除的同名目录：若有则复用（直接插入新行会违反 unique_dir_name_per_parent 约束）
-        Optional<Directory> deletedDir = directoryRepository.findByProjectIdAndParentIdAndDirNameAndStatus(
+        // unique_dir_name_per_parent 约束不包含 status，软删除的同名目录行仍占用唯一槽位，
+        // 直接插入新行会违反约束。这里先物理清除这些残留行（其子目录/文件由外键级联删除），再插入。
+        directoryRepository.deleteByProjectIdAndParentIdAndDirNameAndStatus(
             projectId, finalParentId, normalizedName, Directory.Status.DELETED);
-        if (deletedDir.isPresent()) {
-            Directory reactivated = deletedDir.get();
-            reactivated.setStatus(Directory.Status.ACTIVE);
-            reactivated.setDirPath(dirPath);
-            reactivated.setDirLevel(dirLevel);
-            reactivated.setSortOrder(normalizedSortOrder);
-            directoryRepository.save(reactivated);
-            return reactivated.getDirId();
-        }
 
         // 6. 创建新目录
         String dirId = UUID.randomUUID().toString();

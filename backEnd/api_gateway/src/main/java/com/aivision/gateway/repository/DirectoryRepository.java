@@ -2,6 +2,7 @@ package com.aivision.gateway.repository;
 
 import com.aivision.gateway.model.Directory;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -82,4 +83,17 @@ public interface DirectoryRepository extends JpaRepository<Directory, String> {
      * 根据项目ID删除所有目录
      */
     void deleteByProjectId(String projectId);
+
+    /**
+     * 物理删除指定父目录下某状态的同名目录（parentId 为 null 时匹配根目录）。
+     * 用于清除占用 unique_dir_name_per_parent 约束槽位的软删除残留行。
+     */
+    @Modifying
+    @Query("DELETE FROM Directory d WHERE d.projectId = :projectId AND d.dirName = :dirName "
+        + "AND d.status = :status AND ((:parentId IS NULL AND d.parentId IS NULL) OR d.parentId = :parentId)")
+    int deleteByProjectIdAndParentIdAndDirNameAndStatus(
+        @Param("projectId") String projectId,
+        @Param("parentId") String parentId,
+        @Param("dirName") String dirName,
+        @Param("status") Directory.Status status);
 }
