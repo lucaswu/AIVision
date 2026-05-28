@@ -1,12 +1,12 @@
 # AI Vision SSO 单点登录方案：JWT + RS256
 
-本文档用于指导外部系统和 AI Vision 内部开发，将 SSO 单点登录升级为标准的 `JWT + RS256` 非对称签名方案。
+本文档用于指导外部系统接入 AI Vision SSO 单点登录，方案采用标准的 `JWT + RS256` 非对称签名。
 
 ## 1. 方案目标
 
 外部系统用户已登录后，外部系统签发一个 JWT，并使用自己的 RSA 私钥进行 `RS256` 签名。AI Vision 只保存外部系统提供的 RSA 公钥，用公钥验证 JWT 的真实性。
 
-推荐跳转形式：
+跳转形式：
 
 ```text
 https://<AI_VISION_DOMAIN>/sso-login?token=<JWT>
@@ -19,9 +19,7 @@ https://<AI_VISION_DOMAIN>/sso-login?token=<JWT>
 - 外部系统负责：生成 JWT、签名、跳转
 - AI Vision 负责：验签、校验过期时间、校验签发方、创建或匹配本系统用户
 
-## 2. 为什么使用 RS256
-
-当前共享密钥方案是 `HMAC-SHA256`，双方都要保存同一个 `SSO_SHARED_SECRET`。任意一方泄露密钥，都可以伪造登录参数。
+## 2. RS256 方案优势
 
 `RS256` 使用非对称密钥：
 
@@ -30,7 +28,7 @@ https://<AI_VISION_DOMAIN>/sso-login?token=<JWT>
 - 公钥泄露不会导致伪造登录。
 - AI Vision 不需要保存外部系统私钥。
 
-注意：这里使用的是“私钥签名、公钥验签”，不是“公钥加密、私钥解密”。公钥加密不能证明数据来自可信系统。
+注意：这里使用的是"私钥签名、公钥验签"，不是"公钥加密、私钥解密"。公钥加密不能证明数据来自可信系统。
 
 ## 3. 登录流程
 
@@ -265,51 +263,9 @@ const crypto = require("crypto");
 const nonce = crypto.randomBytes(16).toString("hex");
 ```
 
-## 7. AI Vision 内部开发改造
+## 7. 后端接口
 
-### 7.1 前端改造
-
-当前 HMAC 方案的跳转地址为：
-
-```text
-/sso-login?username=...&timestamp=...&signature=...
-```
-
-RS256 JWT 方案建议改为：
-
-```text
-/sso-login?token=<JWT>
-```
-
-前端逻辑：
-
-```typescript
-const params = new URLSearchParams(location.search);
-const token = params.get("token");
-
-const res = await userAPI.ssoJwtLogin({ token });
-
-localStorage.setItem("token", res.Data.token);
-localStorage.setItem("userId", res.Data.userId);
-localStorage.setItem("username", res.Data.username);
-localStorage.setItem("role", res.Data.role);
-
-navigate(res.Data.redirect || "/projects", { replace: true });
-```
-
-建议新增 API：
-
-```typescript
-ssoJwtLogin: (data: { token: string }) =>
-  request<any>("/api/v1/users/sso-login-jwt", {
-    method: "POST",
-    body: JSON.stringify(data),
-  })
-```
-
-### 7.2 后端接口
-
-建议新增接口：
+### 7.1 接口
 
 ```http
 POST /api/v1/users/sso-login-jwt
@@ -320,7 +276,7 @@ Content-Type: application/json
 }
 ```
 
-返回格式继续复用当前登录响应：
+返回格式：
 
 ```json
 {
@@ -336,18 +292,14 @@ Content-Type: application/json
 }
 ```
 
-如果暂时不修改 `UserLoginResponse`，也可以由前端从 JWT 中读取 `redirect`，但更建议后端验签后返回可信的 `redirect`。
-
-### 7.3 后端配置
-
-建议新增配置：
+### 7.2 配置
 
 ```yaml
 sso:
   jwt:
-    enabled: ${SSO_JWT_ENABLED:false}
+    enabled: ${SSO_JWT_ENABLED:true}
     public-key: ${SSO_JWT_PUBLIC_KEY:}
-    public-key-file: ${SSO_JWT_PUBLIC_KEY_FILE:}
+    public-key-file: ${SSO_JWT_PUBLIC_KEY_FILE:classpath:sso_public_key.pem}
     issuer: ${SSO_JWT_ISSUER:external-system}
     audience: ${SSO_JWT_AUDIENCE:ai-vision}
     allowed-clock-skew-seconds: ${SSO_JWT_ALLOWED_CLOCK_SKEW_SECONDS:60}
@@ -355,19 +307,7 @@ sso:
     default-role: ${SSO_JWT_DEFAULT_ROLE:INSPECTOR}
 ```
 
-环境变量示例：
-
-```bash
-SSO_JWT_ENABLED=true
-SSO_JWT_PUBLIC_KEY_FILE=/app/config/sso_public_key.pem
-SSO_JWT_ISSUER=external-system
-SSO_JWT_AUDIENCE=ai-vision
-SSO_JWT_ALLOWED_CLOCK_SKEW_SECONDS=60
-SSO_JWT_AUTO_CREATE_USERS=true
-SSO_JWT_DEFAULT_ROLE=INSPECTOR
-```
-
-### 7.4 后端验签逻辑
+### 7.3 验签逻辑
 
 后端必须校验：
 
@@ -382,39 +322,7 @@ SSO_JWT_DEFAULT_ROLE=INSPECTOR
 9. `redirect` 必须是站内相对路径，不能是外部 URL。
 10. 如需防重放，`nonce` 必须未使用过，验证成功后记录为已使用。
 
-### 7.5 Java 后端验签示例
-
-示例使用 `java-jwt`：
-
-```java
-import com.auth0.jwt.JWT;
-import com.auth0.jwt.JWTVerifier;
-import com.auth0.jwt.algorithms.Algorithm;
-import com.auth0.jwt.interfaces.DecodedJWT;
-
-Algorithm algorithm = Algorithm.RSA256(publicKey, null);
-
-JWTVerifier verifier = JWT.require(algorithm)
-        .withIssuer("external-system")
-        .withAudience("ai-vision")
-        .acceptLeeway(60)
-        .build();
-
-DecodedJWT jwt = verifier.verify(token);
-
-String username = jwt.getClaim("username").asString();
-if (username == null || username.trim().isEmpty()) {
-    username = jwt.getSubject();
-}
-
-String role = jwt.getClaim("role").asString();
-String redirect = jwt.getClaim("redirect").asString();
-String nonce = jwt.getClaim("nonce").asString();
-```
-
-### 7.6 用户匹配规则
-
-建议规则：
+### 7.4 用户匹配规则
 
 ```text
 1. 优先使用 username claim
@@ -426,7 +334,7 @@ String nonce = jwt.getClaim("nonce").asString();
 7. 用户状态不是 ACTIVE：拒绝登录
 ```
 
-### 7.7 redirect 安全规则
+### 7.5 redirect 安全规则
 
 只允许站内相对路径：
 
@@ -445,13 +353,9 @@ https://example.com
 javascript:alert(1)
 ```
 
-后端建议兜底：
+redirect 为空或非法时，自动回退到 `/projects`。
 
-```text
-redirect 为空或非法时，使用 /projects
-```
-
-## 8. 推荐错误码和错误信息
+## 8. 错误码
 
 | 场景 | HTTP 状态 | Message |
 | --- | --- | --- |
@@ -466,8 +370,6 @@ redirect 为空或非法时，使用 /projects
 
 ## 9. 测试用例建议
 
-AI Vision 内部建议覆盖：
-
 1. 正确 JWT 可以登录成功。
 2. 正确 JWT 且用户不存在时自动创建用户。
 3. 签名被篡改时拒绝。
@@ -478,24 +380,3 @@ AI Vision 内部建议覆盖：
 8. 已禁用用户拒绝登录。
 9. 非法 `redirect` 自动回退到 `/projects`。
 10. 如果启用 nonce 防重放，同一个 `nonce` 第二次使用时拒绝。
-
-## 10. 与当前 HMAC 方案的关系
-
-当前已有方案：
-
-```text
-/sso-login?username=...&role=...&timestamp=...&nonce=...&redirect=...&signature=...
-```
-
-推荐升级方案：
-
-```text
-/sso-login?token=<JWT>
-```
-
-过渡期可以同时支持两种方式：
-
-- 如果 URL 中有 `token`，走 JWT + RS256。
-- 如果 URL 中没有 `token`，保留旧 HMAC 参数方式。
-
-生产环境建议最终只保留 JWT + RS256。

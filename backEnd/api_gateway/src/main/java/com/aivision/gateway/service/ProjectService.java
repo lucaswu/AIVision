@@ -60,22 +60,18 @@ public class ProjectService {
             throw new IllegalArgumentException("用户ID不能为空");
         }
 
-        // 验证权限：只有管理员才能创建项目
-        User user = userRepository.findById(ownerId)
+        userRepository.findById(ownerId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
-        if (user.getRole() != User.Role.ADMIN) {
-            throw new RuntimeException("只有管理员才能创建项目");
-        }
 
         if (projectName == null || projectName.trim().isEmpty()) {
             throw new IllegalArgumentException("项目名称不能为空");
         }
-        
+
         // 检查项目名称是否已存在（同一个用户下）
         if (projectRepository.existsByProjectNameAndOwnerId(projectName.trim(), ownerId)) {
             throw new RuntimeException("项目名称已存在: " + projectName);
         }
-        
+
         // 创建新项目
         Project project = new Project();
         project.setProjectId(UUID.randomUUID().toString());
@@ -84,7 +80,7 @@ public class ProjectService {
         project.setOwnerId(ownerId);
         project.setStatus(Project.Status.ACTIVE);
         project.setProjectType("AI_DETECTION"); // 默认类型
-        
+
         Project savedProject = projectRepository.save(project);
         return savedProject.getProjectId();
     }
@@ -298,22 +294,18 @@ public class ProjectService {
             throw new IllegalArgumentException("用户ID不能为空");
         }
 
-        // 验证权限：只有管理员才能创建项目
-        User user = userRepository.findById(ownerId)
+        userRepository.findById(ownerId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
-        if (user.getRole() != User.Role.ADMIN) {
-            throw new RuntimeException("只有管理员才能创建项目");
-        }
 
         if (projectName == null || projectName.trim().isEmpty()) {
             throw new IllegalArgumentException("项目名称不能为空");
         }
-        
+
         // 检查项目名称是否已存在（同一个用户下）
         if (projectRepository.existsByProjectNameAndOwnerId(projectName.trim(), ownerId)) {
             throw new RuntimeException("项目名称已存在: " + projectName);
         }
-        
+
         // 创建新项目
         Project project = new Project();
         project.setProjectId(UUID.randomUUID().toString());
@@ -321,7 +313,7 @@ public class ProjectService {
         project.setOwnerId(ownerId);
         project.setStatus(Project.Status.ACTIVE);
         project.setProjectType("AI_DETECTION"); // 默认类型
-        
+
         return projectRepository.save(project);
     }
     

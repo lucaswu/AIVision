@@ -71,9 +71,6 @@ export default function ProjectList() {
   }, [projects, searchText]);
 
   const total = filteredProjects.length;
-  const userRole = localStorage.getItem("role");
-  const isAdmin = userRole === "ADMIN";
-
   const handleCreateProject = () => {
     navigate("/projects/create");
   };
@@ -239,17 +236,15 @@ export default function ProjectList() {
             }}
             style={{ width: 260, height: 48, borderRadius: 8 }}
           />
-          {isAdmin && (
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              size="large"
-              onClick={handleCreateProject}
-              style={{ height: 48, borderRadius: 8, padding: "0 24px" }}
-            >
-              新增项目
-            </Button>
-          )}
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            size="large"
+            onClick={handleCreateProject}
+            style={{ height: 48, borderRadius: 8, padding: "0 24px" }}
+          >
+            新增项目
+          </Button>
         </Space>
         </div>
 

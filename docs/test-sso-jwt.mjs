@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const API_BASE = process.env.API_BASE || "http://localhost:9541";
+const FRONTEND_BASE = process.env.FRONTEND_BASE || API_BASE.replace(/:9541$/, ":3000");
 const username = process.argv[2] || "test-user";
 const role = process.argv[3] || "INSPECTOR";
 const redirect = process.argv[4] || "/projects";
@@ -72,6 +73,6 @@ console.log("\nHTTP Status:", response.status);
 console.log("Response:", JSON.stringify(result, null, 2));
 
 // 同时打印前端跳转 URL
-const frontendUrl = `http://localhost:3000/sso-login?token=${encodeURIComponent(token)}`;
+const frontendUrl = `${FRONTEND_BASE}/sso-login?token=${encodeURIComponent(token)}`;
 console.log("\n前端测试 URL（浏览器打开）:");
 console.log(frontendUrl);
