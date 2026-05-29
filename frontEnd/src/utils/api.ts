@@ -15,6 +15,7 @@ import {
   TaskStatus,
   FileTreeNode,
   TaskFile,
+  UploadConfigResponse,
 } from "./data";
 
 import { addPathToFileTreeNodes } from "./fileTreeUtils";
@@ -73,6 +74,13 @@ interface UploadProgressInfo {
 
 interface UploadRequestOptions {
   onProgress?: (info: UploadProgressInfo) => void;
+  // 静默模式：不在此处弹出 message.error，由调用方统一汇总（用于分批上传避免逐条刷屏）
+  silent?: boolean;
+  // 超时（毫秒）。0/未设表示不超时。设置后，请求在读取文件体/网络任一阶段卡住超过该时长会 abort 并 reject，
+  // 避免某次请求永久挂起导致整个分批上传停滞。
+  timeoutMs?: number;
+  uploadSessionId?: string;
+  uploadKeys?: string[];
 }
 
 async function uploadRequest(
@@ -84,7 +92,13 @@ async function uploadRequest(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE_URL}${url}`, true);
+    if (options.timeoutMs && options.timeoutMs > 0) {
+      xhr.timeout = options.timeoutMs;
+    }
     xhr.setRequestHeader("user-id", getUserId());
+    if (options.uploadSessionId) {
+      xhr.setRequestHeader("upload-session-id", options.uploadSessionId);
+    }
 
     Object.entries(headers).forEach(([key, value]) => {
       xhr.setRequestHeader(key, value);
@@ -105,14 +119,14 @@ async function uploadRequest(
 
         if (xhr.status < 200 || xhr.status >= 300) {
           const errorMessage = result.Message || "上传失败";
-          message.error(errorMessage);
+          if (!options.silent) message.error(errorMessage);
           reject(new Error(errorMessage));
           return;
         }
 
         if (result.Code !== 200) {
           const errorMessage = result.Message || "上传失败";
-          message.error(errorMessage);
+          if (!options.silent) message.error(errorMessage);
           reject(new Error(errorMessage));
           return;
         }
@@ -121,7 +135,7 @@ async function uploadRequest(
       } catch (error) {
         console.error("文件上传响应解析失败:", error);
         const parseError = new Error("上传响应解析失败");
-        message.error(parseError.message);
+        if (!options.silent) message.error(parseError.message);
         reject(parseError);
       }
     };
@@ -129,8 +143,15 @@ async function uploadRequest(
     xhr.onerror = () => {
       const networkError = new Error("上传失败，请检查网络连接");
       console.error("文件上传错误:", networkError);
-      message.error(networkError.message);
+      if (!options.silent) message.error(networkError.message);
       reject(networkError);
+    };
+
+    xhr.ontimeout = () => {
+      const timeoutError = new Error("上传超时，请重试");
+      console.error("文件上传超时:", timeoutError);
+      if (!options.silent) message.error(timeoutError.message);
+      reject(timeoutError);
     };
 
     xhr.send(formData);
@@ -193,16 +214,24 @@ export const fileAPI = {
   uploadFiles: (
     projectId: string,
     directoryId: string,
-    files: FileList,
+    files: File[],
     options: UploadRequestOptions = {}
   ) => {
     const formData = new FormData();
-    Array.from(files).forEach((file) => formData.append("File", file));
+    files.forEach((file, index) => {
+      // 第三参数指定 multipart 文件名：剥离 webkitRelativePath 路径，仅保留文件名。
+      // 注意：不要用 new File([file], name) 来改名——那会复制文件字节进内存，
+      // 大目录(成百上千个文件/数 GB)上传时会撑爆浏览器标签页内存导致卡死。
+      const fileName = (file.name || "").split("/").pop() || file.name;
+      formData.append("File", file, fileName);
+      formData.append("UploadKey", options.uploadKeys?.[index] || "");
+    });
     return uploadRequest("/api/v1/files/upload", formData, {
       "project-id": projectId,
       "directory-id": directoryId,
     }, options);
   },
+  getUploadConfig: () => request<UploadConfigResponse>("/api/v1/files/upload-config"),
   deleteFile: (fileId: string, projectId: string) =>
     request<void>(`/api/v1/files/${fileId}`, {
       method: "DELETE",

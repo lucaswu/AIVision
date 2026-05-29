@@ -600,6 +600,39 @@ async def convert_thumbnail(
         raise HTTPException(status_code=500, detail=f"缩略图转换失败: {exc}") from exc
 
 
+@app.post("/thumbnail/convert-path")
+async def convert_thumbnail_from_path(
+    path: str = Form(...),
+    filename: str = Form(""),
+    quality: int = Form(85),
+):
+    """从共享数据卷路径读取 TIFF/DICOM 原图并同步转换为 JPEG 缩略图字节流。"""
+    try:
+        source_path = Path(path).resolve()
+        allowed_roots = [
+            Path(os.environ.get("STORAGE_LOCAL_BASE_DIR", "/app/data/files")).resolve(),
+            Path("/app/data/files").resolve(),
+        ]
+        if not any(source_path == root or root in source_path.parents for root in allowed_roots):
+            raise HTTPException(status_code=400, detail="缩略图源文件路径不在允许的数据目录内")
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=404, detail="缩略图源文件不存在")
+
+        content = source_path.read_bytes()
+        if not content:
+            raise HTTPException(status_code=400, detail="源文件为空")
+
+        safe_quality = max(1, min(100, int(quality)))
+        jpeg_bytes = _convert_to_thumbnail_jpeg(content, filename or source_path.name, safe_quality)
+        return Response(content=jpeg_bytes, media_type="image/jpeg")
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"缩略图转换失败: {exc}") from exc
+
+
 @app.post("/inference/submit", response_model=InferenceResponse)
 async def submit_inference(request: InferenceRequest, background_tasks: BackgroundTasks):
     """

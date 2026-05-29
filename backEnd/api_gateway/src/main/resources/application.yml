@@ -22,8 +22,10 @@ spring:
         
   servlet:
     multipart:
-      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:200MB}
-      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:10GB}
+      # 复用 file-upload.* 的环境变量作为单一事实源：Tomcat 解析阶段的硬限制与下方
+      # file-upload 校验、/upload-config 接口返回值保持一致，避免只改一处导致漂移。
+      max-file-size: ${FILE_UPLOAD_MAX_FILE_SIZE:200MB}
+      max-request-size: ${FILE_UPLOAD_MAX_TOTAL_SIZE:10GB}
       enabled: ${SPRING_SERVLET_MULTIPART_ENABLED:true}
 
 # Local storage configuration (replacing MinIO)
@@ -47,6 +49,10 @@ ai-services:
   inference-url: ${AI_SERVICES_INFERENCE_URL:http://ai-inference:8000}
   # OCR 推理服务 URL
   ocr-inference-url: ${AI_SERVICES_OCR_INFERENCE_URL:http://ai-inference-ocr:8000}
+  # 调用推理服务的 HTTP 超时：连接短超时快速失败，读取大超时不打断耗时较长的正常推理
+  http:
+    connect-timeout-ms: ${AI_SERVICES_HTTP_CONNECT_TIMEOUT_MS:10000}
+    read-timeout-ms: ${AI_SERVICES_HTTP_READ_TIMEOUT_MS:1800000}
   vision-ai:
     # 推理模式配置
     inference-mode: ${AI_SERVICES_INFERENCE_MODE:det}
@@ -95,9 +101,24 @@ file-upload:
   # 文件大小限制
   max-file-size: ${FILE_UPLOAD_MAX_FILE_SIZE:200MB}
   max-total-size: ${FILE_UPLOAD_MAX_TOTAL_SIZE:10GB}
+  # 前端分批上传建议值：同时受文件数和批次总字节数约束
+  batch-max-files: ${FILE_UPLOAD_BATCH_MAX_FILES:10}
+  batch-max-size: ${FILE_UPLOAD_BATCH_MAX_SIZE:500MB}
+  batch-timeout-base-ms: ${FILE_UPLOAD_BATCH_TIMEOUT_BASE_MS:60000}
+  batch-timeout-ms-per-mb: ${FILE_UPLOAD_BATCH_TIMEOUT_MS_PER_MB:1500}
+  max-retries: ${FILE_UPLOAD_MAX_RETRIES:1}
   # 本地存储配置（用于非MinIO模式）
   local:
     base-dir: ${STORAGE_LOCAL_BASE_DIR:/app/data/files}
+
+thumbnail:
+  worker:
+    fixed-delay-ms: ${THUMBNAIL_WORKER_FIXED_DELAY_MS:3000}
+    batch-size: ${THUMBNAIL_WORKER_BATCH_SIZE:20}
+  # 调用推理服务生成缩略图的 HTTP 超时；避免推理慢/无响应时调度线程无限阻塞
+  http:
+    connect-timeout-ms: ${THUMBNAIL_HTTP_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${THUMBNAIL_HTTP_READ_TIMEOUT_MS:120000}
 
 # SpringDoc OpenAPI Configuration
 springdoc:

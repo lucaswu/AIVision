@@ -4,7 +4,12 @@ import javax.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "file")
+@Table(name = "file", indexes = {
+    // 上传幂等查询的覆盖索引：findByProjectIdAndDirectoryIdAndUploadSessionIdAndUploadKey
+    // 在 ddl-auto=update 下随表自动创建，消除上传热路径的全表顺序扫描
+    @Index(name = "idx_file_upload_idem",
+        columnList = "project_id,directory_id,upload_session_id,upload_key")
+})
 public class File {
     
     @Id
@@ -47,6 +52,14 @@ public class File {
     /** JPEG 预览图在 Storage 中的路径；NULL 表示尚未生成或转换仍在进行中 */
     @Column(name = "thumbnail_path", length = 500)
     private String thumbnailPath;
+
+    /** 前端一次上传操作的会话 ID，用于请求超时后的幂等重试 */
+    @Column(name = "upload_session_id", length = 100)
+    private String uploadSessionId;
+
+    /** 单文件幂等键；同一上传会话内重试同一个文件时保持不变 */
+    @Column(name = "upload_key", length = 128)
+    private String uploadKey;
     
     // 构造函数
     public File() {}
@@ -182,6 +195,22 @@ public class File {
     public void setThumbnailPath(String thumbnailPath) {
         this.thumbnailPath = thumbnailPath;
     }
+
+    public String getUploadSessionId() {
+        return uploadSessionId;
+    }
+
+    public void setUploadSessionId(String uploadSessionId) {
+        this.uploadSessionId = uploadSessionId;
+    }
+
+    public String getUploadKey() {
+        return uploadKey;
+    }
+
+    public void setUploadKey(String uploadKey) {
+        this.uploadKey = uploadKey;
+    }
     
     @PrePersist
     protected void onCreate() {
@@ -208,6 +237,8 @@ public class File {
                 ", mimeType='" + mimeType + '\'' +
                 ", fileExtension='" + fileExtension + '\'' +
                 ", thumbnailPath='" + thumbnailPath + '\'' +
+                ", uploadSessionId='" + uploadSessionId + '\'' +
+                ", uploadKey='" + uploadKey + '\'' +
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
                 '}';

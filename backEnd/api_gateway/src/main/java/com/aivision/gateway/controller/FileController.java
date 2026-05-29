@@ -4,8 +4,10 @@ import com.aivision.gateway.model.ApiResponse;
 import com.aivision.gateway.model.FileImageData;
 import com.aivision.gateway.model.FilePreviewResponse;
 import com.aivision.gateway.model.FileUploadResponse;
+import com.aivision.gateway.model.UploadConfigResponse;
 import com.aivision.gateway.service.FileService;
 import com.aivision.gateway.service.ThumbnailService;
+import com.aivision.gateway.service.UploadConfigService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -17,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import java.util.concurrent.TimeUnit;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -31,6 +34,15 @@ public class FileController {
 
     @Autowired
     private ThumbnailService thumbnailService;
+
+    @Autowired
+    private UploadConfigService uploadConfigService;
+
+    @GetMapping("/upload-config")
+    @Operation(summary = "获取文件上传配置", description = "返回前端上传过滤、分批和超时策略所需配置")
+    public ResponseEntity<ApiResponse<UploadConfigResponse>> getUploadConfig() {
+        return ResponseEntity.ok(ApiResponse.success("获取成功", uploadConfigService.getUploadConfig()));
+    }
     
     /**
      * 多文件上传
@@ -87,7 +99,11 @@ public class FileController {
             required = true,
             content = @Content(mediaType = "multipart/form-data")
         )
-        @RequestPart("File") MultipartFile[] files) {
+        @RequestPart("File") MultipartFile[] files,
+
+        @RequestParam(value = "UploadKey", required = false) String[] uploadKeys,
+
+        @RequestHeader(value = "upload-session-id", required = false) String uploadSessionId) {
         
         try {
             // 基础验证
@@ -112,7 +128,8 @@ public class FileController {
             }
             
             // 处理文件上传
-            FileUploadResponse uploadResponse = fileService.uploadFiles(projectId, userId, directoryId, files);
+            FileUploadResponse uploadResponse = fileService.uploadFiles(
+                projectId, userId, directoryId, files, uploadSessionId, uploadKeys);
             
             String message;
             if (uploadResponse.getFailedCount() == 0) {
@@ -126,6 +143,8 @@ public class FileController {
             
             return ResponseEntity.ok(ApiResponse.success(message, uploadResponse));
             
+        } catch (MaxUploadSizeExceededException e) {
+            throw e;
         } catch (Exception e) {
             return ResponseEntity.status(500).body(
                 ApiResponse.error(500, "服务器内部错误: " + e.getMessage()));

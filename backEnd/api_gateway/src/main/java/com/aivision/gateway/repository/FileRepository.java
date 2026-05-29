@@ -51,6 +51,15 @@ public interface FileRepository extends JpaRepository<File, String> {
      * 根据文件ID和项目ID查找文件（用于管理员预览）
      */
     Optional<File> findByFileIdAndProjectId(String fileId, String projectId);
+
+    /**
+     * 根据上传会话和单文件幂等键查找文件，用于请求超时后的安全重试
+     */
+    Optional<File> findByProjectIdAndDirectoryIdAndUploadSessionIdAndUploadKey(
+        String projectId,
+        String directoryId,
+        String uploadSessionId,
+        String uploadKey);
     
     /**
      * 统计目录下的文件数量
@@ -95,4 +104,4 @@ public interface FileRepository extends JpaRepository<File, String> {
      * 根据项目ID删除所有文件记录
      */
     void deleteByProjectId(String projectId);
-} 
+}

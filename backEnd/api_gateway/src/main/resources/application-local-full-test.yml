@@ -85,6 +85,16 @@ file-upload:
     - diconde
   max-file-size: 200MB
   max-total-size: 10GB
+  batch-max-files: 10
+  batch-max-size: 500MB
+  batch-timeout-base-ms: 60000
+  batch-timeout-ms-per-mb: 1500
+  max-retries: 1
+
+thumbnail:
+  worker:
+    fixed-delay-ms: 3000
+    batch-size: 20
 
 # SpringDoc OpenAPI Configuration
 springdoc:

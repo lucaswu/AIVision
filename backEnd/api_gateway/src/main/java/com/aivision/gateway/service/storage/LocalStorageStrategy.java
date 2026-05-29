@@ -66,4 +66,10 @@ public class LocalStorageStrategy implements StorageStrategy {
         Path target = Paths.get(baseDir).resolve(relative).normalize();
         return Files.exists(target);
     }
+
+    @Override
+    public String resolveSharedPath(String objectPath) {
+        String relative = objectPath.startsWith("/") ? objectPath.substring(1) : objectPath;
+        return Paths.get(baseDir).resolve(relative).normalize().toString();
+    }
 }

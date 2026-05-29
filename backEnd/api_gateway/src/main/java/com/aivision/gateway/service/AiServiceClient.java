@@ -25,8 +25,25 @@ public class AiServiceClient {
     
     private static final Logger logger = LoggerFactory.getLogger(AiServiceClient.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final RestTemplate restTemplate = new RestTemplate();
-    
+
+    // 连接超时短、读取超时大：推理服务不可达时快速失败，又不会打断耗时较长的正常推理
+    @Value("${ai-services.http.connect-timeout-ms:10000}")
+    private int httpConnectTimeoutMs;
+
+    @Value("${ai-services.http.read-timeout-ms:1800000}")
+    private int httpReadTimeoutMs;
+
+    private RestTemplate restTemplate;
+
+    @javax.annotation.PostConstruct
+    void initRestTemplate() {
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+            new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(httpConnectTimeoutMs);
+        factory.setReadTimeout(httpReadTimeoutMs);
+        this.restTemplate = new RestTemplate(factory);
+    }
+
     @Autowired
     private DefectTypeRepository defectTypeRepository;
 

@@ -26,7 +26,12 @@ public class ThirdPartyClient {
 
     public ThirdPartyClient(ThirdPartyProperties properties) {
         this.properties = properties;
-        this.restTemplate = new RestTemplate();
+        // 第三方鉴权/元数据接口应快速返回，设置短超时避免对端无响应时无限挂起
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+            new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(30000);
+        this.restTemplate = new RestTemplate(factory);
     }
 
     public String getAccessToken() {

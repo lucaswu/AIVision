@@ -154,6 +154,17 @@ export interface FileUploadResponse {
   FailedFiles: any[];
 }
 
+export interface UploadConfigResponse {
+  MaxFileSizeBytes: number;
+  MaxTotalSizeBytes: number;
+  BatchMaxFiles: number;
+  BatchMaxBytes: number;
+  BatchTimeoutBaseMs: number;
+  BatchTimeoutMsPerMB: number;
+  MaxRetries: number;
+  AllowedImageTypes: string[];
+}
+
 // 项目文件树节点 (用于文件树显示)
 export interface FileTreeNode {
   Id: string;

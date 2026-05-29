@@ -31,4 +31,12 @@ public interface StorageStrategy {
      * @return 是否存在
      */
     boolean exists(String objectPath);
+
+    /**
+     * 返回可被同一部署网络内其它服务读取的本地路径。
+     * 只有共享本地卷存储支持；对象存储实现可返回 null。
+     */
+    default String resolveSharedPath(String objectPath) {
+        return null;
+    }
 }

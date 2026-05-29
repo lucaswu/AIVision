@@ -8,12 +8,9 @@ import com.aivision.gateway.repository.ProjectRepository;
 import com.aivision.gateway.repository.UserProjectPermissionRepository;
 import com.aivision.gateway.repository.UserRepository;
 import com.aivision.gateway.service.storage.StorageStrategy;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import org.apache.commons.io.FilenameUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -58,11 +55,24 @@ public class FileService {
 
     @Autowired
     private ThumbnailService thumbnailService;
+
+    @Autowired
+    private UploadConfigService uploadConfigService;
     
     /**
      * 上传多个文件
      */
     public FileUploadResponse uploadFiles(String projectId, String userId, String directoryId, MultipartFile[] files) {
+        return uploadFiles(projectId, userId, directoryId, files, null, null);
+    }
+
+    public FileUploadResponse uploadFiles(
+            String projectId,
+            String userId,
+            String directoryId,
+            MultipartFile[] files,
+            String uploadSessionId,
+            String[] uploadKeys) {
         logger.info("收到文件上传请求: project={}, user={}, directory={}, 文件数量={}", 
             projectId, userId, directoryId, files != null ? files.length : 0);
             
@@ -102,9 +112,12 @@ public class FileService {
         
         // 4. 逐个处理文件，收集需要生成缩略图的 fileId
         List<String> thumbnailFileIds = new ArrayList<>();
-        for (MultipartFile file : files) {
+        for (int i = 0; i < files.length; i++) {
+            MultipartFile file = files[i];
+            String uploadKey = resolveUploadKey(uploadKeys, i);
             try {
-                processFile(file, projectId, userId, directoryId, directory, successFiles, failedFiles, thumbnailFileIds);
+                processFile(file, projectId, userId, directoryId, directory, successFiles, failedFiles,
+                    thumbnailFileIds, normalizeBlank(uploadSessionId), uploadKey);
             } catch (Exception e) {
                 failedFiles.add(new FileUploadResponse.FailedFileInfo(
                     file.getOriginalFilename(), "文件处理失败: " + e.getMessage()));
@@ -117,10 +130,9 @@ public class FileService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    thumbnailFileIds.forEach(fileId -> {
-                        thumbnailService.generateAndStore(fileId);
-                        logger.info("已触发异步缩略图生成（事务提交后）: fileId={}", fileId);
-                    });
+                    // 一次性批量入队，避免逐文件 @Async 提交在线程池饱和时回压到上传请求线程
+                    thumbnailService.enqueueBatch(thumbnailFileIds);
+                    logger.info("已批量入队缩略图任务（事务提交后）: 数量={}", thumbnailFileIds.size());
                 }
             });
         }
@@ -169,29 +181,29 @@ public class FileService {
     /**
      * 验证总文件大小
      */
-    private boolean validateTotalSize(long totalSize, List<FileUploadResponse.FailedFileInfo> failedFiles, 
+    private boolean validateTotalSize(long totalSize, List<FileUploadResponse.FailedFileInfo> failedFiles,
                                      MultipartFile[] files) {
-        // 简单验证：10GB = 10 * 1024 * 1024 * 1024 bytes
-        long maxTotalSizeBytes = 10L * 1024 * 1024 * 1024;
-        
+        long maxTotalSizeBytes = uploadConfigService.getMaxTotalSizeBytes();
+
         if (totalSize > maxTotalSizeBytes) {
+            String limitText = uploadConfigService.humanReadableSize(maxTotalSizeBytes);
             for (MultipartFile file : files) {
                 failedFiles.add(new FileUploadResponse.FailedFileInfo(
-                    file.getOriginalFilename(), "总文件大小超过10GB限制"));
+                    file.getOriginalFilename(), "总文件大小超过" + limitText + "限制"));
             }
             return false;
         }
-        
+
         return true;
     }
-    
     /**
      * 处理单个文件
      * @param thumbnailFileIds 收集需要生成缩略图的 fileId，用于事务提交后触发缩略图生成
      */
     private void processFile(MultipartFile file, String projectId, String userId, String directoryId,
                             Directory directory, List<FileUploadResponse.SuccessFileInfo> successFiles,
-                            List<FileUploadResponse.FailedFileInfo> failedFiles, List<String> thumbnailFileIds) {
+                            List<FileUploadResponse.FailedFileInfo> failedFiles, List<String> thumbnailFileIds,
+                            String uploadSessionId, String uploadKey) {
         
         String originalFilename = file.getOriginalFilename();
         
@@ -200,9 +212,26 @@ public class FileService {
             if (!validateFile(file, failedFiles)) {
                 return;
             }
+
+            String normalizedUploadKey = normalizeBlank(uploadKey);
+            Optional<File> existing = findExistingUpload(projectId, directoryId, uploadSessionId, normalizedUploadKey);
+            if (existing.isPresent()) {
+                File existingFile = existing.get();
+                logger.info("命中幂等上传记录: project={}, directory={}, session={}, key={}, fileId={}",
+                    projectId, directoryId, uploadSessionId, normalizedUploadKey, existingFile.getFileId());
+                successFiles.add(new FileUploadResponse.SuccessFileInfo(
+                    existingFile.getFileId(),
+                    existingFile.getOriginalName(),
+                    existingFile.getFileSize(),
+                    existingFile.getFilePath()));
+                if (thumbnailService.supportsThumbnailGeneration(existingFile.getFileExtension())) {
+                    thumbnailFileIds.add(existingFile.getFileId());
+                }
+                return;
+            }
             
             // 2. 生成文件信息
-            String fileId = UUID.randomUUID().toString();
+            String fileId = buildFileId(uploadSessionId, normalizedUploadKey);
             String fileExtension = FilenameUtils.getExtension(originalFilename).toLowerCase();
             String storedName = fileId + "." + fileExtension;
             String objectPath = buildObjectPath(projectId, userId, directory.getDirPath(), storedName);
@@ -223,6 +252,8 @@ public class FileService {
                 originalFilename, storedName, fullPath,
                 file.getSize(), contentType, fileExtension
             );
+            fileEntity.setUploadSessionId(uploadSessionId);
+            fileEntity.setUploadKey(normalizedUploadKey);
             
             fileRepository.save(fileEntity);
 
@@ -254,10 +285,11 @@ public class FileService {
             return false;
         }
         
-        // 验证文件大小：200MB = 200 * 1024 * 1024 bytes
-        long maxFileSizeBytes = 200L * 1024 * 1024;
+        // 验证文件大小（与 multipart max-file-size 配置统一，默认 200MB）
+        long maxFileSizeBytes = uploadConfigService.getMaxFileSizeBytes();
         if (file.getSize() > maxFileSizeBytes) {
-            failedFiles.add(new FileUploadResponse.FailedFileInfo(originalFilename, "文件大小超过200MB限制"));
+            failedFiles.add(new FileUploadResponse.FailedFileInfo(
+                originalFilename, "文件大小超过" + uploadConfigService.humanReadableSize(maxFileSizeBytes) + "限制"));
             return false;
         }
         
@@ -278,6 +310,41 @@ public class FileService {
     private String buildObjectPath(String projectId, String userId, String dirPath, String storedName) {
         String normalizedDir = dirPath == null ? "" : dirPath;
         return String.format("/%s/%s%s/%s", projectId, userId, normalizedDir, storedName);
+    }
+
+    private String resolveUploadKey(String[] uploadKeys, int index) {
+        if (uploadKeys == null || index >= uploadKeys.length) {
+            return null;
+        }
+        return normalizeBlank(uploadKeys[index]);
+    }
+
+    private Optional<File> findExistingUpload(
+            String projectId,
+            String directoryId,
+            String uploadSessionId,
+            String uploadKey) {
+        if (uploadSessionId == null || uploadKey == null) {
+            return Optional.empty();
+        }
+        return fileRepository.findByProjectIdAndDirectoryIdAndUploadSessionIdAndUploadKey(
+            projectId, directoryId, uploadSessionId, uploadKey);
+    }
+
+    private String buildFileId(String uploadSessionId, String uploadKey) {
+        if (uploadSessionId == null || uploadKey == null) {
+            return UUID.randomUUID().toString();
+        }
+        String raw = uploadSessionId + ":" + uploadKey;
+        return UUID.nameUUIDFromBytes(raw.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private String normalizeBlank(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
     
     /**

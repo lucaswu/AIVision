@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Button,
   Table,
@@ -44,7 +44,7 @@ import type {
 } from "antd";
 import { useRequest } from "ahooks";
 import { fileAPI, directoryAPI, getUserId } from "../../utils/api";
-import { FileTreeNode } from "../../utils/data";
+import { FileTreeNode, UploadConfigResponse } from "../../utils/data";
 import "./FilesPage.css";
 import { filePreviewPath } from "@/utils/constans";
 import HighBitPreviewImage from "@/components/HighBitPreviewImage";
@@ -53,6 +53,85 @@ const { Title, Text } = Typography;
 const { Dragger } = Upload;
 const DEFAULT_DIRECTORY_SORT_ORDER = 99;
 const ROOT_DIRECTORY_PATH = "";
+
+const FALLBACK_UPLOAD_CONFIG: UploadConfigResponse = {
+  MaxFileSizeBytes: 200 * 1024 * 1024,
+  MaxTotalSizeBytes: 10 * 1024 * 1024 * 1024,
+  BatchMaxFiles: 10,
+  BatchMaxBytes: 500 * 1024 * 1024,
+  BatchTimeoutBaseMs: 60 * 1000,
+  BatchTimeoutMsPerMB: 1500,
+  MaxRetries: 1,
+  AllowedImageTypes: [
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "bmp",
+    "webp",
+    "tif",
+    "tiff",
+    "dcm",
+    "dicom",
+    "dic",
+    "diconde",
+  ],
+};
+// 待上传列表最多渲染的条目数；避免上千 DOM 节点导致渲染卡顿
+const MAX_DISPLAYED_UPLOAD_ITEMS = 50;
+
+function getFileExtension(fileName: string): string {
+  const lastDot = fileName.lastIndexOf(".");
+  return lastDot >= 0 ? fileName.slice(lastDot + 1).toLowerCase() : "";
+}
+
+function makeUploadSessionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getFileRelativePath(file: File): string {
+  return ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name || "").replace(/^\/+/, "");
+}
+
+function buildUploadKey(file: File): string {
+  return `${getFileRelativePath(file)}::${file.size}::${file.lastModified}`;
+}
+
+function createBatches(files: File[], maxFiles: number, maxBytes: number): File[][] {
+  const batches: File[][] = [];
+  let current: File[] = [];
+  let currentBytes = 0;
+  const safeMaxFiles = Math.max(maxFiles || 1, 1);
+  const safeMaxBytes = Math.max(maxBytes || Number.MAX_SAFE_INTEGER, 1);
+
+  files.forEach((file) => {
+    const wouldExceedFiles = current.length >= safeMaxFiles;
+    const wouldExceedBytes = current.length > 0 && currentBytes + file.size > safeMaxBytes;
+    if (wouldExceedFiles || wouldExceedBytes) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(file);
+    currentBytes += file.size;
+  });
+
+  if (current.length > 0) {
+    batches.push(current);
+  }
+  return batches;
+}
+
+function getBatchTimeoutMs(batchBytes: number, config: UploadConfigResponse): number {
+  const mb = Math.ceil(batchBytes / 1024 / 1024);
+  return Math.max(
+    config.BatchTimeoutBaseMs,
+    config.BatchTimeoutBaseMs + mb * config.BatchTimeoutMsPerMB
+  );
+}
 
 function formatUploadSize(size: number): string {
   if (size >= 1024 * 1024 * 1024) {
@@ -93,6 +172,16 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadProgressText, setUploadProgressText] = useState("");
   const [uploadProgressDetail, setUploadProgressDetail] = useState("");
+  // 选择阶段被过滤掉的文件名，按本批选择汇总后统一提示
+  const skippedFilesRef = useRef<{ nonImage: string[]; tooLarge: string[] }>({
+    nonImage: [],
+    tooLarge: [],
+  });
+  // 进度更新节流状态，避免 onprogress 高频 setState 拖垮主线程
+  const progressThrottleRef = useRef<{ lastPercent: number; lastTime: number }>({
+    lastPercent: -1,
+    lastTime: 0,
+  });
   const [createDirectoryVisible, setCreateDirectoryVisible] = useState(false);
   const [createDirectoryName, setCreateDirectoryName] = useState("");
   const [createDirectorySortOrder, setCreateDirectorySortOrder] = useState<number>(DEFAULT_DIRECTORY_SORT_ORDER);
@@ -119,6 +208,21 @@ const FilesPage: React.FC<FilesPageProps> = ({
     {
       refreshDeps: [projectId],
     }
+  );
+
+  const { data: uploadConfigResponse } = useRequest(() => fileAPI.getUploadConfig());
+  const uploadConfig = uploadConfigResponse?.Data || FALLBACK_UPLOAD_CONFIG;
+  const allowedImageExtensions = useMemo(
+    () => new Set(uploadConfig.AllowedImageTypes.map((ext) => ext.toLowerCase())),
+    [uploadConfig]
+  );
+  const uploadAccept = useMemo(
+    () => uploadConfig.AllowedImageTypes.map((ext) => `.${ext}`).join(","),
+    [uploadConfig]
+  );
+  const isAllowedImageFile = useCallback(
+    (fileName: string) => allowedImageExtensions.has(getFileExtension(fileName)),
+    [allowedImageExtensions]
   );
 
   const allDirectories = filesResponse?.Data || [];
@@ -477,6 +581,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
     setUploadProgress(0);
     setUploadProgressText("");
     setUploadProgressDetail("");
+    progressThrottleRef.current = { lastPercent: -1, lastTime: 0 };
   }, []);
 
   const updateUploadProgress = useCallback((
@@ -510,6 +615,17 @@ const FilesPage: React.FC<FilesPageProps> = ({
         ? Math.min(100, Math.round((Math.min(completedFiles, totalFiles) / totalFiles) * 100))
         : 0;
     const percent = isFinal ? 100 : Math.min(99, rawPercent);
+
+    // 节流：xhr.upload.onprogress 触发非常频繁，且 detail 文案每次都带新的字节数（字符串每次都变，
+    // 必然触发整页重渲染）。若百分比未变且距上次提交不足 200ms，直接跳过，避免高频重渲染拖垮主线程
+    // （大目录上传时这正是导致页面卡死、上传停滞的原因）。
+    const now = Date.now();
+    const throttle = progressThrottleRef.current;
+    if (!isFinal && percent === throttle.lastPercent && now - throttle.lastTime < 200) {
+      return;
+    }
+    throttle.lastPercent = percent;
+    throttle.lastTime = now;
 
     setUploadProgress(percent);
     setUploadProgressText(statusText);
@@ -546,7 +662,7 @@ const FilesPage: React.FC<FilesPageProps> = ({
     resetUploadProgress();
   };
 
-  // 文件上传处理 - 支持文件和目录
+  // 文件上传处理 - 支持文件和目录（上传前过滤 + 小批次上传 + 逐批容错）
   const handleFileUpload = async () => {
     const isRootUploadTarget = uploadTargetPath === ROOT_DIRECTORY_PATH;
     const rootDirectoryId = isRootUploadTarget
@@ -568,61 +684,150 @@ const FilesPage: React.FC<FilesPageProps> = ({
       return;
     }
 
-    const totalFiles = fileList.length;
-    const totalBytes = fileList.reduce((sum, file) => sum + getUploadFileSize(file), 0);
-    let successMessage = "";
+    // 1. 上传前过滤：只保留受支持的图片类型，且单文件不超过后端配置上限
+    //    —— 非图片/超大文件在前端就被剔除，避免触发后端 multipart 200MB 限制导致整批 500
+    const acceptedFileList: UploadFile[] = [];
+    const skippedNonImage: string[] = [];
+    const skippedTooLarge: string[] = [];
+    fileList.forEach((file) => {
+      const fileName = file.name || file.originFileObj?.name || "";
+      if (!isAllowedImageFile(fileName)) {
+        skippedNonImage.push(fileName);
+        return;
+      }
+      if (getUploadFileSize(file) > uploadConfig.MaxFileSizeBytes) {
+        skippedTooLarge.push(fileName);
+        return;
+      }
+      acceptedFileList.push(file);
+    });
+
+    const skipSummaryParts: string[] = [];
+    if (skippedNonImage.length > 0) {
+      skipSummaryParts.push(`${skippedNonImage.length} 个非图片文件`);
+    }
+    if (skippedTooLarge.length > 0) {
+      skipSummaryParts.push(`${skippedTooLarge.length} 个超过 ${formatUploadSize(uploadConfig.MaxFileSizeBytes)} 的文件`);
+    }
+    const skipSummary = skipSummaryParts.join("、");
+
+    if (acceptedFileList.length === 0) {
+      message.warning(
+        skipSummary
+          ? `没有可上传的图片文件（已跳过 ${skipSummary}）`
+          : "没有可上传的图片文件"
+      );
+      return;
+    }
+    if (skipSummary) {
+      message.warning(`已跳过 ${skipSummary}，将继续上传 ${acceptedFileList.length} 个文件`);
+    }
+
+    const totalFiles = acceptedFileList.length;
+    const totalBytes = acceptedFileList.reduce((sum, file) => sum + getUploadFileSize(file), 0);
+    const uploadSessionId = makeUploadSessionId();
+
+    // 全局累计量（跨目录、跨批次）
+    let uploadedBytes = 0;
+    let uploadedFiles = 0;
+    let totalSuccess = 0;
     let totalFailed = 0;
+    const failedNames: string[] = [];
+
+    // 将一组文件按“文件数 + 批次总大小”双阈值分批上传到指定目录。
+    // 单个批次失败（网络/服务器错误）只把该批计为失败并继续后续批次，不再连累整个目录。
+    const uploadGroupInBatches = async (
+      dirId: string,
+      files: File[],
+      label: string
+    ) => {
+      const batches = createBatches(files, uploadConfig.BatchMaxFiles, uploadConfig.BatchMaxBytes);
+      for (const batch of batches) {
+        const batchBytes = batch.reduce((sum, f) => sum + f.size, 0);
+        const batchUploadKeys = batch.map(buildUploadKey);
+        const batchTimeoutMs = getBatchTimeoutMs(batchBytes, uploadConfig);
+
+        // 单批最多按后端配置重试；每个文件带幂等键，避免响应超时后的重试重复入库。
+        let succeeded = false;
+        for (let attempt = 0; attempt <= uploadConfig.MaxRetries && !succeeded; attempt++) {
+          try {
+            const res = await fileAPI.uploadFiles(projectId, dirId, batch, {
+              silent: true, // 失败由本函数统一汇总，避免逐批弹窗刷屏
+              timeoutMs: batchTimeoutMs,
+              uploadSessionId,
+              uploadKeys: batchUploadKeys,
+              onProgress: ({ loaded, total }) => {
+                const batchLoaded =
+                  total > 0 ? Math.min(batchBytes, (loaded / total) * batchBytes) : 0;
+                const waitingForServer = total > 0 && loaded >= total;
+                updateUploadProgress(
+                  uploadedBytes + batchLoaded,
+                  totalBytes,
+                  uploadedFiles,
+                  totalFiles,
+                  waitingForServer
+                    ? `${label}当前批次已上传，服务器处理中，请稍候...`
+                    : attempt > 0
+                      ? `正在重试${label}（第 ${attempt} 次）...`
+                      : `正在上传${label}...`,
+                  { waitingForServer }
+                );
+              },
+            });
+            totalSuccess += res.Data.SuccessCount;
+            totalFailed += res.Data.FailedCount ?? 0;
+            // 后端逐文件失败明细（如不支持的类型）
+            (res.Data.FailedFiles as Array<{ OriginalName?: string }> | undefined)?.forEach(
+              (f) => f?.OriginalName && failedNames.push(f.OriginalName)
+            );
+            succeeded = true;
+          } catch (err) {
+            if (attempt < uploadConfig.MaxRetries) {
+              console.warn(`批次上传失败，重试 ${attempt + 1}/${uploadConfig.MaxRetries}（${label}）:`, err);
+              await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); // 退避
+            } else {
+              console.error(`批次上传最终失败（${label}）:`, err);
+              totalFailed += batch.length;
+              batch.forEach((f) => failedNames.push(f.name));
+            }
+          }
+        }
+
+        uploadedBytes += batchBytes;
+        uploadedFiles += batch.length;
+        // 单批结束只刷新累计进度，不显示“已完成”——整组可能还有后续批次，
+        // 真正的“上传完成”由全部上传结束后的 isFinal 更新负责
+        updateUploadProgress(
+          uploadedBytes,
+          totalBytes,
+          uploadedFiles,
+          totalFiles,
+          `正在上传${label}...`
+        );
+      }
+    };
 
     setUploading(true);
     updateUploadProgress(0, totalBytes, 0, totalFiles, "正在准备上传...");
     try {
       if (uploadType === "file") {
-        // 普通多文件上传
-        const dataTransfer = new DataTransfer();
-        fileList.forEach((file) => {
-          if (file.originFileObj) {
-            dataTransfer.items.add(file.originFileObj);
-          }
-        });
-        const result = await fileAPI.uploadFiles(
-          projectId,
-          rootDirectoryId!,
-          dataTransfer.files,
-          {
-            onProgress: ({ loaded, total }) => {
-              const currentUploaded = total > 0
-                ? (loaded / total) * totalBytes
-                : 0;
-              const waitingForServer = total > 0 && loaded >= total;
-              updateUploadProgress(
-                currentUploaded,
-                totalBytes,
-                0,
-                totalFiles,
-                waitingForServer ? "数据已发送，正在等待服务器处理..." : "正在上传文件...",
-                { waitingForServer }
-              );
-            },
-          }
-        );
-        updateUploadProgress(totalBytes, totalBytes, totalFiles, totalFiles, "上传完成", { isFinal: true });
-        successMessage = `成功上传 ${result.Data.SuccessCount} 个文件`;
+        // 普通多文件上传：直接分批上传到目标目录
+        const files = acceptedFileList
+          .map((file) => file.originFileObj)
+          .filter((f): f is NonNullable<typeof f> => Boolean(f));
+        await uploadGroupInBatches(rootDirectoryId!, files, "文件");
       } else {
-        // 目录上传逻辑
-        console.log("开始目录上传，文件列表:", fileList);
-        // 1. 按目录分组文件
+        // 目录上传：按相对目录分组 -> 递归创建目录 -> 分批上传
         const dirMap = new Map<string, File[]>();
-        fileList.forEach((file) => {
-          const originFile = file.originFileObj as File & {
-            webkitRelativePath?: string;
-          };
+        acceptedFileList.forEach((file) => {
+          const originFile = file.originFileObj as
+            | (File & { webkitRelativePath?: string })
+            | undefined;
+          if (!originFile) return;
           // webkitRelativePath 格式通常为 "folder/subfolder/file.png"
-          const relPath = originFile.webkitRelativePath || "";
-          console.log(`处理文件: ${originFile.name}, 相对路径: ${relPath}`);
+          const relPath = getFileRelativePath(originFile);
           const pathParts = relPath.split("/");
-          
           if (pathParts.length > 1) {
-            // 获取文件所属的相对目录路径（不含文件名）
             const dirPath = pathParts.slice(0, -1).join("/");
             if (!dirMap.has(dirPath)) {
               dirMap.set(dirPath, []);
@@ -631,32 +836,21 @@ const FilesPage: React.FC<FilesPageProps> = ({
           }
         });
 
-        console.log("目录分组结果:", Array.from(dirMap.keys()));
-
-        // 2. 递归创建目录并上传文件
+        // 父目录先于子目录处理
         const pathIdMap = new Map<string, string>();
-        
-        // 获取所有唯一的目录路径并排序，确保父目录先被处理
         const sortedPaths = Array.from(dirMap.keys()).sort(
           (a, b) => a.split("/").length - b.split("/").length
         );
 
-        console.log("排序后的路径列表:", sortedPaths);
-
         if (sortedPaths.length === 0) {
-          console.warn("未发现有效目录结构，请检查是否选择了文件夹。");
           message.warning("未发现有效目录结构，请确认选择的是文件夹。");
           return;
         }
 
-        let totalSuccess = 0;
-        let uploadedBytes = 0;
-        let uploadedFiles = 0;
         for (const fullPath of sortedPaths) {
           const parts = fullPath.split("/");
           let currentParentId = rootDirectoryId; // 初始父目录为用户当前选中的目录
 
-          console.log(`正在处理目录路径: ${fullPath}, 初始父ID: ${currentParentId}`);
           updateUploadProgress(
             uploadedBytes,
             totalBytes,
@@ -676,30 +870,20 @@ const FilesPage: React.FC<FilesPageProps> = ({
               const absolutePathInProject = uploadTargetPath
                 ? `${uploadTargetPath}/${thisPath}`
                 : `/${thisPath}`;
-              
-              console.log(`查找已存在的目录: ${absolutePathInProject}`);
-              const existingId = findDirIdByPath(
-                absolutePathInProject,
-                allDirectories
-              );
+              const existingId = findDirIdByPath(absolutePathInProject, allDirectories);
 
               if (existingId) {
-                console.log(`找到已存在目录 ID: ${existingId}`);
                 pathIdMap.set(thisPath, existingId);
                 currentParentId = existingId;
               } else {
                 // 目录不存在，创建它
-                console.log(`创建新目录: ${part}, 父ID: ${currentParentId}`);
                 try {
-                  const response = await directoryAPI.createDirectory(
-                    projectId,
-                    {
-                      Name: part,
-                      ParentDirectoryId: currentParentId || undefined,
-                    }
-                  );
-                  const newDirId = (response.Data as any).Id || (response.Data as any).DirId;
-                  console.log(`目录创建成功，新 ID: ${newDirId}`);
+                  const response = await directoryAPI.createDirectory(projectId, {
+                    Name: part,
+                    ParentDirectoryId: currentParentId || undefined,
+                  });
+                  const newDirId =
+                    (response.Data as any).Id || (response.Data as any).DirId;
                   pathIdMap.set(thisPath, newDirId);
                   currentParentId = newDirId;
                 } catch (err: any) {
@@ -710,70 +894,39 @@ const FilesPage: React.FC<FilesPageProps> = ({
             }
           }
 
-          // 上传该目录下的所有文件
+          // 上传该目录下的所有文件（直接传原始 File 对象，文件名剥离由 uploadFiles 用
+          // FormData 第三参数完成，避免 new File() 克隆数据撑爆内存）
           const filesInDir = dirMap.get(fullPath) || [];
-          console.log(`正在上传目录 ${fullPath} 下的文件，数量: ${filesInDir.length}, 目录ID: ${currentParentId}`);
           if (filesInDir.length > 0 && currentParentId) {
-            const dataTransfer = new DataTransfer();
-            const batchBytes = filesInDir.reduce((sum, file) => sum + file.size, 0);
-            filesInDir.forEach((f) => {
-              // 核心修复：重新包装 File 对象，剥离路径，只保留文件名
-              const cleanFileName = f.name.split("/").pop()!;
-              const cleanFile = new File([f], cleanFileName, { type: f.type });
-              dataTransfer.items.add(cleanFile);
-            });
-            
-            const uploadRes = await fileAPI.uploadFiles(
-              projectId,
-              currentParentId,
-              dataTransfer.files,
-              {
-                onProgress: ({ loaded, total }) => {
-                  const currentBatchUploaded = total > 0
-                    ? Math.min(batchBytes, (loaded / total) * batchBytes)
-                    : 0;
-                  const waitingForServer = total > 0 && loaded >= total;
-                  updateUploadProgress(
-                    uploadedBytes + currentBatchUploaded,
-                    totalBytes,
-                    uploadedFiles,
-                    totalFiles,
-                    waitingForServer
-                      ? `目录 ${fullPath} 数据已发送，正在等待服务器处理...`
-                      : `正在上传目录 ${fullPath}...`,
-                    { waitingForServer }
-                  );
-                },
-              }
-            );
-            console.log(`目录 ${fullPath} 文件上传成功: ${uploadRes.Data.SuccessCount}, 失败: ${uploadRes.Data.FailedCount}`);
-            totalSuccess += uploadRes.Data.SuccessCount;
-            totalFailed += uploadRes.Data.FailedCount ?? 0;
-            uploadedBytes += batchBytes;
-            uploadedFiles += filesInDir.length;
-            updateUploadProgress(
-              uploadedBytes,
-              totalBytes,
-              uploadedFiles,
-              totalFiles,
-              `已完成目录 ${fullPath}`
-            );
+            await uploadGroupInBatches(currentParentId, filesInDir, `目录 ${fullPath}`);
           }
         }
-        updateUploadProgress(totalBytes, totalBytes, totalFiles, totalFiles, "上传完成", { isFinal: true });
-        successMessage = `目录上传完成，共成功上传 ${totalSuccess} 个文件${totalFailed > 0 ? `，${totalFailed} 个文件上传失败` : ""}`;
+      }
+
+      updateUploadProgress(totalBytes, totalBytes, totalFiles, totalFiles, "上传完成", {
+        isFinal: true,
+      });
+
+      // 汇总结果
+      let summary = `成功上传 ${totalSuccess} 个文件`;
+      if (totalFailed > 0) {
+        // 附上最多 3 个失败文件名，便于定位
+        const preview = failedNames.slice(0, 3).join("、");
+        const more = failedNames.length > 3 ? " 等" : "";
+        summary += `，${totalFailed} 个失败${preview ? `（${preview}${more}）` : ""}`;
+      }
+      if (skipSummary) {
+        summary += `，已跳过 ${skipSummary}`;
       }
 
       // 重置状态并刷新
       setFileList([]);
       setUploadModalVisible(false);
       resetUploadProgress();
-      if (successMessage) {
-        if (uploadType === "directory" && totalFailed > 0) {
-          message.warning(successMessage);
-        } else {
-          message.success(successMessage);
-        }
+      if (totalFailed > 0) {
+        message.warning(summary);
+      } else {
+        message.success(summary);
       }
       await refresh(); // 等待数据刷新
     } catch (error: any) {
@@ -799,13 +952,38 @@ const FilesPage: React.FC<FilesPageProps> = ({
   const uploadProps: UploadProps = {
     name: "File",
     multiple: true,
+    accept: uploadAccept,
     fileList: fileList,
     onChange: ({ fileList: newFileList }) => {
       if (uploading) return;
       setFileList(newFileList);
     },
-    beforeUpload: () => {
-      return false; // 阻止自动上传
+    // 选择阶段就过滤：非图片 / 超过后端配置大小的文件直接从列表中剔除，并在本批选择结束时统一提示
+    beforeUpload: (file, batch) => {
+      if (uploading) return Upload.LIST_IGNORE;
+
+      let ignored = false;
+      if (!isAllowedImageFile(file.name)) {
+        skippedFilesRef.current.nonImage.push(file.name);
+        ignored = true;
+      } else if (file.size > uploadConfig.MaxFileSizeBytes) {
+        skippedFilesRef.current.tooLarge.push(file.name);
+        ignored = true;
+      }
+
+      // antd 会对本批每个文件依次调用 beforeUpload，到最后一个时统一弹一次提示，避免刷屏
+      if (file === batch[batch.length - 1]) {
+        const { nonImage, tooLarge } = skippedFilesRef.current;
+        const parts: string[] = [];
+        if (nonImage.length > 0) parts.push(`${nonImage.length} 个非图片文件`);
+        if (tooLarge.length > 0) parts.push(`${tooLarge.length} 个超过 ${formatUploadSize(uploadConfig.MaxFileSizeBytes)} 的文件`);
+        if (parts.length > 0) {
+          message.warning(`已自动忽略 ${parts.join("、")}`);
+        }
+        skippedFilesRef.current = { nonImage: [], tooLarge: [] };
+      }
+
+      return ignored ? Upload.LIST_IGNORE : false; // 合法文件保留在列表，手动上传
     },
     onRemove: (file) => {
       if (uploading) return false;
@@ -1290,11 +1468,20 @@ const FilesPage: React.FC<FilesPageProps> = ({
 
           {fileList.length > 0 && (
             <div>
-              <Text strong>待上传文件列表：</Text>
+              <Text strong>待上传文件列表（共 {fileList.length} 个）：</Text>
+              {/* 仅渲染前若干项：上千个 List.Item 全量渲染会产生海量 DOM，
+                  叠加上传进度的频繁重渲染会卡死主线程，进而导致上传停滞 */}
               <List
                 size="small"
-                dataSource={fileList}
+                dataSource={fileList.slice(0, MAX_DISPLAYED_UPLOAD_ITEMS)}
                 style={{ marginTop: 8, maxHeight: 200, overflow: "auto" }}
+                footer={
+                  fileList.length > MAX_DISPLAYED_UPLOAD_ITEMS ? (
+                    <Text type="secondary">
+                      仅显示前 {MAX_DISPLAYED_UPLOAD_ITEMS} 个，其余 {fileList.length - MAX_DISPLAYED_UPLOAD_ITEMS} 个已省略
+                    </Text>
+                  ) : null
+                }
                 renderItem={(file) => (
                   <List.Item
                     actions={[
