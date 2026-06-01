@@ -147,7 +147,16 @@ type FilmInfoOcrField =
   | 'filmNumber'
   | 'sensitivity';
 
-type FilmInfoRegionField = FilmInfoOcrField | 'normalizedSnr';
+type FilmInfoRegionField = FilmInfoOcrField;
+
+const NORMALIZED_SNR_POINT_COUNT = 6;
+const NORMALIZED_SNR_REGION_WIDTH = 20;
+const NORMALIZED_SNR_REGION_HEIGHT = 55;
+
+interface NormalizedSnrPoint {
+  x: number;
+  y: number;
+}
 
 // 扩展保存的图形接口，增加 label, color 以及新的业务字段
 interface DefectBase {
@@ -399,10 +408,7 @@ const REGION_SNR_ERROR_MESSAGES: Record<number, string> = {
   4002: '区域灰度标准差为 0，无法计算归一化信噪比，请重新框选',
 };
 
-function getRegionSelectionPrompt(field: FilmInfoRegionField) {
-  if (field === 'normalizedSnr') {
-    return '请在图像上框选要计算区域归一化信噪比的区域';
-  }
+function getRegionSelectionPrompt(_field: FilmInfoRegionField) {
   return '请在图像上框选要识别的区域';
 }
 
@@ -949,6 +955,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [ocrDrawRect, setOcrDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [ocrDrawStart, setOcrDrawStart] = useState<{ x: number; y: number } | null>(null);
 
+  // --- 归一化信噪比：6 点手动选择状态 ---
+  const [isSelectingNormalizedSnrPoints, setIsSelectingNormalizedSnrPoints] = useState(false);
+  const [normalizedSnrPoints, setNormalizedSnrPoints] = useState<NormalizedSnrPoint[]>([]);
+  const [isComputingNormalizedSnr, setIsComputingNormalizedSnr] = useState(false);
+
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
 
@@ -1287,6 +1298,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setCurrentDefectCircle(null);
       setCursorInImage(null);
     }
+    if (activeTool !== 'pan') {
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+    }
     // 当切换到位置和尺寸工具时，重置子类型为 null（默认不选中任何选项），同时重置脏标记
     if (activeTool === 'positionSize') {
       setPositionSizeType(null);
@@ -1410,6 +1425,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     // 重置缺陷位置检测2原点及来源元信息
     setDefectOriginPoint(null);
     setDefectOriginMeta(null);
+    setIsSelectingNormalizedSnrPoints(false);
+    setNormalizedSnrPoints([]);
+    setIsComputingNormalizedSnr(false);
   }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -1672,6 +1690,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     cursorStyle = 'crosshair';
   } else if (activeTool === 'positionSize' && positionSizeType === 'positioning') {
     cursorStyle = 'crosshair';
+  } else if (isSelectingNormalizedSnrPoints) {
+    cursorStyle = 'crosshair';
   } else if (activeTool === 'defect') {
     cursorStyle = 'crosshair';
   } else if (ocrTargetField !== null) {
@@ -1731,9 +1751,114 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     };
   };
 
+  const buildNormalizedSnrRegion = (point: NormalizedSnrPoint) => {
+    const sourceWidth = canvasRef.current?.width || trueImageW || originalSize.w;
+    const sourceHeight = canvasRef.current?.height || trueImageH || originalSize.h;
+    const targetWidth = Math.min(NORMALIZED_SNR_REGION_WIDTH, sourceWidth);
+    const targetHeight = Math.min(NORMALIZED_SNR_REGION_HEIGHT, sourceHeight);
+    const x = Math.max(0, Math.min(Math.round(point.x - targetWidth / 2), sourceWidth - targetWidth));
+    const y = Math.max(0, Math.min(Math.round(point.y - targetHeight / 2), sourceHeight - targetHeight));
+    return {
+      x,
+      y,
+      w: targetWidth,
+      h: targetHeight,
+    };
+  };
+
+  const computeNormalizedSnrFromPoints = async (points: NormalizedSnrPoint[]) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (points.length !== NORMALIZED_SNR_POINT_COUNT) {
+      message.warning(`请先选择 ${NORMALIZED_SNR_POINT_COUNT} 个点`);
+      return;
+    }
+
+    setIsComputingNormalizedSnr(true);
+    try {
+      const requests = points.map((point, index) => {
+        const region = buildNormalizedSnrRegion(point);
+        if (region.w <= 0 || region.h <= 0) {
+          throw new Error('选区无效，请重新选择');
+        }
+
+        const tmp = document.createElement('canvas');
+        tmp.width = region.w;
+        tmp.height = region.h;
+        tmp.getContext('2d')!.drawImage(
+          canvas,
+          region.x,
+          region.y,
+          region.w,
+          region.h,
+          0,
+          0,
+          region.w,
+          region.h
+        );
+        return snrAPI.computeRegion(tmp.toDataURL('image/png'), taskId, `normalizedSnr_${index + 1}`);
+      });
+
+      const results = await Promise.all(requests);
+      const failedResult = results.find(result => result.result_code !== 0 || typeof result.snr_n !== 'number');
+      if (failedResult) {
+        message.error(getRegionSnrErrorMessage(failedResult));
+        setIsSelectingNormalizedSnrPoints(false);
+        setNormalizedSnrPoints([]);
+        return;
+      }
+
+      const minSnr = Math.min(...results.map(result => result.snr_n as number));
+      const snrValue = formatNormalizedSnrValue(minSnr);
+      filmInfoForm.setFieldValue('normalizedSnr', snrValue);
+      autoSaveFilmInfo();
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      message.success(`归一化信噪比计算完成: ${snrValue}`);
+    } catch (err) {
+      console.error('[SNR] 6点归一化信噪比计算失败:', err);
+      message.error('归一化信噪比计算失败');
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+    } finally {
+      setIsComputingNormalizedSnr(false);
+    }
+  };
+
+  const handleNormalizedSnrPointClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (isComputingNormalizedSnr) return;
+
+    const displayPoint = getImageCoordinates(e);
+    const rawPoint = calculateTrueCoordinates(displayPoint.x, displayPoint.y);
+    const nextPoints = [
+      ...normalizedSnrPoints,
+      {
+        x: Math.max(0, Math.min(rawPoint.x, trueImageW || originalSize.w || rawPoint.x)),
+        y: Math.max(0, Math.min(rawPoint.y, trueImageH || originalSize.h || rawPoint.y)),
+      },
+    ];
+
+    setNormalizedSnrPoints(nextPoints);
+
+    if (nextPoints.length < NORMALIZED_SNR_POINT_COUNT) {
+      message.info(`已选择 ${nextPoints.length}/${NORMALIZED_SNR_POINT_COUNT} 个点`);
+      return;
+    }
+
+    computeNormalizedSnrFromPoints(nextPoints);
+  };
+
   // --- 鼠标按下 ---
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
+
+    if (isSelectingNormalizedSnrPoints && !isSpacePressed && activeTool === 'pan') {
+      handleNormalizedSnrPointClick(e);
+      return;
+    }
 
     if (ocrTargetField !== null) {
       e.stopPropagation();
@@ -3039,6 +3164,25 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     }
   };
 
+  const handleNormalizedSnrSelectClick = () => {
+    if (isComputingNormalizedSnr) return;
+
+    if (isSelectingNormalizedSnrPoints) {
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      message.info('已取消归一化信噪比手动选择');
+      return;
+    }
+
+    setActiveTool('pan');
+    setOcrTargetField(null);
+    setOcrDrawRect(null);
+    setOcrDrawStart(null);
+    setNormalizedSnrPoints([]);
+    setIsSelectingNormalizedSnrPoints(true);
+    message.info(`请在图像上依次选择 ${NORMALIZED_SNR_POINT_COUNT} 个点，可滚轮缩放或按住空格拖动图片`);
+  };
+
   const handleOcrRegionSelected = async (
     rect: { x: number; y: number; w: number; h: number },
     field: FilmInfoRegionField
@@ -3067,22 +3211,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     console.log('[OCR] 开始识别, field:', field, '裁剪区域:', { sx, sy, sw, sh }, 'canvas尺寸:', { w: canvas.width, h: canvas.height });
     setOcrLoadingField(field);
     try {
-      if (field === 'normalizedSnr') {
-        const result: RegionSnrResult = await snrAPI.computeRegion(base64, taskId, field);
-        console.log('[SNR] 后端返回结果:', result);
-        if (result.result_code === 0 && typeof result.snr_n === 'number') {
-          const snrValue = formatNormalizedSnrValue(result.snr_n);
-          filmInfoForm.setFieldValue('normalizedSnr', snrValue);
-          autoSaveFilmInfo();
-          message.success(`区域归一化信噪比计算成功: ${snrValue}`);
-        } else if (result.result_code === 0) {
-          message.error('区域归一化信噪比计算成功，但未返回 snr_n');
-        } else {
-          message.error(getRegionSnrErrorMessage(result));
-        }
-        return;
-      }
-
       const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64, taskId, field);
       console.log('[OCR] 后端返回结果:', result);
       const recognized = result?.text?.trim();
@@ -3098,7 +3226,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       }
     } catch (err) {
       console.error('[OCR] 请求失败:', err);
-      message.error(field === 'normalizedSnr' ? '区域归一化信噪比计算失败' : 'OCR识别失败');
+      message.error('OCR识别失败');
     } finally {
       setOcrLoadingField(null);
     }
@@ -3502,6 +3630,28 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
               </Form.Item>
             </Form.Item>
             
+            <Form.Item label="归一化信噪比" style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', width: '100%' }}>
+                <Form.Item name="normalizedSnr" noStyle>
+                  <Input
+                    placeholder="手动选择后计算"
+                    readOnly
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={isSelectingNormalizedSnrPoints ? 'primary' : 'default'}
+                  loading={isComputingNormalizedSnr}
+                  disabled={!selectedFile || !imageReady || ocrLoadingField !== null}
+                  onClick={handleNormalizedSnrSelectClick}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {isSelectingNormalizedSnrPoints ? `${normalizedSnrPoints.length}/${NORMALIZED_SNR_POINT_COUNT}` : '手动选择'}
+                </Button>
+              </div>
+            </Form.Item>
+
             <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
               <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
                 {({ getFieldValue }) => {
@@ -3546,22 +3696,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 </Button>
               </div>
             </Form.Item>
-            {/* <Form.Item label="区域归一化信噪比" style={{ marginBottom: 8 }}>
-              <Space.Compact style={{ width: '100%' }}>
-                <Tooltip title={ocrTargetField === 'normalizedSnr' ? '点击取消框选' : '框选计算区域归一化信噪比'} getPopupContainer={getEditorPopupContainer}>
-                  <Button
-                    size="small"
-                    icon={<ScanOutlined spin={ocrLoadingField === 'normalizedSnr'} />}
-                    type={ocrTargetField === 'normalizedSnr' ? 'primary' : 'default'}
-                    onClick={() => handleOcrButtonClick('normalizedSnr')}
-                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'normalizedSnr')}
-                  />
-                </Tooltip>
-                <Form.Item name="normalizedSnr" noStyle>
-                  <Input placeholder="框选后识别区域归一化信噪比" readOnly />
-                </Form.Item>
-              </Space.Compact>
-            </Form.Item> */}
           </Form>
         )}
       </div>
@@ -4472,6 +4606,56 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       stroke="#fa8c16" strokeWidth={2 / scale} strokeDasharray="4 2" fill="rgba(250, 140, 22, 0.1)"
                     />
                   )}
+
+                  {/* D3. 归一化信噪比 6 点选择区域 */}
+                  {normalizedSnrPoints.map((point, idx) => {
+                    const region = buildNormalizedSnrRegion(point);
+                    const displayX = widthRatio > 0 ? region.x / widthRatio : region.x;
+                    const displayY = heightRatio > 0 ? region.y / heightRatio : region.y;
+                    const displayW = widthRatio > 0 ? region.w / widthRatio : region.w;
+                    const displayH = heightRatio > 0 ? region.h / heightRatio : region.h;
+                    const centerX = widthRatio > 0 ? point.x / widthRatio : point.x;
+                    const centerY = heightRatio > 0 ? point.y / heightRatio : point.y;
+                    const labelX = centerX + 7 / scale;
+                    const labelY = centerY - 7 / scale;
+                    const normCSS = ((rotation % 360) + 360) % 360;
+                    let textTransform = '';
+                    if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${labelX}, ${labelY}) `;
+                    if (flipH === -1) textTransform += `translate(${2 * labelX}, 0) scale(-1, 1)`;
+                    return (
+                      <g key={`normalized-snr-point-${idx}`}>
+                        <rect
+                          x={displayX}
+                          y={displayY}
+                          width={displayW}
+                          height={displayH}
+                          stroke="#13c2c2"
+                          strokeWidth={2 / scale}
+                          strokeDasharray={`${4 / scale} ${2 / scale}`}
+                          fill="rgba(19, 194, 194, 0.12)"
+                        />
+                        <circle
+                          cx={centerX}
+                          cy={centerY}
+                          r={4 / scale}
+                          fill="#13c2c2"
+                          stroke="#fff"
+                          strokeWidth={1.5 / scale}
+                        />
+                        <text
+                          x={labelX}
+                          y={labelY}
+                          fill="#13c2c2"
+                          fontSize={12 / scale}
+                          fontWeight="bold"
+                          style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
+                          transform={textTransform || undefined}
+                        >
+                          {idx + 1}
+                        </text>
+                      </g>
+                    );
+                  })}
 
                   {/* E. 绘制当前正在绘制的多边形 (蓝色折线 + 橡皮筋线) */}
                   {activeTool === 'defect' && drawingType === 'polygon' && currentPolygonPoints.length > 0 && (
