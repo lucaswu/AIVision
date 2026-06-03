@@ -435,6 +435,10 @@ public class AiServiceClient {
                     metadata.put("grayscale_density", grayscaleDensity);
                 }
             }
+            JsonNode grayscaleDensityRegions = pythonResult.path("grayscale_density_regions");
+            if (grayscaleDensityRegions.isArray() && grayscaleDensityRegions.size() > 0) {
+                metadata.put("grayscale_density_regions", grayscaleDensityRegions);
+            }
 
             finalResult.put("metadata", metadata);
             finalResult.put("results", defectResults);

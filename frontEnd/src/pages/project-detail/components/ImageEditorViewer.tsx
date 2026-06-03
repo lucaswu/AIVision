@@ -205,6 +205,18 @@ interface IqiVisualizationData {
   wire_lines: IqiVisualizationLine[];
 }
 
+interface FilmDensityRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  bbox?: [number, number, number, number];
+  center_x?: number;
+  center_y?: number;
+  label?: string;
+  source?: string;
+}
+
 // --- 椭圆工具相关接口 ---
 interface EllipseShape {
   cx: number;
@@ -373,6 +385,61 @@ function parseIqiVisualization(visionResult?: string | null): IqiVisualizationDa
     };
   } catch {
     return empty;
+  }
+}
+
+function parseFilmDensityRegions(visionResult?: string | null): FilmDensityRegion[] {
+  if (!visionResult) return [];
+
+  try {
+    const parsed = JSON.parse(visionResult);
+    const rawRegions = Array.isArray(parsed?.metadata?.grayscale_density_regions)
+      ? parsed.metadata.grayscale_density_regions
+      : Array.isArray(parsed?.grayscale_density_regions)
+        ? parsed.grayscale_density_regions
+        : [];
+
+    return rawRegions
+      .map((region: any): FilmDensityRegion | null => {
+        let x = toFiniteNumber(region?.x);
+        let y = toFiniteNumber(region?.y);
+        let w = toFiniteNumber(region?.w);
+        let h = toFiniteNumber(region?.h);
+
+        const bboxValues = Array.isArray(region?.bbox) && region.bbox.length >= 4
+          ? region.bbox.slice(0, 4).map(toFiniteNumber)
+          : null;
+        const bbox = bboxValues && bboxValues.every((value: number | null) => value !== null)
+          ? bboxValues as [number, number, number, number]
+          : null;
+
+        if ((x === null || y === null || w === null || h === null) && bbox) {
+          const [x1, y1, x2, y2] = bbox;
+          x = x1;
+          y = y1;
+          w = x2 - x1;
+          h = y2 - y1;
+        }
+
+        if (x === null || y === null || w === null || h === null || w <= 0 || h <= 0) {
+          return null;
+        }
+
+        return {
+          x,
+          y,
+          w,
+          h,
+          bbox: bbox ?? [x, y, x + w, y + h],
+          center_x: toFiniteNumber(region?.center_x) ?? undefined,
+          center_y: toFiniteNumber(region?.center_y) ?? undefined,
+          label: typeof region?.label === 'string' ? region.label : undefined,
+          source: typeof region?.source === 'string' ? region.source : undefined,
+        };
+      })
+      .filter((region: FilmDensityRegion | null): region is FilmDensityRegion => region !== null);
+  } catch {
+    return [];
   }
 }
 
@@ -944,6 +1011,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [iqiVisualization, setIqiVisualization] = useState<IqiVisualizationData>(() => createEmptyIqiVisualization());
   const [showIqiVisualization, setShowIqiVisualization] = useState(false);
 
+  // --- 底片黑度采样区域（来自 VisionResult.metadata.grayscale_density_regions，矫正后图像坐标系）---
+  const [filmDensityRegions, setFilmDensityRegions] = useState<FilmDensityRegion[]>([]);
+  const [showFilmDensityRegions, setShowFilmDensityRegions] = useState(false);
+
   // --- 新增：折叠状态 ---
   const [isReviewPanelCollapsed, setIsReviewPanelCollapsed] = useState(initialReviewPanelCollapsed);
   const [showDefectList, setShowDefectList] = useState(true);
@@ -1422,6 +1493,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     // 重置 IQI 可视化结果（新文件加载时重新解析）
     setIqiVisualization(createEmptyIqiVisualization());
     setShowIqiVisualization(false);
+    setFilmDensityRegions([]);
+    setShowFilmDensityRegions(false);
     // 重置缺陷位置检测2原点及来源元信息
     setDefectOriginPoint(null);
     setDefectOriginMeta(null);
@@ -2758,6 +2831,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
       // 从 VisionResult 解析 IQI 可视化数据（不单独存 DB，直接读推理结果 JSON）
       setIqiVisualization(parseIqiVisualization(selectedFile.VisionResult));
+      setFilmDensityRegions(parseFilmDensityRegions(selectedFile.VisionResult));
 
       // 立即清空缺陷列表，防止在加载新数据前显示旧数据或发生时序闪烁
       setDefectRects([]);
@@ -3061,6 +3135,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     iqiVisualization.roi_polygon_xy.length > 0 ||
     iqiVisualization.plate_text_items_selected.length > 0 ||
     iqiVisualization.wire_lines.length > 0;
+  const hasFilmDensityRegions = filmDensityRegions.length > 0;
 
   // 旋转90°/270°后，水平轴对应原图高度、垂直轴对应原图宽度，标尺需交换 ratio 和 maxImageSize
   const corrNormR = ((rotation % 360) + 360) % 360;
@@ -3653,29 +3728,41 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
             </Form.Item>
 
             <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
-              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
-                {({ getFieldValue }) => {
-                  const filmDensity = getFieldValue('filmDensity');
-                  return (
-                    <div
-                      style={{
-                        width: '100%',
-                        minHeight: 24,
-                        padding: '1px 11px',
-                        border: '1px solid #d9d9d9',
-                        borderRadius: 6,
-                        background: '#fafafa',
-                        lineHeight: '22px',
-                      }}
-                    >
-                      {filmDensity || <Text type="secondary">暂无结果</Text>}
-                    </div>
-                  );
-                }}
-              </Form.Item>
-              <Form.Item name="filmDensity" hidden>
-                <Input />
-              </Form.Item>
+              <div style={{ display: 'flex', width: '100%' }}>
+                <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
+                  {({ getFieldValue }) => {
+                    const filmDensity = getFieldValue('filmDensity');
+                    return (
+                      <div
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          minHeight: 24,
+                          padding: '1px 11px',
+                          border: '1px solid #d9d9d9',
+                          borderRadius: 6,
+                          background: '#fafafa',
+                          lineHeight: '22px',
+                        }}
+                      >
+                        {filmDensity || <Text type="secondary">暂无结果</Text>}
+                      </div>
+                    );
+                  }}
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={showFilmDensityRegions ? 'primary' : 'default'}
+                  disabled={!selectedFile || !hasFilmDensityRegions}
+                  onClick={() => setShowFilmDensityRegions(v => !v)}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {showFilmDensityRegions ? '隐藏结果' : '显示结果'}
+                </Button>
+                <Form.Item name="filmDensity" hidden>
+                  <Input />
+                </Form.Item>
+              </div>
             </Form.Item>
             <Form.Item label="像质计灵敏度" style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', width: '100%' }}>
@@ -4256,7 +4343,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                    {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
                    {/* 只有在显示坐标且没有手动设置原点时，才显示 AI 检测的原点 */}
-                   {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && !originPoint && (() => {
+                  {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && !originPoint && (() => {
                      const corrRotation = selectedFile?.CorrectionRotation ?? 0;
                      const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
                      const normR = ((corrRotation % 360) + 360) % 360;
@@ -4309,7 +4396,61 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                      );
                    })()}
 
-                  {/* 0-C. IQI 可视化层（来自 ocr.visualization，原始图像坐标系）*/}
+                  {/* 0-C. 底片黑度采样区域（来自 metadata.grayscale_density_regions，矫正后图像坐标系）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showFilmDensityRegions && hasFilmDensityRegions && (
+                    <g>
+                      {(() => {
+                        const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                        const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                        const normR = ((corrRotation % 360) + 360) % 360;
+                        const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                        const rimgW = (normR === 90 || normR === 270)
+                          ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                        const rimgH = (normR === 90 || normR === 270)
+                          ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                        const toDisplayRect = (region: FilmDensityRegion) => {
+                          const points = [
+                            { x: region.x, y: region.y },
+                            { x: region.x + region.w, y: region.y },
+                            { x: region.x + region.w, y: region.y + region.h },
+                            { x: region.x, y: region.y + region.h },
+                          ].map((pt) => {
+                            let px = pt.x;
+                            let py = pt.y;
+                            if (needsInverse && rimgW > 0 && rimgH > 0) {
+                              const transformed = inverseTransformPoint(px, py, rimgW, rimgH, corrRotation, corrFlipH);
+                              px = transformed.x;
+                              py = transformed.y;
+                            }
+                            return {
+                              x: widthRatio > 0 ? px / widthRatio : px,
+                              y: heightRatio > 0 ? py / heightRatio : py,
+                            };
+                          });
+                          return points.map((pt) => `${pt.x},${pt.y}`).join(' ');
+                        };
+
+                        return (
+                          <>
+                            {filmDensityRegions.map((region, index) => (
+                              <polygon
+                                key={`film-density-region-${index}`}
+                                points={toDisplayRect(region)}
+                                fill="rgba(255, 45, 45, 0.12)"
+                                stroke="#ff2d2d"
+                                strokeWidth={2 / scale}
+                                strokeLinejoin="round"
+                                opacity={0.95}
+                              />
+                            ))}
+                          </>
+                        );
+                      })()}
+                    </g>
+                  )}
+
+                  {/* 0-D. IQI 可视化层（来自 ocr.visualization，原始图像坐标系）*/}
                   {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiVisualization && hasIqiVisualization && (
                     <g>
                       {(() => {

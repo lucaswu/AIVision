@@ -66,8 +66,8 @@ from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
-from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc0  # noqa: E402
-from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc1  # noqa: E402
+from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density_with_regions as compute_grayscale_loc0  # noqa: E402
+from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density_with_regions as compute_grayscale_loc1  # noqa: E402
 # IQI Grade Inferencer (replaces legacy OCR runner)
 IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
 IQIDDET_SRC_ROOT = IQIDDET_ROOT / "src"
@@ -578,6 +578,7 @@ class InferencePipelineRunner:
                 # should use native high-bit data after applying the same correction label so
                 # coordinates remain aligned with weld_location keypoints.
                 grayscale_density: Optional[str] = None
+                grayscale_density_regions: List[Dict[str, Any]] = []
                 density_image = None
                 try:
                     density_image = _load_density_image(image_path, label)
@@ -587,12 +588,16 @@ class InferencePipelineRunner:
 
                 if density_image is not None:
                     try:
+                        density_detail = None
                         if weld_location:
                             # B path detected: use ellipse/vertical clock positions
-                            grayscale_density = compute_grayscale_loc0(density_image, weld_location)
-                        if grayscale_density is None:
+                            density_detail = compute_grayscale_loc0(density_image, weld_location)
+                        if density_detail is None:
                             # Fallback to linear sampling (D path or no location detection)
-                            grayscale_density = compute_grayscale_loc1(density_image)
+                            density_detail = compute_grayscale_loc1(density_image, defect_position)
+                        if density_detail is not None:
+                            grayscale_density = density_detail.get("value")
+                            grayscale_density_regions = density_detail.get("regions") or []
                     except Exception as gs_exc:
                         print(f"[警告] 灰度值计算失败 ({image_path.name}): {gs_exc}")
 
@@ -613,6 +618,7 @@ class InferencePipelineRunner:
                     "defect_position": defect_position,
                     "ocr": iqi_result,
                     "grayscale_density": grayscale_density,
+                    "grayscale_density_regions": grayscale_density_regions,
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
