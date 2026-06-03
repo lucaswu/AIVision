@@ -124,7 +124,7 @@ export interface TaskFile {
   PlateQuality?: string; // 底片质量
   // 新增：底片信息字段
   FilmPixelValue?: string; // 底片像素值
-  Resolution?: string;    // 分辨率
+  Resolution?: string;    // 双丝分辨率
   Specification?: string; // 规格
   InspectionDate?: string; // 检验日期
   WeldId?: string;       // 焊口编号

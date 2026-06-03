@@ -152,10 +152,18 @@ type FilmInfoRegionField = FilmInfoOcrField;
 const NORMALIZED_SNR_POINT_COUNT = 6;
 const NORMALIZED_SNR_REGION_WIDTH = 20;
 const NORMALIZED_SNR_REGION_HEIGHT = 55;
+const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = 10;
 
 interface NormalizedSnrPoint {
   x: number;
   y: number;
+}
+
+interface ImageLine {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
 }
 
 // 扩展保存的图形接口，增加 label, color 以及新的业务字段
@@ -484,6 +492,11 @@ function formatNormalizedSnrValue(value: number) {
   return normalized.replace(/\.?0+$/, '');
 }
 
+function formatDoubleWireResolutionValue(value: number) {
+  const normalized = value.toFixed(2).replace(/\.?0+$/, '');
+  return `${normalized}μm`;
+}
+
 function getRegionSnrErrorMessage(result: RegionSnrResult) {
   const mapped = REGION_SNR_ERROR_MESSAGES[result.result_code];
   if (mapped && result.message && result.message !== '未知错误') {
@@ -493,6 +506,20 @@ function getRegionSnrErrorMessage(result: RegionSnrResult) {
     return mapped;
   }
   return result.message || '区域归一化信噪比计算失败';
+}
+
+function getDoubleWireResolutionErrorMessage(result: RegionSnrResult) {
+  if (result.result_code === 4001) {
+    return result.message && result.message !== '未知错误'
+      ? `输入区域面积不满足要求，请重新选择：${result.message}`
+      : '输入区域面积不满足要求，请重新选择';
+  }
+  if (result.result_code === 4002) {
+    return result.message && result.message !== '未知错误'
+      ? `所选区域灰度标准差为 0，请重新选择：${result.message}`
+      : '所选区域灰度标准差为 0，请重新选择';
+  }
+  return result.message || '双丝分辨率计算失败';
 }
 
 /**
@@ -1030,6 +1057,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [isSelectingNormalizedSnrPoints, setIsSelectingNormalizedSnrPoints] = useState(false);
   const [normalizedSnrPoints, setNormalizedSnrPoints] = useState<NormalizedSnrPoint[]>([]);
   const [isComputingNormalizedSnr, setIsComputingNormalizedSnr] = useState(false);
+  const [isSelectingDoubleWireResolutionPoints, setIsSelectingDoubleWireResolutionPoints] = useState(false);
+  const [doubleWireResolutionLine, setDoubleWireResolutionLine] = useState<ImageLine | null>(null);
+  const [isDrawingDoubleWireResolutionLine, setIsDrawingDoubleWireResolutionLine] = useState(false);
+  const [isComputingDoubleWireResolution, setIsComputingDoubleWireResolution] = useState(false);
 
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
@@ -1372,6 +1403,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     if (activeTool !== 'pan') {
       setIsSelectingNormalizedSnrPoints(false);
       setNormalizedSnrPoints([]);
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      setIsDrawingDoubleWireResolutionLine(false);
     }
     // 当切换到位置和尺寸工具时，重置子类型为 null（默认不选中任何选项），同时重置脏标记
     if (activeTool === 'positionSize') {
@@ -1501,6 +1535,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setIsSelectingNormalizedSnrPoints(false);
     setNormalizedSnrPoints([]);
     setIsComputingNormalizedSnr(false);
+    setIsSelectingDoubleWireResolutionPoints(false);
+    setDoubleWireResolutionLine(null);
+    setIsDrawingDoubleWireResolutionLine(false);
+    setIsComputingDoubleWireResolution(false);
   }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -1753,6 +1791,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   let cursorStyle = 'default';
   if (isPanning) {
     cursorStyle = 'grabbing';
+  } else if (isSelectingNormalizedSnrPoints || isSelectingDoubleWireResolutionPoints) {
+    cursorStyle = 'crosshair';
   } else if (isSpacePressed || activeTool === 'pan') {
     cursorStyle = 'grab';
   } else if (activeTool === 'windowing') {
@@ -1762,8 +1802,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   } else if (activeTool === 'setOrigin') {
     cursorStyle = 'crosshair';
   } else if (activeTool === 'positionSize' && positionSizeType === 'positioning') {
-    cursorStyle = 'crosshair';
-  } else if (isSelectingNormalizedSnrPoints) {
     cursorStyle = 'crosshair';
   } else if (activeTool === 'defect') {
     cursorStyle = 'crosshair';
@@ -1839,6 +1877,80 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     };
   };
 
+  const computeRegionSnrAtPoint = (point: NormalizedSnrPoint, fieldName: string) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      throw new Error('图像未加载完成');
+    }
+
+    const region = buildNormalizedSnrRegion(point);
+    if (region.w <= 0 || region.h <= 0) {
+      throw new Error('选区无效，请重新选择');
+    }
+
+    const tmp = document.createElement('canvas');
+    tmp.width = region.w;
+    tmp.height = region.h;
+    tmp.getContext('2d')!.drawImage(
+      canvas,
+      region.x,
+      region.y,
+      region.w,
+      region.h,
+      0,
+      0,
+      region.w,
+      region.h
+    );
+
+    return snrAPI.computeRegion(tmp.toDataURL('image/png'), taskId, fieldName);
+  };
+
+  const buildDoubleWireResolutionStripCanvas = (line: ImageLine) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      throw new Error('图像未加载完成');
+    }
+
+    const p1 = calculateTrueCoordinates(line.x1, line.y1);
+    const p2 = calculateTrueCoordinates(line.x2, line.y2);
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 5) {
+      throw new Error('起始点和终止点距离过短，请重新选择');
+    }
+
+    const stripWidth = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH * 2;
+    const stripHeight = Math.max(1, Math.round(length));
+    const ux = dx / length;
+    const uy = dy / length;
+    const nx = -uy;
+    const ny = ux;
+    const tmp = document.createElement('canvas');
+    tmp.width = stripWidth;
+    tmp.height = stripHeight;
+    const ctx = tmp.getContext('2d');
+    if (!ctx) {
+      throw new Error('无法创建裁剪画布');
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.setTransform(
+      nx,
+      ux,
+      ny,
+      uy,
+      DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH - nx * p1.x - ny * p1.y,
+      -ux * p1.x - uy * p1.y
+    );
+    ctx.drawImage(canvas, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    return tmp;
+  };
+
   const computeNormalizedSnrFromPoints = async (points: NormalizedSnrPoint[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1849,28 +1961,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
     setIsComputingNormalizedSnr(true);
     try {
-      const requests = points.map((point, index) => {
-        const region = buildNormalizedSnrRegion(point);
-        if (region.w <= 0 || region.h <= 0) {
-          throw new Error('选区无效，请重新选择');
-        }
-
-        const tmp = document.createElement('canvas');
-        tmp.width = region.w;
-        tmp.height = region.h;
-        tmp.getContext('2d')!.drawImage(
-          canvas,
-          region.x,
-          region.y,
-          region.w,
-          region.h,
-          0,
-          0,
-          region.w,
-          region.h
-        );
-        return snrAPI.computeRegion(tmp.toDataURL('image/png'), taskId, `normalizedSnr_${index + 1}`);
-      });
+      const requests = points.map((point, index) => computeRegionSnrAtPoint(point, `normalizedSnr_${index + 1}`));
 
       const results = await Promise.all(requests);
       const failedResult = results.find(result => result.result_code !== 0 || typeof result.snr_n !== 'number');
@@ -1895,6 +1986,44 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setNormalizedSnrPoints([]);
     } finally {
       setIsComputingNormalizedSnr(false);
+    }
+  };
+
+  const computeDoubleWireResolutionFromLine = async (line: ImageLine) => {
+    if (isComputingDoubleWireResolution) return;
+
+    const displayLength = Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+    if (displayLength < 2) {
+      message.warning('起始点和终止点距离过短，请重新选择');
+      setDoubleWireResolutionLine(null);
+      return;
+    }
+
+    setIsComputingDoubleWireResolution(true);
+    try {
+      const stripCanvas = buildDoubleWireResolutionStripCanvas(line);
+      const result = await snrAPI.computeRegion(stripCanvas.toDataURL('image/png'), taskId, 'doubleWireResolution');
+      if (result.result_code !== 0 || typeof result.sr_b_um !== 'number') {
+        message.error(getDoubleWireResolutionErrorMessage(result));
+        setIsSelectingDoubleWireResolutionPoints(false);
+        setDoubleWireResolutionLine(null);
+        return;
+      }
+
+      const resolutionValue = formatDoubleWireResolutionValue(result.sr_b_um);
+      filmInfoForm.setFieldValue('resolution', resolutionValue);
+      autoSaveFilmInfo();
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      message.success(`双丝分辨率计算完成: ${resolutionValue}`);
+    } catch (err) {
+      console.error('[SNR] 双丝分辨率计算失败:', err);
+      message.error(err instanceof Error ? err.message : '双丝分辨率计算失败');
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+    } finally {
+      setIsDrawingDoubleWireResolutionLine(false);
+      setIsComputingDoubleWireResolution(false);
     }
   };
 
@@ -1924,12 +2053,60 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     computeNormalizedSnrFromPoints(nextPoints);
   };
 
+  const handleDoubleWireResolutionLineStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (isComputingDoubleWireResolution) return;
+
+    const displayPoint = getImageCoordinates(e);
+    const clampedPoint = {
+      x: Math.max(0, Math.min(displayPoint.x, imgSize.w || displayPoint.x)),
+      y: Math.max(0, Math.min(displayPoint.y, imgSize.h || displayPoint.y)),
+    };
+    setDoubleWireResolutionLine({
+      x1: clampedPoint.x,
+      y1: clampedPoint.y,
+      x2: clampedPoint.x,
+      y2: clampedPoint.y,
+    });
+    setIsDrawingDoubleWireResolutionLine(true);
+  };
+
+  const handleDoubleWireResolutionLineMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawingDoubleWireResolutionLine || !doubleWireResolutionLine) return;
+    const displayPoint = getImageCoordinates(e);
+    setDoubleWireResolutionLine({
+      ...doubleWireResolutionLine,
+      x2: Math.max(0, Math.min(displayPoint.x, imgSize.w || displayPoint.x)),
+      y2: Math.max(0, Math.min(displayPoint.y, imgSize.h || displayPoint.y)),
+    });
+  };
+
+  const handleDoubleWireResolutionLineEnd = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawingDoubleWireResolutionLine || !doubleWireResolutionLine) return;
+    setIsDrawingDoubleWireResolutionLine(false);
+    const displayPoint = getImageCoordinates(e);
+    const finalLine = {
+      ...doubleWireResolutionLine,
+      x2: Math.max(0, Math.min(displayPoint.x, imgSize.w || displayPoint.x)),
+      y2: Math.max(0, Math.min(displayPoint.y, imgSize.h || displayPoint.y)),
+    };
+    setDoubleWireResolutionLine(finalLine);
+    computeDoubleWireResolutionFromLine(finalLine);
+  };
+
   // --- 鼠标按下 ---
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
 
     if (isSelectingNormalizedSnrPoints && !isSpacePressed && activeTool === 'pan') {
       handleNormalizedSnrPointClick(e);
+      return;
+    }
+
+    if (isSelectingDoubleWireResolutionPoints && !isSpacePressed && activeTool === 'pan') {
+      handleDoubleWireResolutionLineStart(e);
       return;
     }
 
@@ -2107,6 +2284,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       return;
     }
 
+    if (isSelectingDoubleWireResolutionPoints && activeTool === 'pan') {
+      handleDoubleWireResolutionLineMove(e);
+      return;
+    }
+
     if (activeTool === 'defect') {
       if (drawingType === 'rect' && isDrawingDefect && defectStartPoint) {
         const { x: currX, y: currY } = getImageCoordinates(e);
@@ -2231,6 +2413,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   // --- 鼠标松开 ---
   const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isSelectingDoubleWireResolutionPoints && activeTool === 'pan') {
+      handleDoubleWireResolutionLineEnd(e);
+      return;
+    }
+
     if (ocrTargetField !== null) {
       const field = ocrTargetField;
       setOcrTargetField(null);
@@ -2399,6 +2586,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     if (isPanning) setIsPanning(false);
     if (activeTool === 'setOrigin') setIsSettingOrigin(false);
     if (activeTool === 'positionSize' && positionSizeType === 'positioning') setIsSettingPositioning(false);
+    if (isDrawingDoubleWireResolutionLine) {
+      setIsDrawingDoubleWireResolutionLine(false);
+      setDoubleWireResolutionLine(null);
+    }
     if (isDrawingDefect) {
       setIsDrawingDefect(false);
       setCurrentDefectRect(null);
@@ -3253,9 +3444,35 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setOcrTargetField(null);
     setOcrDrawRect(null);
     setOcrDrawStart(null);
+    setIsSelectingDoubleWireResolutionPoints(false);
+    setDoubleWireResolutionLine(null);
+    setIsDrawingDoubleWireResolutionLine(false);
     setNormalizedSnrPoints([]);
     setIsSelectingNormalizedSnrPoints(true);
     message.info(`请在图像上依次选择 ${NORMALIZED_SNR_POINT_COUNT} 个点，可滚轮缩放或按住空格拖动图片`);
+  };
+
+  const handleDoubleWireResolutionSelectClick = () => {
+    if (isComputingDoubleWireResolution) return;
+
+    if (isSelectingDoubleWireResolutionPoints) {
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      setIsDrawingDoubleWireResolutionLine(false);
+      message.info('已取消双丝分辨率手动选择');
+      return;
+    }
+
+    setActiveTool('pan');
+    setOcrTargetField(null);
+    setOcrDrawRect(null);
+    setOcrDrawStart(null);
+    setIsSelectingNormalizedSnrPoints(false);
+    setNormalizedSnrPoints([]);
+    setDoubleWireResolutionLine(null);
+    setIsDrawingDoubleWireResolutionLine(false);
+    setIsSelectingDoubleWireResolutionPoints(true);
+    message.info('请在图像上拖拽选择双丝分辨率的起始点和终止点，可滚轮缩放或按住空格拖动图片');
   };
 
   const handleOcrRegionSelected = async (
@@ -3590,31 +3807,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
             style={{ padding: '0 8px' }}
             onValuesChange={autoSaveFilmInfo}
           >
-            {/* <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
-              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
-                {({ getFieldValue }) => {
-                  const resolution = getFieldValue('resolution');
-                  return (
-                    <div
-                      style={{
-                        width: '100%',
-                        minHeight: 24,
-                        padding: '1px 11px',
-                        border: '1px solid #d9d9d9',
-                        borderRadius: 6,
-                        background: '#fafafa',
-                        lineHeight: '22px',
-                      }}
-                    >
-                      {resolution || <Text type="secondary">暂无结果</Text>}
-                    </div>
-                  );
-                }}
-              </Form.Item>
-              <Form.Item name="resolution" hidden>
-                <Input />
-              </Form.Item>
-            </Form.Item> */}
             <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
               <Space.Compact style={{ width: '100%' }}>
                 <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
@@ -3703,6 +3895,28 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
               <Form.Item name="filmPixelValue" hidden>
                 <Input />
               </Form.Item>
+            </Form.Item>
+
+            <Form.Item label="双丝分辨率" style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', width: '100%' }}>
+                <Form.Item name="resolution" noStyle>
+                  <Input
+                    placeholder="手动选择后计算"
+                    readOnly
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={isSelectingDoubleWireResolutionPoints ? 'primary' : 'default'}
+                  loading={isComputingDoubleWireResolution}
+                  disabled={!selectedFile || !imageReady || ocrLoadingField !== null}
+                  onClick={handleDoubleWireResolutionSelectClick}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {isSelectingDoubleWireResolutionPoints ? '选择中' : '手动选择'}
+                </Button>
+              </div>
             </Form.Item>
             
             <Form.Item label="归一化信噪比" style={{ marginBottom: 12 }}>
@@ -4190,7 +4404,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     maxWidth: "100%",
                     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                     display: 'block',
-                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin') ? 'none' : 'auto',
+                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin' || isSelectingDoubleWireResolutionPoints) ? 'none' : 'auto',
                     filter: isNegative ? 'invert(100%)' : 'none',
                     visibility: imageReady ? 'visible' : 'hidden',
                   }}
@@ -4797,6 +5011,83 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       </g>
                     );
                   })}
+
+                  {/* D4. 双丝分辨率线段选择区域 */}
+                  {doubleWireResolutionLine && (() => {
+                    const { x1, y1, x2, y2 } = doubleWireResolutionLine;
+                    const dx = x2 - x1;
+                    const dy = y2 - y1;
+                    const len = Math.hypot(dx, dy);
+                    if (len <= 0) return null;
+                    const nx = -dy / len;
+                    const ny = dx / len;
+                    const halfW = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH / Math.max(widthRatio || 1, heightRatio || 1);
+                    const polygonPoints = [
+                      { x: x1 + nx * halfW, y: y1 + ny * halfW },
+                      { x: x2 + nx * halfW, y: y2 + ny * halfW },
+                      { x: x2 - nx * halfW, y: y2 - ny * halfW },
+                      { x: x1 - nx * halfW, y: y1 - ny * halfW },
+                    ].map(pt => `${pt.x},${pt.y}`).join(' ');
+                    const midX = (x1 + x2) / 2;
+                    const midY = (y1 + y2) / 2;
+                    const labelX = midX + 8 / scale;
+                    const labelY = midY - 8 / scale;
+                    const normCSS = ((rotation % 360) + 360) % 360;
+                    let textTransform = '';
+                    if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${labelX}, ${labelY}) `;
+                    if (flipH === -1) textTransform += `translate(${2 * labelX}, 0) scale(-1, 1)`;
+                    return (
+                      <g key="double-wire-resolution-line">
+                        <polygon
+                          points={polygonPoints}
+                          stroke="#fa8c16"
+                          strokeWidth={1.5 / scale}
+                          strokeDasharray={`${4 / scale} ${2 / scale}`}
+                          fill="rgba(250, 140, 22, 0.12)"
+                        />
+                        <line
+                          x1={x1}
+                          y1={y1}
+                          x2={x2}
+                          y2={y2}
+                          stroke="#fa8c16"
+                          strokeWidth={2 / scale}
+                          strokeLinecap="round"
+                        />
+                        <circle
+                          cx={x1}
+                          cy={y1}
+                          r={4 / scale}
+                          fill="#fa8c16"
+                          stroke="#fff"
+                          strokeWidth={1.5 / scale}
+                        />
+                        <circle
+                          cx={x2}
+                          cy={y2}
+                          r={4 / scale}
+                          fill="#fa8c16"
+                          stroke="#fff"
+                          strokeWidth={1.5 / scale}
+                        />
+                        <line x1={x1 - 6 / scale} y1={y1} x2={x1 + 6 / scale} y2={y1} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <line x1={x1} y1={y1 - 6 / scale} x2={x1} y2={y1 + 6 / scale} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <line x1={x2 - 6 / scale} y1={y2} x2={x2 + 6 / scale} y2={y2} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <line x1={x2} y1={y2 - 6 / scale} x2={x2} y2={y2 + 6 / scale} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <text
+                          x={labelX}
+                          y={labelY}
+                          fill="#fa8c16"
+                          fontSize={12 / scale}
+                          fontWeight="bold"
+                          style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
+                          transform={textTransform || undefined}
+                        >
+                          20px
+                        </text>
+                      </g>
+                    );
+                  })()}
 
                   {/* E. 绘制当前正在绘制的多边形 (蓝色折线 + 橡皮筋线) */}
                   {activeTool === 'defect' && drawingType === 'polygon' && currentPolygonPoints.length > 0 && (
