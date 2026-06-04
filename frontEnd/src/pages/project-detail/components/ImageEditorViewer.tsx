@@ -152,7 +152,8 @@ type FilmInfoRegionField = FilmInfoOcrField;
 const NORMALIZED_SNR_POINT_COUNT = 6;
 const NORMALIZED_SNR_REGION_WIDTH = 20;
 const NORMALIZED_SNR_REGION_HEIGHT = 55;
-const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = 10;
+const DOUBLE_WIRE_RESOLUTION_STRIP_WIDTH = 60;
+const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = DOUBLE_WIRE_RESOLUTION_STRIP_WIDTH / 2;
 
 interface NormalizedSnrPoint {
   x: number;
@@ -2014,7 +2015,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       filmInfoForm.setFieldValue('resolution', resolutionValue);
       autoSaveFilmInfo();
       setIsSelectingDoubleWireResolutionPoints(false);
-      setDoubleWireResolutionLine(null);
       message.success(`双丝分辨率计算完成: ${resolutionValue}`);
     } catch (err) {
       console.error('[SNR] 双丝分辨率计算失败:', err);
@@ -5000,10 +5000,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       { x: x2 - nx * halfW, y: y2 - ny * halfW },
                       { x: x1 - nx * halfW, y: y1 - ny * halfW },
                     ].map(pt => `${pt.x},${pt.y}`).join(' ');
-                    const midX = (x1 + x2) / 2;
-                    const midY = (y1 + y2) / 2;
-                    const labelX = midX + 8 / scale;
-                    const labelY = midY - 8 / scale;
                     return (
                       <g key="double-wire-resolution-line">
                         <polygon
@@ -5042,17 +5038,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         <line x1={x1} y1={y1 - 6 / scale} x2={x1} y2={y1 + 6 / scale} stroke="#fa8c16" strokeWidth={1 / scale} />
                         <line x1={x2 - 6 / scale} y1={y2} x2={x2 + 6 / scale} y2={y2} stroke="#fa8c16" strokeWidth={1 / scale} />
                         <line x1={x2} y1={y2 - 6 / scale} x2={x2} y2={y2 + 6 / scale} stroke="#fa8c16" strokeWidth={1 / scale} />
-                        <text
-                          x={labelX}
-                          y={labelY}
-                          fill="#fa8c16"
-                          fontSize={12 / scale}
-                          fontWeight="bold"
-                          style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
-                          transform={getScreenUprightTextTransform(labelX, labelY)}
-                        >
-                          20px
-                        </text>
                       </g>
                     );
                   })()}
