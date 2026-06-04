@@ -3350,6 +3350,23 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     return originPoint || defectOriginPoint || { x: 0, y: 0 };
   }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize, selectedFile, rawImageWidth, rawImageHeight]);
 
+  const getScreenUprightTextTransform = useCallback((tx: number, ty: number) => {
+    const normCSS = ((rotation % 360) + 360) % 360;
+    const transforms: string[] = [];
+
+    if (normCSS !== 0) {
+      transforms.push(`rotate(${-normCSS}, ${tx}, ${ty})`);
+    }
+
+    if (flipH === -1 || flipV === -1) {
+      const translateX = flipH === -1 ? 2 * tx : 0;
+      const translateY = flipV === -1 ? 2 * ty : 0;
+      transforms.push(`translate(${translateX}, ${translateY}) scale(${flipH}, ${flipV})`);
+    }
+
+    return transforms.length > 0 ? transforms.join(' ') : undefined;
+  }, [rotation, flipH, flipV]);
+
   // --- 更新缺陷信息的辅助函数 ---
   const updateDefectInfo = (
     type: 'rect' | 'polygon' | 'circle',
@@ -4522,12 +4539,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                           {/* 时钟位置点：12'/3'/6'/9' 为主方向（较大），其余等距插值 */}
                           {dispClockPts.map((pt, ki) => {
                             const isCardinal = ki % 3 === 0; // 12', 3', 6', 9'
-                            const normCSS = ((rotation % 360) + 360) % 360;
                             const tx = pt.x + 6 / scale;
                             const ty = pt.y - 4 / scale;
-                            let textTfm = '';
-                            if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${tx}, ${ty}) `;
-                            if (flipH === -1) textTfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
                             return (
                               <g key={ki}>
                                 <circle cx={pt.x} cy={pt.y}
@@ -4543,7 +4556,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                                   fontWeight="bold"
                                   textAnchor="start"
                                   style={{ filter: 'drop-shadow(0 0 2px #000)' }}
-                                  transform={textTfm || undefined}
+                                  transform={getScreenUprightTextTransform(tx, ty)}
                                 >
                                   {pt.label}
                                 </text>
@@ -4577,12 +4590,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                      const doy = heightRatio > 0 ? oy / heightRatio : oy;
 
                      // 文字防旋转/翻转处理
-                     const normCSS = ((rotation % 360) + 360) % 360;
                      const textX = dox + 15 / scale;
                      const textY = doy - 15 / scale;
-                     let textTfm = '';
-                     if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                     if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                      return (
                        <g key="defect-origin">
@@ -4602,7 +4611,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                            fontSize={12 / scale}
                            fontWeight="bold"
                            style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
-                           transform={textTfm || undefined}
+                           transform={getScreenUprightTextTransform(textX, textY)}
                          >
                            原点
                          </text>
@@ -4675,7 +4684,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                         const roiPoints = iqiVisualization.roi_polygon_xy.map(toDisplayPoint);
                         const roiPointString = roiPoints.map((pt) => `${pt.x},${pt.y}`).join(' ');
-                        const normCSS = ((rotation % 360) + 360) % 360;
 
                         return (
                           <>
@@ -4717,9 +4725,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                               const minY = ys.length > 0 ? Math.min(...ys) : 0;
                               const textX = minX + 6 / scale;
                               const textY = Math.max(minY - 8 / scale, 16 / scale);
-                              let textTransform = '';
-                              if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                              if (flipH === -1) textTransform += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                               return (
                                 <g key={`iqi-text-${index}`}>
@@ -4741,7 +4746,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                                       fontSize={13 / scale}
                                       fontWeight="bold"
                                       style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
-                                      transform={textTransform || undefined}
+                                      transform={getScreenUprightTextTransform(textX, textY)}
                                     >
                                       {item.text}
                                     </text>
@@ -4776,21 +4781,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const rimgH = (normR === 90 || normR === 270)
                       ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
 
-                    // 文字反变换：抵消 CSS 旋转和翻转，使标注文字固定正向显示
-                    // SVG transform 应用顺序：先右边再左边，所以写为 rotate 然后 scale
-                    const makeTextTransform = (tx: number, ty: number) => {
-                      let t = '';
-                      // 先抖消旋转（相对于文字中心）
-                      if (corrRotation !== 0) {
-                        t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                      }
-                      // 再抖消水平翻转（如果有）
-                      if (corrFlipH === -1) {
-                        t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                      }
-                      return t || undefined;
-                    };
-
                     return defectRects.map((rect, idx) => {
                       let rx = rect.x, ry = rect.y, rw = rect.w, rh = rect.h;
                       if (needsInverse && rimgW > 0 && rimgH > 0) {
@@ -4820,7 +4810,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
-                            transform={makeTextTransform(labelX, labelY)}
+                            transform={getScreenUprightTextTransform(labelX, labelY)}
                           >
                             {rect.label}
                           </text>
@@ -4841,13 +4831,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const needsInverse = corrRotation !== 0 || corrFlipH === -1;
                     const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
                     const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
-
-                    const makeTextTransform = (tx: number, ty: number) => {
-                      let t = '';
-                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                      return t || undefined;
-                    };
 
                     return defectPolygons.map((poly, idx) => {
                       const transformedPoints = poly.points.map(p => {
@@ -4875,7 +4858,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
-                            transform={makeTextTransform(lx, ly)}
+                            transform={getScreenUprightTextTransform(lx, ly)}
                           >
                             {poly.label}
                           </text>
@@ -4896,13 +4879,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const needsInverse = corrRotation !== 0 || corrFlipH === -1;
                     const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
                     const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
-
-                    const makeTextTransform = (tx: number, ty: number) => {
-                      let t = '';
-                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                      return t || undefined;
-                    };
 
                     return defectCircles.map((circle, idx) => {
                       let { x: cirX, y: cirY } = circle;
@@ -4930,7 +4906,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
-                            transform={makeTextTransform(labelX, labelY)}
+                            transform={getScreenUprightTextTransform(labelX, labelY)}
                           >
                             {circle.label}
                           </text>
@@ -4973,10 +4949,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const centerY = heightRatio > 0 ? point.y / heightRatio : point.y;
                     const labelX = centerX + 7 / scale;
                     const labelY = centerY - 7 / scale;
-                    const normCSS = ((rotation % 360) + 360) % 360;
-                    let textTransform = '';
-                    if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${labelX}, ${labelY}) `;
-                    if (flipH === -1) textTransform += `translate(${2 * labelX}, 0) scale(-1, 1)`;
                     return (
                       <g key={`normalized-snr-point-${idx}`}>
                         <rect
@@ -5004,7 +4976,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                           fontSize={12 / scale}
                           fontWeight="bold"
                           style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
-                          transform={textTransform || undefined}
+                          transform={getScreenUprightTextTransform(labelX, labelY)}
                         >
                           {idx + 1}
                         </text>
@@ -5032,10 +5004,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const midY = (y1 + y2) / 2;
                     const labelX = midX + 8 / scale;
                     const labelY = midY - 8 / scale;
-                    const normCSS = ((rotation % 360) + 360) % 360;
-                    let textTransform = '';
-                    if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${labelX}, ${labelY}) `;
-                    if (flipH === -1) textTransform += `translate(${2 * labelX}, 0) scale(-1, 1)`;
                     return (
                       <g key="double-wire-resolution-line">
                         <polygon
@@ -5081,7 +5049,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                           fontSize={12 / scale}
                           fontWeight="bold"
                           style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
-                          transform={textTransform || undefined}
+                          transform={getScreenUprightTextTransform(labelX, labelY)}
                         >
                           20px
                         </text>
@@ -5129,20 +5097,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 {/* 3. 坐标原点十字线 */}
                 {showPositioningCoords && activeTool === 'setOrigin' && tempOrigin && (() => {
                   // 文字防旋转/翻转处理
-                  const normCSS = ((rotation % 360) + 360) % 360;
                   const textX = tempOrigin.x + 15 / scale;
                   const textY = tempOrigin.y - 15 / scale;
                   const textY2 = tempOrigin.y + 15 / scale;
-                  let textTfm1 = '';
-                  let textTfm2 = '';
-                  if (normCSS !== 0) {
-                    textTfm1 += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                    textTfm2 += `rotate(${-normCSS}, ${textX}, ${textY2}) `;
-                  }
-                  if (flipH === -1) {
-                    textTfm1 += `translate(${2 * textX}, 0) scale(-1, 1)`;
-                    textTfm2 += `translate(${2 * textX}, 0) scale(-1, 1)`;
-                  }
                   return (
                     <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
                       {/* 全屏贯穿红色十字虚线 */}
@@ -5154,8 +5111,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       <line x1={tempOrigin.x - 10 / scale} y1={tempOrigin.y} x2={tempOrigin.x + 10 / scale} y2={tempOrigin.y} stroke="#f5222d" strokeWidth={2 / scale} />
                       <line x1={tempOrigin.x} y1={tempOrigin.y - 10 / scale} x2={tempOrigin.x} y2={tempOrigin.y + 10 / scale} stroke="#f5222d" strokeWidth={2 / scale} />
 
-                      <text x={textX} y={textY} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm1 || undefined}>x (原点)</text>
-                      <text x={textX} y={textY2} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm2 || undefined}>y</text>
+                      <text x={textX} y={textY} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(textX, textY)}>x (原点)</text>
+                      <text x={textX} y={textY2} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(textX, textY2)}>y</text>
                     </svg>
                   );
                 })()}
@@ -5179,16 +5136,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         ? inverseTransformPoint(originPoint.x, originPoint.y, _corrImgW, _corrImgH, _corrR, _corrF)
                         : { x: originPoint.x, y: originPoint.y };
                       const imageCoords = calculateImageCoordinates(rawPt.x, rawPt.y);
-                      const normR = ((rotation % 360) + 360) % 360;
                       // CSS rotate(90°/270°) 当画满屏十字坐标系时不需要特意区分宽高交换
                       
                       // 文字防旋转/翻转处理
-                      const normCSS = ((rotation % 360) + 360) % 360;
                       const textX = imageCoords.x + 15 / scale;
                       const textY = imageCoords.y - 15 / scale;
-                      let textTfm = '';
-                      if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                      if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                       return (
                         <g>
@@ -5216,7 +5168,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={12 / scale}
                             fontWeight="bold"
                             style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
-                            transform={textTfm || undefined}
+                            transform={getScreenUprightTextTransform(textX, textY)}
                           >
                             原点
                           </text>
@@ -5317,7 +5269,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       const R = shape.rotation;
                       const cosR = Math.cos(R);
                       const sinR = Math.sin(R);
-                      const normCSS = ((rotation % 360) + 360) % 360;
 
                       const startAngleLbl = -Math.PI / 2 - (rotation * Math.PI / 180);
                       return Array.from({ length: 12 }).map((_, i) => {
@@ -5330,10 +5281,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         // 转换到绝对SVG坐标
                         const absTx = shape.cx + lx * cosR - ly * sinR;
                         const absTy = shape.cy + lx * sinR + ly * cosR;
-                        // 抵消CSS旋转与翻转
-                        let tfm = '';
-                        if (normCSS !== 0) tfm += `rotate(${-normCSS}, ${absTx}, ${absTy}) `;
-                        if (flipH === -1) tfm += `translate(${2 * absTx}, 0) scale(-1, 1)`;
                         const label = i === 0 ? "12'" : `${i}'`;
                         return (
                           <text
@@ -5344,7 +5291,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontWeight="bold"
                             textAnchor="middle"
                             dominantBaseline="middle"
-                            transform={tfm || undefined}
+                            transform={getScreenUprightTextTransform(absTx, absTy)}
                           >
                             {label}
                           </text>
@@ -5486,21 +5433,14 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     />
                     {/* x 和 y 标签（抵消CSS旋转，保持文字正向显示） */}
                     {(() => {
-                      const normCSS = ((rotation % 360) + 360) % 360;
                       const lx1 = tempOrigin.x + 10 / scale, ly1 = tempOrigin.y - 6 / scale;
                       const lx2 = tempOrigin.x + 6 / scale, ly2 = tempOrigin.y + 14 / scale;
-                      const makeTfm = (tx: number, ty: number) => {
-                        let t = '';
-                        if (normCSS !== 0) t += `rotate(${-normCSS}, ${tx}, ${ty}) `;
-                        if (flipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                        return t || undefined;
-                      };
                       return (
                         <>
                           <text x={lx1} y={ly1} fill="#f5222d" fontSize={12 / scale}
-                            style={{ userSelect: 'none' }} transform={makeTfm(lx1, ly1)}>x</text>
+                            style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(lx1, ly1)}>x</text>
                           <text x={lx2} y={ly2} fill="#f5222d" fontSize={12 / scale}
-                            style={{ userSelect: 'none' }} transform={makeTfm(lx2, ly2)}>y</text>
+                            style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(lx2, ly2)}>y</text>
                         </>
                       );
                     })()}
