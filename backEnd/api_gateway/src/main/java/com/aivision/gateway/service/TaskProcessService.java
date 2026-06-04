@@ -62,6 +62,9 @@ public class TaskProcessService {
 
     @Value("${storage.external-base-dir:/app/data/files}")
     private String inferenceInputBaseDir;
+
+    @Value("${storage.type:local}")
+    private String storageType;
     
     /**
      * 异步处理任务 (仅视觉 AI，结果追加到大的 JSON 文件中)
@@ -69,6 +72,7 @@ public class TaskProcessService {
     @Async("aiTaskExecutor")
     public void processTaskAsync(String taskId) {
         logger.info("开始处理任务 (全量 Python 批量处理): taskId={}", taskId);
+        List<String> stagedRelativePaths = new ArrayList<>();
         
         try {
             Task task = taskRepository.findById(taskId)
@@ -101,7 +105,7 @@ public class TaskProcessService {
             }
             taskFileRepository.saveAll(allTaskFiles);
 
-            stageFilesForInference(taskId, allTaskFiles);
+            stageFilesForInference(taskId, allTaskFiles, stagedRelativePaths);
 
             // 3. 一次性调用 Python 进行全量推理
             // 收集所有文件的相对路径 (使用 minioFilePath，即物理存储路径，包含 Project/User 层级)
@@ -297,6 +301,8 @@ public class TaskProcessService {
         } catch (Exception e) {
             logger.error("任务处理异常: taskId={}, error={}", taskId, e.getMessage(), e);
             handleTaskFailure(taskId, e.getMessage());
+        } finally {
+            cleanupStagedInferenceFiles(taskId, stagedRelativePaths);
         }
     }
 
@@ -582,9 +588,8 @@ public class TaskProcessService {
         }
     }
 
-    private void stageFilesForInference(String taskId, List<TaskFile> taskFiles) {
+    private void stageFilesForInference(String taskId, List<TaskFile> taskFiles, List<String> stagedPaths) {
         Path basePath = Paths.get(inferenceInputBaseDir).normalize().toAbsolutePath();
-        List<String> stagedPaths = new ArrayList<>();
 
         for (TaskFile taskFile : taskFiles) {
             String relativePath = taskFile.getMinioFilePath();
@@ -623,6 +628,90 @@ public class TaskProcessService {
 
         logger.info("推理输入文件准备完成: taskId={}, count={}, baseDir={}",
                 taskId, stagedPaths.size(), basePath);
+    }
+
+    private void cleanupStagedInferenceFiles(String taskId, List<String> relativePaths) {
+        if (!"minio".equalsIgnoreCase(storageType)) {
+            return;
+        }
+        if (relativePaths == null || relativePaths.isEmpty()) {
+            return;
+        }
+
+        Path basePath = Paths.get(inferenceInputBaseDir).normalize().toAbsolutePath();
+        Set<String> uniquePaths = new LinkedHashSet<>(relativePaths);
+        int deletedCount = 0;
+        int skippedCount = 0;
+
+        for (String relativePath : uniquePaths) {
+            if (relativePath == null || relativePath.isBlank()) {
+                skippedCount++;
+                continue;
+            }
+
+            String normalizedRelativePath = relativePath.startsWith("/")
+                    ? relativePath.substring(1)
+                    : relativePath;
+            Path targetPath = basePath.resolve(normalizedRelativePath).normalize();
+            if (!targetPath.startsWith(basePath)) {
+                logger.warn("跳过非法推理缓存路径清理: taskId={}, path={}", taskId, relativePath);
+                skippedCount++;
+                continue;
+            }
+
+            if (isStagedFileUsedByOtherProcessingTask(taskId, relativePath)) {
+                skippedCount++;
+                logger.info("推理缓存仍被其它处理中任务引用，暂不清理: taskId={}, path={}", taskId, relativePath);
+                continue;
+            }
+
+            try {
+                if (Files.deleteIfExists(targetPath)) {
+                    deletedCount++;
+                    cleanupEmptyParentDirs(basePath, targetPath.getParent());
+                    logger.info("已清理 MinIO 推理本地缓存: taskId={}, path={}", taskId, targetPath);
+                }
+            } catch (Exception e) {
+                skippedCount++;
+                logger.warn("清理 MinIO 推理本地缓存失败: taskId={}, path={}, error={}",
+                    taskId, targetPath, e.getMessage());
+            }
+        }
+
+        logger.info("MinIO 推理本地缓存清理完成: taskId={}, deleted={}, skipped={}",
+            taskId, deletedCount, skippedCount);
+    }
+
+    private boolean isStagedFileUsedByOtherProcessingTask(String taskId, String relativePath) {
+        try {
+            return taskFileRepository.countByMinioFilePathAndStatusExcludingTask(
+                relativePath, TaskFile.Status.PROCESSING, taskId) > 0;
+        } catch (Exception e) {
+            logger.warn("检查推理缓存引用状态失败，为避免误删将保留文件: taskId={}, path={}, error={}",
+                taskId, relativePath, e.getMessage());
+            return true;
+        }
+    }
+
+    private void cleanupEmptyParentDirs(Path basePath, Path startDir) {
+        Path current = startDir;
+        while (current != null && !current.equals(basePath) && current.startsWith(basePath)) {
+            try {
+                if (!Files.isDirectory(current)) {
+                    return;
+                }
+                try (var children = Files.list(current)) {
+                    if (children.findAny().isPresent()) {
+                        return;
+                    }
+                }
+                Files.deleteIfExists(current);
+                current = current.getParent();
+            } catch (Exception e) {
+                logger.debug("清理空目录失败: path={}, error={}", current, e.getMessage());
+                return;
+            }
+        }
     }
     
     /**

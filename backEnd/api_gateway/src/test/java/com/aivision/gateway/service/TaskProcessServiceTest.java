@@ -4,6 +4,7 @@ import com.aivision.gateway.model.Task;
 import com.aivision.gateway.model.TaskFile;
 import com.aivision.gateway.repository.TaskFileRepository;
 import com.aivision.gateway.repository.TaskRepository;
+import com.aivision.gateway.service.storage.StorageStrategy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,10 +16,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -41,6 +41,9 @@ public class TaskProcessServiceTest {
     @Mock
     private AiServiceClient aiServiceClient;
 
+    @Mock
+    private StorageStrategy storageStrategy;
+
     @InjectMocks
     private TaskProcessService taskProcessService;
 
@@ -53,6 +56,8 @@ public class TaskProcessServiceTest {
     void setUp() {
         // 将 resultBaseDir 设置为 JUnit 提供的临时目录
         ReflectionTestUtils.setField(taskProcessService, "resultBaseDir", tempDir.toString());
+        ReflectionTestUtils.setField(taskProcessService, "inferenceInputBaseDir", tempDir.resolve("files").toString());
+        ReflectionTestUtils.setField(taskProcessService, "storageType", "local");
     }
 
     @Test
@@ -72,15 +77,18 @@ public class TaskProcessServiceTest {
             tf.setTaskId(taskId);
             tf.setFileId("file-" + i);
             tf.setLogicalFilePath("/test/img_" + i + ".jpg");
+            tf.setMinioFilePath("/test/img_" + i + ".jpg");
             tf.setStatus(TaskFile.Status.PENDING);
             taskFiles.add(tf);
         }
 
         when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
         when(taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).thenReturn(taskFiles);
+        when(storageStrategy.exists(anyString())).thenReturn(true);
+        when(storageStrategy.download(anyString())).thenReturn(new ByteArrayInputStream("image".getBytes()));
 
         // 模拟 Vision AI 返回结果
-        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any())).thenAnswer(invocation -> {
+        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any(), any())).thenAnswer(invocation -> {
             List<String> paths = invocation.getArgument(0);
             Map<String, String> results = new HashMap<>();
             for (String path : paths) {
@@ -138,5 +146,103 @@ public class TaskProcessServiceTest {
         assertEquals(Task.Status.FAILED, task.getStatus());
         assertEquals("任务文件列表为空", task.getErrorMessage());
     }
-}
 
+    @Test
+    void processTaskAsync_ShouldCleanStagedFilesAfterMinioTaskCompletes() throws Exception {
+        String taskId = "task-minio-clean";
+        ReflectionTestUtils.setField(taskProcessService, "storageType", "minio");
+
+        Task task = new Task();
+        task.setTaskId(taskId);
+        task.setTaskName("MinIO Task");
+        task.setStatus(Task.Status.PENDING);
+
+        TaskFile taskFile = createTaskFile(taskId, "tf-1", "/project/user/image.jpg");
+
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).thenReturn(List.of(taskFile));
+        when(taskFileRepository.countByMinioFilePathAndStatusExcludingTask(
+            anyString(), eq(TaskFile.Status.PROCESSING), eq(taskId))).thenReturn(0L);
+        when(storageStrategy.exists("/project/user/image.jpg")).thenReturn(true);
+        when(storageStrategy.download("/project/user/image.jpg"))
+            .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any(), any())).thenAnswer(invocation -> {
+            Map<String, String> results = new HashMap<>();
+            results.put("/project/user/image.jpg", "{\"metadata\":{},\"results\":[]}");
+            return results;
+        });
+
+        taskProcessService.processTaskAsync(taskId);
+
+        assertEquals(Task.Status.COMPLETED, task.getStatus());
+        assertFalse(Files.exists(tempDir.resolve("files/project/user/image.jpg")));
+    }
+
+    @Test
+    void processTaskAsync_ShouldCleanStagedFilesAfterMinioTaskFails() throws Exception {
+        String taskId = "task-minio-fail-clean";
+        ReflectionTestUtils.setField(taskProcessService, "storageType", "minio");
+
+        Task task = new Task();
+        task.setTaskId(taskId);
+        task.setTaskName("Failing MinIO Task");
+        task.setStatus(Task.Status.PENDING);
+
+        TaskFile taskFile = createTaskFile(taskId, "tf-1", "/project/user/fail.jpg");
+
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).thenReturn(List.of(taskFile));
+        when(taskFileRepository.countByMinioFilePathAndStatusExcludingTask(
+            anyString(), eq(TaskFile.Status.PROCESSING), eq(taskId))).thenReturn(0L);
+        when(storageStrategy.exists("/project/user/fail.jpg")).thenReturn(true);
+        when(storageStrategy.download("/project/user/fail.jpg"))
+            .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any(), any()))
+            .thenThrow(new RuntimeException("AI unavailable"));
+
+        taskProcessService.processTaskAsync(taskId);
+
+        assertEquals(Task.Status.FAILED, task.getStatus());
+        assertFalse(Files.exists(tempDir.resolve("files/project/user/fail.jpg")));
+    }
+
+    @Test
+    void processTaskAsync_ShouldKeepFilesWhenStorageTypeIsLocal() throws Exception {
+        String taskId = "task-local-keep";
+
+        Task task = new Task();
+        task.setTaskId(taskId);
+        task.setTaskName("Local Task");
+        task.setStatus(Task.Status.PENDING);
+
+        TaskFile taskFile = createTaskFile(taskId, "tf-1", "/project/user/local.jpg");
+
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).thenReturn(List.of(taskFile));
+        when(storageStrategy.exists("/project/user/local.jpg")).thenReturn(true);
+        when(storageStrategy.download("/project/user/local.jpg"))
+            .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any(), any())).thenAnswer(invocation -> {
+            Map<String, String> results = new HashMap<>();
+            results.put("/project/user/local.jpg", "{\"metadata\":{},\"results\":[]}");
+            return results;
+        });
+
+        taskProcessService.processTaskAsync(taskId);
+
+        assertEquals(Task.Status.COMPLETED, task.getStatus());
+        assertTrue(Files.exists(tempDir.resolve("files/project/user/local.jpg")));
+        verify(taskFileRepository, never()).countByMinioFilePathAndStatusExcludingTask(anyString(), any(), anyString());
+    }
+
+    private TaskFile createTaskFile(String taskId, String taskFileId, String path) {
+        TaskFile taskFile = new TaskFile();
+        taskFile.setTaskFileId(taskFileId);
+        taskFile.setTaskId(taskId);
+        taskFile.setFileId("file-" + taskFileId);
+        taskFile.setLogicalFilePath(path);
+        taskFile.setMinioFilePath(path);
+        taskFile.setStatus(TaskFile.Status.PENDING);
+        return taskFile;
+    }
+}

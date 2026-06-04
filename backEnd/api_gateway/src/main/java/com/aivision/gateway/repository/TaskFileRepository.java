@@ -85,6 +85,15 @@ public interface TaskFileRepository extends JpaRepository<TaskFile, String> {
     Optional<TaskFile> findByMinioFilePath(String minioFilePath);
 
     /**
+     * 统计同一个存储路径是否还被其它正在处理的任务引用。
+     */
+    @Query("SELECT COUNT(tf) FROM TaskFile tf WHERE tf.minioFilePath = :minioFilePath " +
+           "AND tf.status = :status AND tf.taskId <> :taskId")
+    long countByMinioFilePathAndStatusExcludingTask(@Param("minioFilePath") String minioFilePath,
+                                                    @Param("status") TaskFile.Status status,
+                                                    @Param("taskId") String taskId);
+
+    /**
      * 批量查询多个任务ID下的所有文件记录
      */
     List<TaskFile> findByTaskIdInOrderByCreatedAtAsc(List<String> taskIds);
