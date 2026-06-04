@@ -9,7 +9,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from gauge.region_snr_api import (
+from gauge.app.region_snr_api import (
     SNRRequest,
     SNRResponse,
     close_region_snr_api,
@@ -17,7 +17,7 @@ from gauge.region_snr_api import (
     get_region_snr_service,
     init_region_snr_api,
 )
-from gauge.region_snr_service import RegionSNRService
+from gauge.services.region.snr_service import RegionSNRService
 
 __all__ = [
     "SNRRequest",

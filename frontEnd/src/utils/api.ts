@@ -459,6 +459,39 @@ export interface RegionSnrResult {
   timings_ms: Record<string, number>;
 }
 
+export interface DoubleWirePair {
+  group: number;
+  wire_a_idx: number;
+  gap_idx: number;
+  wire_b_idx: number;
+  wire_a_gray: number;
+  gap_gray: number;
+  wire_b_gray: number;
+  dip_percent: number;
+}
+
+export interface DoubleWireAnalysisPayload {
+  film_type: string;
+  num_pairs: number;
+  first_unresolved_group: number | null;
+  profile: number[];
+  background: number[];
+  peaks: Array<Record<string, number>>;
+  valleys: Array<Record<string, number>>;
+  pairs: DoubleWirePair[];
+}
+
+export interface DoubleWireResult {
+  ok: boolean;
+  status: "ok" | "error";
+  result_code: number;
+  result_name: string;
+  message: string;
+  timings_ms: Record<string, number>;
+  strip_shape: number[] | null;
+  result: DoubleWireAnalysisPayload | null;
+}
+
 // OCR 识别API
 export const ocrAPI = {
   recognizeRegion: async (
@@ -494,6 +527,26 @@ export const snrAPI = {
     if (fieldName) body['field_name'] = fieldName;
     const result = await request<RegionSnrResult>(
       '/api/v1/ocr/region-snr',
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+    return result.Data;
+  },
+};
+
+export const doubleWireAPI = {
+  compute: async (
+    base64WithPrefix: string,
+    taskId?: string,
+    fieldName?: string,
+  ): Promise<DoubleWireResult> => {
+    const base64 = base64WithPrefix.startsWith('data:')
+      ? base64WithPrefix.split(',')[1]
+      : base64WithPrefix;
+    const body: Record<string, string> = { base64 };
+    if (taskId) body['task_id'] = taskId;
+    if (fieldName) body['field_name'] = fieldName;
+    const result = await request<DoubleWireResult>(
+      '/api/v1/ocr/double-wire',
       { method: 'POST', body: JSON.stringify(body) }
     );
     return result.Data;

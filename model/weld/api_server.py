@@ -440,7 +440,10 @@ def _create_runtime_bundle(args: argparse.Namespace) -> Dict[str, Any]:
     iqi_inferencer = None
     if args.enable_iqi:
         if not rip._IQI_AVAILABLE:
-            print(f"[runtime] [警告] IQIInferencer 不可用，跳过 IQI 推理: {rip._iqi_err}")
+            print(
+                "[runtime] [警告] IQIInferencer 不可用，跳过 IQI 推理: "
+                f"{getattr(rip, '_IQI_IMPORT_ERROR', 'unknown import error')}"
+            )
         else:
             print("[runtime] 启用 IQI 像质计识别（常驻复用）")
 
@@ -762,18 +765,26 @@ for _iqi_import_path in (str(_IQIDDET_SRC_ROOT), str(_IQIDDET_ROOT)):
         sys.path.remove(_iqi_import_path)
 sys.path[:0] = [str(_IQIDDET_SRC_ROOT), str(_IQIDDET_ROOT)]
 
-from gauge.region_ocr_api import (
+from gauge.app.region_ocr_api import (
     RecognizeRequest as _BaseRecognizeRequest,
     RecognizeResponse,
     close_region_ocr_api,
     recognize_region as _recognize_region,
     init_region_ocr_api,
 )
-from gauge.region_snr_api import (
+from gauge.app.region_snr_api import (
     SNRRequest as _BaseSNRRequest,
     SNRResponse,
     close_region_snr_api,
     compute_region_snr as _compute_region_snr,
+    init_region_snr_api,
+)
+from gauge.app.double_wire_api import (
+    DoubleWireRequest as _BaseDoubleWireRequest,
+    DoubleWireResponse,
+    close_double_wire_api,
+    compute_double_wire as _compute_double_wire,
+    init_double_wire_api,
 )
 
 
@@ -787,6 +798,12 @@ class RegionSNRRequest(_BaseSNRRequest):
     """扩展的区域归一化信噪比请求，增加调试上下文字段。"""
     task_id: Optional[str] = Field(default=None, description="任务ID，用于调试图片文件命名")
     field_name: Optional[str] = Field(default=None, description="识别字段名称，如 normalizedSnr")
+
+
+class DoubleWireAnalysisRequest(_BaseDoubleWireRequest):
+    """扩展的双丝分辨率分析请求，增加调试上下文字段。"""
+    task_id: Optional[str] = Field(default=None, description="任务ID，用于调试图片文件命名")
+    field_name: Optional[str] = Field(default=None, description="识别字段名称，如 doubleWireResolution")
 
 
 # OCR 调试图片存储目录
@@ -918,7 +935,7 @@ def _init_ocr_cpu() -> None:
 @app.post("/inference/recognize", response_model=RecognizeResponse)
 async def recognize_region_endpoint(request: RecognizeRequest):
     """同步识别单张图片区域（base64输入），用于前端实时OCR框选功能。"""
-    import gauge.region_ocr_api as _ocr_mod
+    import gauge.app.region_ocr_api as _ocr_mod
     # 若 warmup 尚未完成，保证懒加载时也使用 CPU，不触发默认的 gpu 初始化
     if _ocr_mod._region_ocr_service is None:
         _init_ocr_cpu()
@@ -934,7 +951,7 @@ async def recognize_region_endpoint(request: RecognizeRequest):
     )
 
     # 构造基础请求（只传 image_base64，避免底层 model 字段校验问题）
-    from gauge.region_ocr_api import RecognizeRequest as _BaseReq
+    from gauge.app.region_ocr_api import RecognizeRequest as _BaseReq
     base_req = _BaseReq(image_base64=request.image_base64)
     return await _recognize_region(base_req)
 
@@ -953,6 +970,22 @@ async def compute_region_snr_endpoint(request: RegionSNRRequest):
 
     base_req = _BaseSNRRequest(image_base64=request.image_base64)
     return await _compute_region_snr(base_req)
+
+
+@app.post("/inference/double-wire", response_model=DoubleWireResponse)
+async def compute_double_wire_endpoint(request: DoubleWireAnalysisRequest):
+    """同步分析双丝像质计 strip 图像（base64输入），用于前端双丝分辨率手动选择。"""
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(
+        None,
+        _save_ocr_debug_image,
+        request.image_base64,
+        request.task_id,
+        request.field_name or "doubleWireResolution",
+    )
+
+    base_req = _BaseDoubleWireRequest(image_base64=request.image_base64)
+    return await _compute_double_wire(base_req)
 
 
 # ==============================================================================
@@ -1057,7 +1090,11 @@ def _sync_run_inference_direct(request: InferenceRequest):
             if not rip._IQI_AVAILABLE:
                 with open(iqi_out_path, "w", encoding="utf-8") as f:
                     json.dump(
-                        {"ok": False, "fatal_error": str(rip._iqi_err), "results": []},
+                        {
+                            "ok": False,
+                            "fatal_error": getattr(rip, "_IQI_IMPORT_ERROR", "unknown import error"),
+                            "results": [],
+                        },
                         f,
                         indent=2,
                         ensure_ascii=False,
@@ -1350,6 +1387,10 @@ async def startup_event():
     print(f"Inference execution mode: {INFERENCE_EXECUTION_MODE}")
     print(f"Inference prewarm enabled: {INFERENCE_PREWARM_ENABLED}")
     print(f"Inference health requires warmup: {INFERENCE_HEALTH_REQUIRES_WARMUP}")
+    init_region_snr_api()
+    print("[SNR init] 区域 SNR 服务初始化完成")
+    init_double_wire_api()
+    print("[double-wire init] 双丝分辨率服务初始化完成")
     # 后台预热 OCR，不阻塞 health check
     app.state.ocr_warmup_task = asyncio.create_task(_warmup_ocr())
     app.state.inference_warmup_task = (
@@ -1362,7 +1403,7 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """服务关闭时释放后台任务和 OCR / SNR 资源。"""
+    """服务关闭时释放后台任务和 OCR / SNR / double-wire 资源。"""
     for task_name in ("ocr_warmup_task", "inference_warmup_task", "ocr_debug_cleanup_task"):
         task = getattr(app.state, task_name, None)
         if task is None:
@@ -1378,6 +1419,7 @@ async def shutdown_event():
             setattr(app.state, task_name, None)
     close_region_ocr_api()
     close_region_snr_api()
+    close_double_wire_api()
     for bundle in _runtime_cache.values():
         iqi_inferencer = bundle.get("iqi_inferencer")
         if iqi_inferencer is not None:

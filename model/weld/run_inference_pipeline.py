@@ -75,17 +75,16 @@ for _iqi_import_path in (str(IQIDDET_SRC_ROOT), str(IQIDDET_ROOT)):
     if _iqi_import_path in sys.path:
         sys.path.remove(_iqi_import_path)
 sys.path[:0] = [str(IQIDDET_SRC_ROOT), str(IQIDDET_ROOT)]
+_IQI_IMPORT_ERROR: Optional[str] = None
 try:
-    from gauge.iqi_inferencer import (  # noqa: E402
-        IQIInferencer,
-        build_delivery_record,
-        build_iqi_statistics,
-        save_debug_visualizations,
-    )
+    from gauge.app.iqi_inferencer import IQIInferencer  # noqa: E402
+    from gauge.domain.record_builders import build_delivery_record, build_iqi_statistics  # noqa: E402
+    from gauge.imaging.visualization import save_debug_visualizations  # noqa: E402
     _IQI_AVAILABLE = True
 except ImportError as _iqi_err:
     _IQI_AVAILABLE = False
-    print(f"[警告] IQIInferencer 加载失败，IQI 功能不可用: {_iqi_err}")
+    _IQI_IMPORT_ERROR = str(_iqi_err)
+    print(f"[警告] IQIInferencer 加载失败，IQI 功能不可用: {_IQI_IMPORT_ERROR}")
 
 try:
     import pydicom
@@ -976,7 +975,7 @@ def main():
             # IQI 模块加载失败（如缺少依赖），写入错误占位文件后继续
             iqi_out_path = output_dir / args.iqi_results_json
             with open(iqi_out_path, "w", encoding="utf-8") as f:
-                json.dump({"ok": False, "fatal_error": str(_iqi_err),
+                json.dump({"ok": False, "fatal_error": _IQI_IMPORT_ERROR,
                            "results": []}, f, indent=2, ensure_ascii=False)
             print(f"[警告] IQI 模块不可用，已写入错误占位: {iqi_out_path}")
         else:

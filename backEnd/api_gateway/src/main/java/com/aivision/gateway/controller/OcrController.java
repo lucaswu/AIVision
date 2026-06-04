@@ -13,7 +13,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/ocr")
 @CrossOrigin(origins = "*")
-@Tag(name = "OCR识别", description = "图像区域 OCR / 区域归一化信噪比接口")
+@Tag(name = "OCR识别", description = "图像区域 OCR / 区域归一化信噪比 / 双丝分辨率接口")
 public class OcrController {
 
     @Autowired
@@ -53,6 +53,26 @@ public class OcrController {
             String fieldName = request.get("field_name");
             Map<String, Object> result = aiServiceClient.computeImageRegionSnr(base64, taskId, fieldName);
             return ResponseEntity.ok(ApiResponse.success("计算成功", result));
+        } catch (Exception e) {
+            return ResponseEntity.status(500)
+                .body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
+    @PostMapping("/double-wire")
+    @Operation(summary = "分析双丝分辨率", description = "接收base64编码的双丝像质计strip图片，调用双丝分辨率分析接口并返回")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> computeDoubleWire(
+            @RequestBody Map<String, String> request) {
+        try {
+            String base64 = request.get("base64");
+            if (base64 == null || base64.isBlank()) {
+                return ResponseEntity.badRequest()
+                    .body(ApiResponse.error(400, "base64参数不能为空"));
+            }
+            String taskId = request.get("task_id");
+            String fieldName = request.get("field_name");
+            Map<String, Object> result = aiServiceClient.computeDoubleWire(base64, taskId, fieldName);
+            return ResponseEntity.ok(ApiResponse.success("分析成功", result));
         } catch (Exception e) {
             return ResponseEntity.status(500)
                 .body(ApiResponse.error(500, e.getMessage()));

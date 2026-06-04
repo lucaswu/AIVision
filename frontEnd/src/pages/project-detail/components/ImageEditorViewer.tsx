@@ -70,7 +70,7 @@ import {
   ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, type OcrRecognizeResult, type RegionSnrResult } from "../../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, doubleWireAPI, type OcrRecognizeResult, type RegionSnrResult, type DoubleWireResult } from "../../../utils/api";
 import { fileThumbnailPath } from "../../../utils/constans";
 
 // 移除本地 Mock defectRecordAPI
@@ -153,6 +153,7 @@ const NORMALIZED_SNR_POINT_COUNT = 6;
 const NORMALIZED_SNR_REGION_WIDTH = 20;
 const NORMALIZED_SNR_REGION_HEIGHT = 55;
 const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = 10;
+const DOUBLE_WIRE_SPACINGS_UM = [800, 630, 500, 400, 320, 250, 200, 160, 130, 100, 80, 63, 50];
 
 interface NormalizedSnrPoint {
   x: number;
@@ -508,18 +509,33 @@ function getRegionSnrErrorMessage(result: RegionSnrResult) {
   return result.message || '区域归一化信噪比计算失败';
 }
 
-function getDoubleWireResolutionErrorMessage(result: RegionSnrResult) {
-  if (result.result_code === 4001) {
-    return result.message && result.message !== '未知错误'
-      ? `输入区域面积不满足要求，请重新选择：${result.message}`
-      : '输入区域面积不满足要求，请重新选择';
-  }
-  if (result.result_code === 4002) {
-    return result.message && result.message !== '未知错误'
-      ? `所选区域灰度标准差为 0，请重新选择：${result.message}`
-      : '所选区域灰度标准差为 0，请重新选择';
+function getDoubleWireResolutionErrorMessage(result: DoubleWireResult) {
+  if (result.result_code === 0) {
+    return '未检出可分辨的双丝组，请重新选择';
   }
   return result.message || '双丝分辨率计算失败';
+}
+
+function getResolvedDoubleWireGroup(result: DoubleWireResult) {
+  const payload = result.result;
+  if (!payload || !Array.isArray(payload.pairs) || payload.pairs.length === 0) {
+    return null;
+  }
+
+  const unresolvedGroup = payload.first_unresolved_group;
+  if (typeof unresolvedGroup === 'number') {
+    return unresolvedGroup > 1 ? unresolvedGroup - 1 : null;
+  }
+
+  return Math.min(payload.num_pairs || payload.pairs.length, DOUBLE_WIRE_SPACINGS_UM.length);
+}
+
+function getDoubleWireResolutionUm(result: DoubleWireResult) {
+  const group = getResolvedDoubleWireGroup(result);
+  if (group === null || group < 1 || group > DOUBLE_WIRE_SPACINGS_UM.length) {
+    return null;
+  }
+  return DOUBLE_WIRE_SPACINGS_UM[group - 1];
 }
 
 /**
@@ -1921,8 +1937,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       throw new Error('起始点和终止点距离过短，请重新选择');
     }
 
-    const stripWidth = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH * 2;
-    const stripHeight = Math.max(1, Math.round(length));
+    const stripWidth = Math.max(1, Math.round(length));
+    const stripHeight = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH * 2;
     const ux = dx / length;
     const uy = dy / length;
     const nx = -uy;
@@ -1938,12 +1954,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.setTransform(
-      nx,
       ux,
-      ny,
+      nx,
       uy,
-      DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH - nx * p1.x - ny * p1.y,
-      -ux * p1.x - uy * p1.y
+      ny,
+      -ux * p1.x - uy * p1.y,
+      DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH - nx * p1.x - ny * p1.y
     );
     ctx.drawImage(canvas, 0, 0);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -2002,22 +2018,23 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setIsComputingDoubleWireResolution(true);
     try {
       const stripCanvas = buildDoubleWireResolutionStripCanvas(line);
-      const result = await snrAPI.computeRegion(stripCanvas.toDataURL('image/png'), taskId, 'doubleWireResolution');
-      if (result.result_code !== 0 || typeof result.sr_b_um !== 'number') {
+      const result = await doubleWireAPI.compute(stripCanvas.toDataURL('image/png'), taskId, 'doubleWireResolution');
+      const resolutionUm = getDoubleWireResolutionUm(result);
+      if (result.result_code !== 0 || resolutionUm === null) {
         message.error(getDoubleWireResolutionErrorMessage(result));
         setIsSelectingDoubleWireResolutionPoints(false);
         setDoubleWireResolutionLine(null);
         return;
       }
 
-      const resolutionValue = formatDoubleWireResolutionValue(result.sr_b_um);
+      const resolutionValue = formatDoubleWireResolutionValue(resolutionUm);
       filmInfoForm.setFieldValue('resolution', resolutionValue);
       autoSaveFilmInfo();
       setIsSelectingDoubleWireResolutionPoints(false);
       setDoubleWireResolutionLine(null);
       message.success(`双丝分辨率计算完成: ${resolutionValue}`);
     } catch (err) {
-      console.error('[SNR] 双丝分辨率计算失败:', err);
+      console.error('[double-wire] 双丝分辨率计算失败:', err);
       message.error(err instanceof Error ? err.message : '双丝分辨率计算失败');
       setIsSelectingDoubleWireResolutionPoints(false);
       setDoubleWireResolutionLine(null);
