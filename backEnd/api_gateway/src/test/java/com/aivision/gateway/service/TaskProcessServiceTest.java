@@ -151,6 +151,10 @@ public class TaskProcessServiceTest {
     void processTaskAsync_ShouldCleanStagedFilesAfterMinioTaskCompletes() throws Exception {
         String taskId = "task-minio-clean";
         ReflectionTestUtils.setField(taskProcessService, "storageType", "minio");
+        Path taskInferenceResultDir = tempDir.resolve(taskId);
+        Files.createDirectories(taskInferenceResultDir.resolve("prepared_inputs"));
+        Files.writeString(taskInferenceResultDir.resolve("inference_results.json"), "{}");
+        Files.writeString(taskInferenceResultDir.resolve("prepared_inputs/image.jpg"), "prepared");
 
         Task task = new Task();
         task.setTaskId(taskId);
@@ -176,12 +180,17 @@ public class TaskProcessServiceTest {
 
         assertEquals(Task.Status.COMPLETED, task.getStatus());
         assertFalse(Files.exists(tempDir.resolve("files/project/user/image.jpg")));
+        assertFalse(Files.exists(taskInferenceResultDir));
+        assertTrue(Files.exists(tempDir.resolve("result_" + taskId + ".json")));
     }
 
     @Test
     void processTaskAsync_ShouldCleanStagedFilesAfterMinioTaskFails() throws Exception {
         String taskId = "task-minio-fail-clean";
         ReflectionTestUtils.setField(taskProcessService, "storageType", "minio");
+        Path taskInferenceResultDir = tempDir.resolve(taskId);
+        Files.createDirectories(taskInferenceResultDir);
+        Files.writeString(taskInferenceResultDir.resolve("progress.json"), "{}");
 
         Task task = new Task();
         task.setTaskId(taskId);
@@ -204,6 +213,42 @@ public class TaskProcessServiceTest {
 
         assertEquals(Task.Status.FAILED, task.getStatus());
         assertFalse(Files.exists(tempDir.resolve("files/project/user/fail.jpg")));
+        assertFalse(Files.exists(taskInferenceResultDir));
+        assertTrue(Files.exists(tempDir.resolve("result_" + taskId + ".json")));
+    }
+
+    @Test
+    void processTaskAsync_ShouldCleanTaskInferenceResultDirectoryWhenStorageTypeIsLocal() throws Exception {
+        String taskId = "task-local-clean-results";
+        Path taskInferenceResultDir = tempDir.resolve(taskId);
+        Files.createDirectories(taskInferenceResultDir.resolve("iqi_vis"));
+        Files.writeString(taskInferenceResultDir.resolve("progress.json"), "{}");
+        Files.writeString(taskInferenceResultDir.resolve("iqi_vis/vis.jpg"), "vis");
+
+        Task task = new Task();
+        task.setTaskId(taskId);
+        task.setTaskName("Local Result Cleanup Task");
+        task.setStatus(Task.Status.PENDING);
+
+        TaskFile taskFile = createTaskFile(taskId, "tf-1", "/project/user/local-result.jpg");
+
+        when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).thenReturn(List.of(taskFile));
+        when(storageStrategy.exists("/project/user/local-result.jpg")).thenReturn(true);
+        when(storageStrategy.download("/project/user/local-result.jpg"))
+            .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(aiServiceClient.callBatchVisionAi(anyList(), eq(taskId), any(), any(), any())).thenAnswer(invocation -> {
+            Map<String, String> results = new HashMap<>();
+            results.put("/project/user/local-result.jpg", "{\"metadata\":{},\"results\":[]}");
+            return results;
+        });
+
+        taskProcessService.processTaskAsync(taskId);
+
+        assertEquals(Task.Status.COMPLETED, task.getStatus());
+        assertTrue(Files.exists(tempDir.resolve("files/project/user/local-result.jpg")));
+        assertFalse(Files.exists(taskInferenceResultDir));
+        assertTrue(Files.exists(tempDir.resolve("result_" + taskId + ".json")));
     }
 
     @Test

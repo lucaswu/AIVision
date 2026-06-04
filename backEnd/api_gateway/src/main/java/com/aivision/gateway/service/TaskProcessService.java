@@ -303,6 +303,7 @@ public class TaskProcessService {
             handleTaskFailure(taskId, e.getMessage());
         } finally {
             cleanupStagedInferenceFiles(taskId, stagedRelativePaths);
+            cleanupTaskInferenceResultDirectory(taskId);
         }
     }
 
@@ -711,6 +712,39 @@ public class TaskProcessService {
                 logger.debug("清理空目录失败: path={}, error={}", current, e.getMessage());
                 return;
             }
+        }
+    }
+
+    private void cleanupTaskInferenceResultDirectory(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return;
+        }
+
+        Path basePath = Paths.get(resultBaseDir).normalize().toAbsolutePath();
+        Path taskResultDir = basePath.resolve(taskId).normalize();
+        if (!taskResultDir.startsWith(basePath) || taskResultDir.equals(basePath)) {
+            logger.warn("跳过非法任务推理结果目录清理: taskId={}, path={}", taskId, taskResultDir);
+            return;
+        }
+        if (!Files.exists(taskResultDir)) {
+            return;
+        }
+        if (!Files.isDirectory(taskResultDir)) {
+            logger.warn("任务推理结果路径不是目录，跳过清理: taskId={}, path={}", taskId, taskResultDir);
+            return;
+        }
+
+        try (var paths = Files.walk(taskResultDir)) {
+            List<Path> pathsToDelete = paths
+                .sorted(Comparator.reverseOrder())
+                .collect(Collectors.toList());
+            for (Path path : pathsToDelete) {
+                Files.deleteIfExists(path);
+            }
+            logger.info("任务推理结果目录清理完成: taskId={}, path={}", taskId, taskResultDir);
+        } catch (Exception e) {
+            logger.warn("任务推理结果目录清理失败: taskId={}, path={}, error={}",
+                taskId, taskResultDir, e.getMessage());
         }
     }
     
