@@ -71,6 +71,7 @@ public class ProjectServiceTest {
         when(userRepository.findById(userId)).thenReturn(Optional.of(createInspector(userId)));
         when(projectRepository.findByOwnerId(userId)).thenReturn(Arrays.asList(p1, p2));
         when(permissionRepository.findByUserId(userId)).thenReturn(List.of());
+        when(projectRepository.findAllById(any())).thenReturn(Arrays.asList(p1, p2));
         when(fileRepository.countByProjectId("p1")).thenReturn(10L);
         when(fileRepository.countByProjectId("p2")).thenReturn(5L);
 
@@ -180,6 +181,7 @@ public class ProjectServiceTest {
         taskFile.setReportPath("/projects/p1/reports/result.json");
         
         when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(createInspector(userId)));
         when(fileRepository.findByProjectId(projectId)).thenReturn(List.of(file));
         when(taskFileRepository.findByProjectIds(List.of(projectId))).thenReturn(List.of(taskFile));
         when(storageStrategy.exists("/projects/p1/original.bmp")).thenReturn(true, false);
@@ -205,6 +207,27 @@ public class ProjectServiceTest {
         verify(storageStrategy, times(1)).delete("/projects/p1/original.bmp");
         verifyNoInteractions(permissionRepository, directoryRepository);
         verify(fileRepository, never()).deleteByProjectId(any());
+    }
+
+    @Test
+    void testDeleteProject_AdminCanDeleteOtherUsersProject() {
+        // Arrange
+        String projectId = "p1";
+        String adminId = "admin-1";
+        String ownerId = "sso-user-1";
+        Project project = new Project(projectId, "SSO Project", ownerId);
+
+        when(projectRepository.findById(projectId)).thenReturn(Optional.of(project));
+        when(userRepository.findById(adminId)).thenReturn(Optional.of(createAdmin(adminId)));
+        when(fileRepository.findByProjectId(projectId)).thenReturn(List.of());
+        when(taskFileRepository.findByProjectIds(List.of(projectId))).thenReturn(List.of());
+
+        // Act
+        projectService.deleteProject(projectId, adminId);
+
+        // Assert
+        verify(projectRepository).delete(project);
+        verifyNoInteractions(permissionRepository, directoryRepository, storageStrategy);
     }
 
     private User createAdmin(String userId) {

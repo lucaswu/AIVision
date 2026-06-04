@@ -230,7 +230,10 @@ public class ProjectService {
             .orElseThrow(() -> new RuntimeException("项目不存在"));
             
         // 验证权限
-        if (!project.getOwnerId().equals(userId)) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+        if (user.getRole() != User.Role.ADMIN && !project.getOwnerId().equals(userId)) {
             throw new RuntimeException("无权限删除该项目");
         }
 
