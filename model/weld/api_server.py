@@ -806,9 +806,10 @@ class DoubleWireAnalysisRequest(_BaseDoubleWireRequest):
     field_name: Optional[str] = Field(default=None, description="识别字段名称，如 doubleWireResolution")
 
 
-# OCR 调试图片存储目录
+# 调试图片存储目录
 _OCR_DEBUG_DIR = Path("/app/data/results/ocr_debug")
-_OCR_DEBUG_RETENTION_DAYS = 7
+_DOUBLE_WIRE_DEBUG_DIR = Path("/app/data/results/doubleWire_debug")
+_DEBUG_IMAGE_RETENTION_DAYS = 7
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -825,18 +826,24 @@ def _get_positive_int_env(name: str, default: int) -> int:
         return default
 
 
-_OCR_DEBUG_CLEANUP_INTERVAL_SECONDS = _get_positive_int_env(
+_DEBUG_IMAGE_CLEANUP_INTERVAL_SECONDS = _get_positive_int_env(
     "OCR_DEBUG_CLEANUP_INTERVAL_SECONDS",
     24 * 60 * 60,
 )
 
 
-def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
-    """将 OCR 框选的 base64 图片保存为 PNG 文件，用于后期分析。"""
+def _save_debug_image(
+    image_base64: str,
+    task_id: Optional[str],
+    field_name: Optional[str],
+    debug_dir: Path,
+    log_prefix: str,
+) -> None:
+    """将 base64 图片保存为 PNG 文件，用于后期分析。"""
     import base64
     import re
     try:
-        _OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        debug_dir.mkdir(parents=True, exist_ok=True)
 
         # 去除 data URL 前缀
         b64_data = str(image_base64 or "")
@@ -850,7 +857,7 @@ def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name:
         safe_task = re.sub(r"[^\w-]", "_", task_id or "unknown")
         safe_field = re.sub(r"[^\w-]", "_", field_name or "field")
         filename = f"{ts}_{safe_task}_{safe_field}.png"
-        out_path = _OCR_DEBUG_DIR / filename
+        out_path = debug_dir / filename
 
         # 验证并重新编码为 PNG（确保格式正确）
         import numpy as np
@@ -859,46 +866,57 @@ def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name:
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is not None:
             cv2.imwrite(str(out_path), img)
-            print(f"[OCR debug] 已保存调试图片: {out_path}")
+            print(f"[{log_prefix} debug] 已保存调试图片: {out_path}")
         else:
             # 解码失败时直接写入原始字节
             out_path.write_bytes(img_bytes)
-            print(f"[OCR debug] 已保存原始调试图片（解码异常）: {out_path}")
+            print(f"[{log_prefix} debug] 已保存原始调试图片（解码异常）: {out_path}")
     except Exception as exc:
-        print(f"[OCR debug] 保存调试图片失败（不影响识别结果）: {exc}")
+        print(f"[{log_prefix} debug] 保存调试图片失败（不影响识别结果）: {exc}")
 
 
-def _cleanup_ocr_debug_images() -> None:
-    """清理超过 {_OCR_DEBUG_RETENTION_DAYS} 天的 OCR 调试图片。"""
+def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
+    """将 OCR / SNR 框选的 base64 图片保存为 PNG 文件，用于后期分析。"""
+    _save_debug_image(image_base64, task_id, field_name, _OCR_DEBUG_DIR, "OCR")
+
+
+def _save_double_wire_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
+    """将双丝分辨率分析的 base64 图片保存为 PNG 文件，用于后期分析。"""
+    _save_debug_image(image_base64, task_id, field_name, _DOUBLE_WIRE_DEBUG_DIR, "doubleWire")
+
+
+def _cleanup_debug_images() -> None:
+    """清理超过 {_DEBUG_IMAGE_RETENTION_DAYS} 天的调试图片。"""
     try:
-        if not _OCR_DEBUG_DIR.exists():
-            return
-        cutoff = time.time() - _OCR_DEBUG_RETENTION_DAYS * 86400
+        cutoff = time.time() - _DEBUG_IMAGE_RETENTION_DAYS * 86400
         removed = 0
-        for f in _OCR_DEBUG_DIR.glob("*.png"):
-            if f.is_file() and f.stat().st_mtime < cutoff:
-                f.unlink()
-                removed += 1
+        for debug_dir in (_OCR_DEBUG_DIR, _DOUBLE_WIRE_DEBUG_DIR):
+            if not debug_dir.exists():
+                continue
+            for f in debug_dir.glob("*.png"):
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
         if removed:
-            print(f"[OCR debug] 已清理 {removed} 张超过 {_OCR_DEBUG_RETENTION_DAYS} 天的调试图片")
+            print(f"[debug image] 已清理 {removed} 张超过 {_DEBUG_IMAGE_RETENTION_DAYS} 天的调试图片")
     except Exception as exc:
-        print(f"[OCR debug] 清理调试图片失败: {exc}")
+        print(f"[debug image] 清理调试图片失败: {exc}")
 
 
-async def _periodic_ocr_debug_cleanup() -> None:
-    """后台定时清理 OCR 调试图片。"""
+async def _periodic_debug_image_cleanup() -> None:
+    """后台定时清理 OCR / 双丝分辨率调试图片。"""
     loop = asyncio.get_running_loop()
-    interval = _OCR_DEBUG_CLEANUP_INTERVAL_SECONDS
+    interval = _DEBUG_IMAGE_CLEANUP_INTERVAL_SECONDS
     print(
-        f"[OCR debug] 定时清理任务已启动: interval={interval}s, retention={_OCR_DEBUG_RETENTION_DAYS}d"
+        f"[debug image] 定时清理任务已启动: interval={interval}s, retention={_DEBUG_IMAGE_RETENTION_DAYS}d"
     )
     try:
-        await loop.run_in_executor(None, _cleanup_ocr_debug_images)
+        await loop.run_in_executor(None, _cleanup_debug_images)
         while True:
             await asyncio.sleep(interval)
-            await loop.run_in_executor(None, _cleanup_ocr_debug_images)
+            await loop.run_in_executor(None, _cleanup_debug_images)
     except asyncio.CancelledError:
-        print("[OCR debug] 定时清理任务已停止")
+        print("[debug image] 定时清理任务已停止")
         raise
 
 
@@ -978,7 +996,7 @@ async def compute_double_wire_endpoint(request: DoubleWireAnalysisRequest):
     loop = asyncio.get_running_loop()
     loop.run_in_executor(
         None,
-        _save_ocr_debug_image,
+        _save_double_wire_debug_image,
         request.image_base64,
         request.task_id,
         request.field_name or "doubleWireResolution",
@@ -1398,13 +1416,13 @@ async def startup_event():
         if INFERENCE_PREWARM_ENABLED
         else None
     )
-    app.state.ocr_debug_cleanup_task = asyncio.create_task(_periodic_ocr_debug_cleanup())
+    app.state.debug_image_cleanup_task = asyncio.create_task(_periodic_debug_image_cleanup())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """服务关闭时释放后台任务和 OCR / SNR / double-wire 资源。"""
-    for task_name in ("ocr_warmup_task", "inference_warmup_task", "ocr_debug_cleanup_task"):
+    for task_name in ("ocr_warmup_task", "inference_warmup_task", "debug_image_cleanup_task"):
         task = getattr(app.state, task_name, None)
         if task is None:
             continue

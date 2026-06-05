@@ -81,6 +81,7 @@ import { useWindowLevelTool,preprocessToGrayCache } from '../tool/WindowLevelToo
 import Ruler from '../tool/Ruler';
 import DefectMarking, { DrawingType } from '../tool/DefectMarking';
 import PositionAndSizeTool, { PositionSizeType } from '../tool/PositionAndSizeTool';
+import DoubleWireVisualizationModal from "./DoubleWireVisualizationModal";
 import {
   hydrateDefectRecords,
   parseDefectOrigin,
@@ -152,9 +153,21 @@ type FilmInfoRegionField = FilmInfoOcrField;
 const NORMALIZED_SNR_POINT_COUNT = 6;
 const NORMALIZED_SNR_REGION_WIDTH = 20;
 const NORMALIZED_SNR_REGION_HEIGHT = 55;
-const DOUBLE_WIRE_RESOLUTION_STRIP_WIDTH = 60;
-const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = DOUBLE_WIRE_RESOLUTION_STRIP_WIDTH / 2;
-const DOUBLE_WIRE_SPACINGS_UM = [800, 630, 500, 400, 320, 250, 200, 160, 130, 100, 80, 63, 50];
+const DOUBLE_WIRE_RESOLUTION_EXPAND = 60;
+const DOUBLE_WIRE_RESOLUTION_BAND_WIDTH = 21;
+const DOUBLE_WIRE_RESOLUTION_STRIP_WIDTH = DOUBLE_WIRE_RESOLUTION_EXPAND * 2;
+const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = DOUBLE_WIRE_RESOLUTION_EXPAND;
+const DOUBLE_WIRE_RESOLUTION_TABLE: Record<number, { resolutionLpMm: number; resolvingPowerMm: number }> = {
+  5: { resolutionLpMm: 1.56, resolvingPowerMm: 0.32 },
+  6: { resolutionLpMm: 2.00, resolvingPowerMm: 0.25 },
+  7: { resolutionLpMm: 2.50, resolvingPowerMm: 0.20 },
+  8: { resolutionLpMm: 3.125, resolvingPowerMm: 0.16 },
+  9: { resolutionLpMm: 3.85, resolvingPowerMm: 0.13 },
+  10: { resolutionLpMm: 5.00, resolvingPowerMm: 0.10 },
+  11: { resolutionLpMm: 6.25, resolvingPowerMm: 0.08 },
+  12: { resolutionLpMm: 7.94, resolvingPowerMm: 0.063 },
+  13: { resolutionLpMm: 10.00, resolvingPowerMm: 0.05 },
+};
 
 interface NormalizedSnrPoint {
   x: number;
@@ -166,6 +179,16 @@ interface ImageLine {
   y1: number;
   x2: number;
   y2: number;
+}
+
+interface DoubleWireVisualizationState {
+  stripDataUrl: string;
+  result: DoubleWireResult;
+  fileName: string;
+  expand: number;
+  bandWidth: number;
+  stripWidth: number;
+  stripHeight: number;
 }
 
 // 扩展保存的图形接口，增加 label, color 以及新的业务字段
@@ -494,9 +517,12 @@ function formatNormalizedSnrValue(value: number) {
   return normalized.replace(/\.?0+$/, '');
 }
 
-function formatDoubleWireResolutionValue(value: number) {
-  const normalized = value.toFixed(2).replace(/\.?0+$/, '');
-  return `${normalized}μm`;
+function formatDoubleWireResolutionNumber(value: number) {
+  return value.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function formatDoubleWireResolutionValue(info: { resolutionLpMm: number }) {
+  return `${formatDoubleWireResolutionNumber(info.resolutionLpMm)} lp/mm`;
 }
 
 function getRegionSnrErrorMessage(result: RegionSnrResult) {
@@ -512,12 +538,16 @@ function getRegionSnrErrorMessage(result: RegionSnrResult) {
 
 function getDoubleWireResolutionErrorMessage(result: DoubleWireResult) {
   if (result.result_code === 0) {
+    const linePair = getResolvedDoubleWireLinePair(result);
+    if (linePair !== null && !DOUBLE_WIRE_RESOLUTION_TABLE[linePair]) {
+      return `未配置线对号 D${linePair} 对应的分辨率，请确认查表范围`;
+    }
     return '未检出可分辨的双丝组，请重新选择';
   }
   return result.message || '双丝分辨率计算失败';
 }
 
-function getResolvedDoubleWireGroup(result: DoubleWireResult) {
+function getResolvedDoubleWireLinePair(result: DoubleWireResult) {
   const payload = result.result;
   if (!payload || !Array.isArray(payload.pairs) || payload.pairs.length === 0) {
     return null;
@@ -528,15 +558,15 @@ function getResolvedDoubleWireGroup(result: DoubleWireResult) {
     return unresolvedGroup > 1 ? unresolvedGroup - 1 : null;
   }
 
-  return Math.min(payload.num_pairs || payload.pairs.length, DOUBLE_WIRE_SPACINGS_UM.length);
+  return payload.num_pairs || payload.pairs.length;
 }
 
-function getDoubleWireResolutionUm(result: DoubleWireResult) {
-  const group = getResolvedDoubleWireGroup(result);
-  if (group === null || group < 1 || group > DOUBLE_WIRE_SPACINGS_UM.length) {
+function getDoubleWireResolutionInfo(result: DoubleWireResult) {
+  const linePair = getResolvedDoubleWireLinePair(result);
+  if (linePair === null) {
     return null;
   }
-  return DOUBLE_WIRE_SPACINGS_UM[group - 1];
+  return DOUBLE_WIRE_RESOLUTION_TABLE[linePair] ?? null;
 }
 
 /**
@@ -1078,6 +1108,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [doubleWireResolutionLine, setDoubleWireResolutionLine] = useState<ImageLine | null>(null);
   const [isDrawingDoubleWireResolutionLine, setIsDrawingDoubleWireResolutionLine] = useState(false);
   const [isComputingDoubleWireResolution, setIsComputingDoubleWireResolution] = useState(false);
+  const [doubleWireVisualization, setDoubleWireVisualization] = useState<DoubleWireVisualizationState | null>(null);
 
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
@@ -1938,7 +1969,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       throw new Error('起始点和终止点距离过短，请重新选择');
     }
 
-    const stripWidth = Math.max(1, Math.round(length));
+    const stripWidth = Math.max(1, Math.ceil(length));
     const stripHeight = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH * 2;
     const ux = dx / length;
     const uy = dy / length;
@@ -1964,6 +1995,36 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     );
     ctx.drawImage(canvas, 0, 0);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    return tmp;
+  };
+
+  const buildDoubleWireResolutionAnalysisCanvas = (stripCanvas: HTMLCanvasElement) => {
+    const bandWidth = DOUBLE_WIRE_RESOLUTION_BAND_WIDTH;
+    const halfH = Math.floor(stripCanvas.height / 2);
+    const halfBand = Math.floor(bandWidth / 2);
+    const sourceY = Math.max(0, halfH - halfBand);
+    const sourceHeight = Math.min(bandWidth, stripCanvas.height - sourceY);
+
+    const tmp = document.createElement('canvas');
+    tmp.width = stripCanvas.width;
+    tmp.height = bandWidth;
+    const ctx = tmp.getContext('2d');
+    if (!ctx) {
+      throw new Error('无法创建双丝分辨率分析画布');
+    }
+
+    ctx.drawImage(
+      stripCanvas,
+      0,
+      sourceY,
+      stripCanvas.width,
+      sourceHeight,
+      0,
+      0,
+      stripCanvas.width,
+      bandWidth
+    );
 
     return tmp;
   };
@@ -2019,16 +2080,30 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setIsComputingDoubleWireResolution(true);
     try {
       const stripCanvas = buildDoubleWireResolutionStripCanvas(line);
-      const result = await doubleWireAPI.compute(stripCanvas.toDataURL('image/png'), taskId, 'doubleWireResolution');
-      const resolutionUm = getDoubleWireResolutionUm(result);
-      if (result.result_code !== 0 || resolutionUm === null) {
+      const analysisCanvas = buildDoubleWireResolutionAnalysisCanvas(stripCanvas);
+      const stripDataUrl = stripCanvas.toDataURL('image/png');
+      const result = await doubleWireAPI.compute(analysisCanvas.toDataURL('image/png'), taskId, 'doubleWireResolution');
+      const visualizationData = {
+        stripDataUrl,
+        result,
+        fileName: selectedFile?.FileName || 'double_wire_strip.png',
+        expand: DOUBLE_WIRE_RESOLUTION_EXPAND,
+        bandWidth: DOUBLE_WIRE_RESOLUTION_BAND_WIDTH,
+        stripWidth: stripCanvas.width,
+        stripHeight: stripCanvas.height,
+      };
+      if (Array.isArray(result.result?.profile) && result.result.profile.length > 0) {
+        setDoubleWireVisualization(visualizationData);
+      }
+      const resolutionInfo = getDoubleWireResolutionInfo(result);
+      if (result.result_code !== 0 || resolutionInfo === null) {
         message.error(getDoubleWireResolutionErrorMessage(result));
         setIsSelectingDoubleWireResolutionPoints(false);
         setDoubleWireResolutionLine(null);
         return;
       }
 
-      const resolutionValue = formatDoubleWireResolutionValue(resolutionUm);
+      const resolutionValue = formatDoubleWireResolutionValue(resolutionInfo);
       filmInfoForm.setFieldValue('resolution', resolutionValue);
       autoSaveFilmInfo();
       setIsSelectingDoubleWireResolutionPoints(false);
@@ -3151,6 +3226,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setOcrTargetField(null); // 切换文件时退出OCR模式
       setOcrDrawRect(null);
       setOcrDrawStart(null);
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      setIsDrawingDoubleWireResolutionLine(false);
+      setIsComputingDoubleWireResolution(false);
+      setDoubleWireVisualization(null);
       // 重置工具状态
       setActiveTool('pan');
       setIsSettingOrigin(false);
@@ -5628,6 +5708,21 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           {/* 显示图像尺寸和实时鼠标坐标 */}
           图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
+
+        {doubleWireVisualization && (
+          <DoubleWireVisualizationModal
+            open={!!doubleWireVisualization}
+            onClose={() => setDoubleWireVisualization(null)}
+            stripDataUrl={doubleWireVisualization.stripDataUrl}
+            result={doubleWireVisualization.result}
+            fileName={doubleWireVisualization.fileName}
+            expand={doubleWireVisualization.expand}
+            bandWidth={doubleWireVisualization.bandWidth}
+            stripWidth={doubleWireVisualization.stripWidth}
+            stripHeight={doubleWireVisualization.stripHeight}
+            getContainer={() => editorContainerRef.current || document.body}
+          />
+        )}
 
         {/* 测量距离前的尺寸定标确认弹窗 */}
         <Modal
