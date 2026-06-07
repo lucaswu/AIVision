@@ -571,7 +571,7 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                         <div style={{ fontWeight: 500 }}>{file.FilmPixelValue || '-'}</div>
                                       </Col>
                                       <Col span={6}>
-                                        <Text type="secondary" style={{ fontSize: '12px' }}>分辨率</Text>
+                                        <Text type="secondary" style={{ fontSize: '12px' }}>双丝分辨率</Text>
                                         <div style={{ fontWeight: 500 }}>{file.Resolution || '-'}</div>
                                       </Col>
                                       <Col span={6}>

@@ -26,7 +26,7 @@ detection result dict.
 import os
 import importlib.util
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -291,14 +291,64 @@ def detect_defect_position(image_bgr: np.ndarray,
     return detector.predict(image_bgr)
 
 
-def compute_grayscale_density(image_bgr: np.ndarray,
-                              region_w: int = 20,
-                              region_h: int = 50) -> Optional[str]:
+def _select_best_detection_x(detections: List[Dict], class_ids: List[int]) -> Optional[float]:
     """
-    Compute grayscale density (film density) for a linear weld image.
+    Select the x coordinate of the highest-confidence detection for the given
+    class IDs.
+    """
+    candidates = [d for d in detections if d.get('class_id') in class_ids]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda x: x.get('confidence', 0.0))
+    center_x = best.get('center_x')
+    if center_x is None:
+        bbox = best.get('bbox', [])
+        if len(bbox) >= 4:
+            center_x = (bbox[0] + bbox[2]) / 2
+    return float(center_x) if center_x is not None else None
 
-    Samples three 20x50 px regions at horizontal positions:
-        (x*20%, y/2),  (x/2, y/2),  (x*80%, y/2)
+
+def _get_density_sample_x_positions(width: int,
+                                    defect_position: Optional[Dict] = None) -> Tuple[float, float, float]:
+    """
+    Determine left / center / right sampling x positions.
+
+    The left and right sampling positions prefer model-detected side marks from
+    location_1.pt. Missing sides fall back independently to the legacy 20%/80%
+    image positions; the center sample remains at 50%.
+    """
+    left_x = width * 0.2
+    center_x = width * 0.5
+    right_x = width * 0.8
+
+    detections = []
+    if isinstance(defect_position, dict):
+        raw_detections = defect_position.get('detections', [])
+        if isinstance(raw_detections, list):
+            detections = raw_detections
+
+    if detections:
+        model_left_x = _select_best_detection_x(detections, [1, 3])
+        model_right_x = _select_best_detection_x(detections, [2, 4])
+        if model_left_x is not None:
+            left_x = model_left_x
+        if model_right_x is not None:
+            right_x = model_right_x
+
+    return left_x, center_x, right_x
+
+
+def compute_grayscale_density_with_regions(image_bgr: np.ndarray,
+                                           defect_position: Optional[Dict] = None,
+                                           region_w: int = 20,
+                                           region_h: int = 50) -> Optional[Dict[str, Any]]:
+    """
+    Compute grayscale density (film density) for a linear weld image and return
+    the sampled regions.
+
+    Samples three 20x50 px regions near the left mark, image center, and right
+    mark. Left/right x positions prefer location_1 model detections; missing
+    sides fall back to the legacy 20%/80% image positions.
 
     Args:
         image_bgr: Corrected original image used for sampling. May be uint8,
@@ -307,8 +357,9 @@ def compute_grayscale_density(image_bgr: np.ndarray,
         region_h: Height of the sampling region in pixels (default 50).
 
     Returns:
-        A string formatted as "min-max" (e.g. "38-210"), or None if
-        the image is invalid or regions cannot be sampled.
+        A dict ``{"value": "min-max", "regions": [...]}``, or None if the
+        image is invalid or regions cannot be sampled. Region coordinates are
+        in the corrected image coordinate system used by the model output.
     """
     if image_bgr is None or image_bgr.size == 0:
         return None
@@ -321,14 +372,32 @@ def compute_grayscale_density(image_bgr: np.ndarray,
 
     patches = []
     cy = h / 2.0
-    for frac in (0.2, 0.5, 0.8):
-        cx = w * frac
+    regions: List[Dict[str, Any]] = []
+
+    sample_positions = _get_density_sample_x_positions(w, defect_position)
+    for label, cx in zip(("left", "center", "right"), sample_positions):
         x1 = max(0, int(cx) - half_w)
         y1 = max(0, int(cy) - half_h)
         x2 = min(w, x1 + region_w)
         y2 = min(h, y1 + region_h)
         if x2 > x1 and y2 > y1:
             patches.append(gray[y1:y2, x1:x2])
+            legacy_x = {"left": w * 0.2, "center": w * 0.5, "right": w * 0.8}[label]
+            regions.append({
+                "x": int(x1),
+                "y": int(y1),
+                "w": int(x2 - x1),
+                "h": int(y2 - y1),
+                "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                "center_x": float(cx),
+                "center_y": float(cy),
+                "label": label,
+                "source": (
+                    "location_1_model"
+                    if label in {"left", "right"} and abs(cx - legacy_x) > 1e-6
+                    else "location_1_fallback"
+                ),
+            })
 
     if not patches:
         return None
@@ -336,4 +405,39 @@ def compute_grayscale_density(image_bgr: np.ndarray,
     all_vals = np.concatenate([p.flatten() for p in patches])
     g_min = int(np.min(all_vals))
     g_max = int(np.max(all_vals))
-    return f"{g_min}-{g_max}"
+    return {
+        "value": f"{g_min}-{g_max}",
+        "regions": regions,
+    }
+
+
+def compute_grayscale_density(image_bgr: np.ndarray,
+                              defect_position: Optional[Dict] = None,
+                              region_w: int = 20,
+                              region_h: int = 50) -> Optional[str]:
+    """
+    Compute grayscale density (film density) for a linear weld image.
+
+    Samples three 20x50 px regions near the left mark, image center, and right
+    mark. Left/right x positions prefer location_1 model detections; missing
+    sides fall back to the legacy 20%/80% image positions.
+
+    Args:
+        image_bgr: Corrected original image used for sampling. May be uint8,
+            uint16, float32 grayscale, or multi-channel image.
+        defect_position: Optional result dict from
+            WeldDefectPositionDetector.predict().
+        region_w: Width of the sampling region in pixels (default 20).
+        region_h: Height of the sampling region in pixels (default 50).
+
+    Returns:
+        A string formatted as "min-max" (e.g. "38-210"), or None if
+        the image is invalid or regions cannot be sampled.
+    """
+    detail = compute_grayscale_density_with_regions(
+        image_bgr,
+        defect_position=defect_position,
+        region_w=region_w,
+        region_h=region_h,
+    )
+    return detail.get("value") if detail else None

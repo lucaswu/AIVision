@@ -440,7 +440,10 @@ def _create_runtime_bundle(args: argparse.Namespace) -> Dict[str, Any]:
     iqi_inferencer = None
     if args.enable_iqi:
         if not rip._IQI_AVAILABLE:
-            print(f"[runtime] [警告] IQIInferencer 不可用，跳过 IQI 推理: {rip._iqi_err}")
+            print(
+                "[runtime] [警告] IQIInferencer 不可用，跳过 IQI 推理: "
+                f"{getattr(rip, '_IQI_IMPORT_ERROR', 'unknown import error')}"
+            )
         else:
             print("[runtime] 启用 IQI 像质计识别（常驻复用）")
 
@@ -762,18 +765,26 @@ for _iqi_import_path in (str(_IQIDDET_SRC_ROOT), str(_IQIDDET_ROOT)):
         sys.path.remove(_iqi_import_path)
 sys.path[:0] = [str(_IQIDDET_SRC_ROOT), str(_IQIDDET_ROOT)]
 
-from gauge.region_ocr_api import (
+from gauge.app.region_ocr_api import (
     RecognizeRequest as _BaseRecognizeRequest,
     RecognizeResponse,
     close_region_ocr_api,
     recognize_region as _recognize_region,
     init_region_ocr_api,
 )
-from gauge.region_snr_api import (
+from gauge.app.region_snr_api import (
     SNRRequest as _BaseSNRRequest,
     SNRResponse,
     close_region_snr_api,
     compute_region_snr as _compute_region_snr,
+    init_region_snr_api,
+)
+from gauge.app.double_wire_api import (
+    DoubleWireRequest as _BaseDoubleWireRequest,
+    DoubleWireResponse,
+    close_double_wire_api,
+    compute_double_wire as _compute_double_wire,
+    init_double_wire_api,
 )
 
 
@@ -789,9 +800,16 @@ class RegionSNRRequest(_BaseSNRRequest):
     field_name: Optional[str] = Field(default=None, description="识别字段名称，如 normalizedSnr")
 
 
-# OCR 调试图片存储目录
+class DoubleWireAnalysisRequest(_BaseDoubleWireRequest):
+    """扩展的双丝分辨率分析请求，增加调试上下文字段。"""
+    task_id: Optional[str] = Field(default=None, description="任务ID，用于调试图片文件命名")
+    field_name: Optional[str] = Field(default=None, description="识别字段名称，如 doubleWireResolution")
+
+
+# 调试图片存储目录
 _OCR_DEBUG_DIR = Path("/app/data/results/ocr_debug")
-_OCR_DEBUG_RETENTION_DAYS = 7
+_DOUBLE_WIRE_DEBUG_DIR = Path("/app/data/results/doubleWire_debug")
+_DEBUG_IMAGE_RETENTION_DAYS = 7
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -808,18 +826,24 @@ def _get_positive_int_env(name: str, default: int) -> int:
         return default
 
 
-_OCR_DEBUG_CLEANUP_INTERVAL_SECONDS = _get_positive_int_env(
+_DEBUG_IMAGE_CLEANUP_INTERVAL_SECONDS = _get_positive_int_env(
     "OCR_DEBUG_CLEANUP_INTERVAL_SECONDS",
     24 * 60 * 60,
 )
 
 
-def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
-    """将 OCR 框选的 base64 图片保存为 PNG 文件，用于后期分析。"""
+def _save_debug_image(
+    image_base64: str,
+    task_id: Optional[str],
+    field_name: Optional[str],
+    debug_dir: Path,
+    log_prefix: str,
+) -> None:
+    """将 base64 图片保存为 PNG 文件，用于后期分析。"""
     import base64
     import re
     try:
-        _OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        debug_dir.mkdir(parents=True, exist_ok=True)
 
         # 去除 data URL 前缀
         b64_data = str(image_base64 or "")
@@ -833,7 +857,7 @@ def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name:
         safe_task = re.sub(r"[^\w-]", "_", task_id or "unknown")
         safe_field = re.sub(r"[^\w-]", "_", field_name or "field")
         filename = f"{ts}_{safe_task}_{safe_field}.png"
-        out_path = _OCR_DEBUG_DIR / filename
+        out_path = debug_dir / filename
 
         # 验证并重新编码为 PNG（确保格式正确）
         import numpy as np
@@ -842,46 +866,57 @@ def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name:
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is not None:
             cv2.imwrite(str(out_path), img)
-            print(f"[OCR debug] 已保存调试图片: {out_path}")
+            print(f"[{log_prefix} debug] 已保存调试图片: {out_path}")
         else:
             # 解码失败时直接写入原始字节
             out_path.write_bytes(img_bytes)
-            print(f"[OCR debug] 已保存原始调试图片（解码异常）: {out_path}")
+            print(f"[{log_prefix} debug] 已保存原始调试图片（解码异常）: {out_path}")
     except Exception as exc:
-        print(f"[OCR debug] 保存调试图片失败（不影响识别结果）: {exc}")
+        print(f"[{log_prefix} debug] 保存调试图片失败（不影响识别结果）: {exc}")
 
 
-def _cleanup_ocr_debug_images() -> None:
-    """清理超过 {_OCR_DEBUG_RETENTION_DAYS} 天的 OCR 调试图片。"""
+def _save_ocr_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
+    """将 OCR / SNR 框选的 base64 图片保存为 PNG 文件，用于后期分析。"""
+    _save_debug_image(image_base64, task_id, field_name, _OCR_DEBUG_DIR, "OCR")
+
+
+def _save_double_wire_debug_image(image_base64: str, task_id: Optional[str], field_name: Optional[str]) -> None:
+    """将双丝分辨率分析的 base64 图片保存为 PNG 文件，用于后期分析。"""
+    _save_debug_image(image_base64, task_id, field_name, _DOUBLE_WIRE_DEBUG_DIR, "doubleWire")
+
+
+def _cleanup_debug_images() -> None:
+    """清理超过 {_DEBUG_IMAGE_RETENTION_DAYS} 天的调试图片。"""
     try:
-        if not _OCR_DEBUG_DIR.exists():
-            return
-        cutoff = time.time() - _OCR_DEBUG_RETENTION_DAYS * 86400
+        cutoff = time.time() - _DEBUG_IMAGE_RETENTION_DAYS * 86400
         removed = 0
-        for f in _OCR_DEBUG_DIR.glob("*.png"):
-            if f.is_file() and f.stat().st_mtime < cutoff:
-                f.unlink()
-                removed += 1
+        for debug_dir in (_OCR_DEBUG_DIR, _DOUBLE_WIRE_DEBUG_DIR):
+            if not debug_dir.exists():
+                continue
+            for f in debug_dir.glob("*.png"):
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
         if removed:
-            print(f"[OCR debug] 已清理 {removed} 张超过 {_OCR_DEBUG_RETENTION_DAYS} 天的调试图片")
+            print(f"[debug image] 已清理 {removed} 张超过 {_DEBUG_IMAGE_RETENTION_DAYS} 天的调试图片")
     except Exception as exc:
-        print(f"[OCR debug] 清理调试图片失败: {exc}")
+        print(f"[debug image] 清理调试图片失败: {exc}")
 
 
-async def _periodic_ocr_debug_cleanup() -> None:
-    """后台定时清理 OCR 调试图片。"""
+async def _periodic_debug_image_cleanup() -> None:
+    """后台定时清理 OCR / 双丝分辨率调试图片。"""
     loop = asyncio.get_running_loop()
-    interval = _OCR_DEBUG_CLEANUP_INTERVAL_SECONDS
+    interval = _DEBUG_IMAGE_CLEANUP_INTERVAL_SECONDS
     print(
-        f"[OCR debug] 定时清理任务已启动: interval={interval}s, retention={_OCR_DEBUG_RETENTION_DAYS}d"
+        f"[debug image] 定时清理任务已启动: interval={interval}s, retention={_DEBUG_IMAGE_RETENTION_DAYS}d"
     )
     try:
-        await loop.run_in_executor(None, _cleanup_ocr_debug_images)
+        await loop.run_in_executor(None, _cleanup_debug_images)
         while True:
             await asyncio.sleep(interval)
-            await loop.run_in_executor(None, _cleanup_ocr_debug_images)
+            await loop.run_in_executor(None, _cleanup_debug_images)
     except asyncio.CancelledError:
-        print("[OCR debug] 定时清理任务已停止")
+        print("[debug image] 定时清理任务已停止")
         raise
 
 
@@ -918,7 +953,7 @@ def _init_ocr_cpu() -> None:
 @app.post("/inference/recognize", response_model=RecognizeResponse)
 async def recognize_region_endpoint(request: RecognizeRequest):
     """同步识别单张图片区域（base64输入），用于前端实时OCR框选功能。"""
-    import gauge.region_ocr_api as _ocr_mod
+    import gauge.app.region_ocr_api as _ocr_mod
     # 若 warmup 尚未完成，保证懒加载时也使用 CPU，不触发默认的 gpu 初始化
     if _ocr_mod._region_ocr_service is None:
         _init_ocr_cpu()
@@ -934,7 +969,7 @@ async def recognize_region_endpoint(request: RecognizeRequest):
     )
 
     # 构造基础请求（只传 image_base64，避免底层 model 字段校验问题）
-    from gauge.region_ocr_api import RecognizeRequest as _BaseReq
+    from gauge.app.region_ocr_api import RecognizeRequest as _BaseReq
     base_req = _BaseReq(image_base64=request.image_base64)
     return await _recognize_region(base_req)
 
@@ -952,7 +987,23 @@ async def compute_region_snr_endpoint(request: RegionSNRRequest):
     )
 
     base_req = _BaseSNRRequest(image_base64=request.image_base64)
-    return await _compute_region_snr(base_req)
+    return await _compute_region_snr(base_req, sr_b_um=request.sr_b_um)
+
+
+@app.post("/inference/double-wire", response_model=DoubleWireResponse)
+async def compute_double_wire_endpoint(request: DoubleWireAnalysisRequest):
+    """同步分析双丝像质计 strip 图像（base64输入），用于前端双丝分辨率手动选择。"""
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(
+        None,
+        _save_double_wire_debug_image,
+        request.image_base64,
+        request.task_id,
+        request.field_name or "doubleWireResolution",
+    )
+
+    base_req = _BaseDoubleWireRequest(image_base64=request.image_base64)
+    return await _compute_double_wire(base_req)
 
 
 # ==============================================================================
@@ -1057,7 +1108,11 @@ def _sync_run_inference_direct(request: InferenceRequest):
             if not rip._IQI_AVAILABLE:
                 with open(iqi_out_path, "w", encoding="utf-8") as f:
                     json.dump(
-                        {"ok": False, "fatal_error": str(rip._iqi_err), "results": []},
+                        {
+                            "ok": False,
+                            "fatal_error": getattr(rip, "_IQI_IMPORT_ERROR", "unknown import error"),
+                            "results": [],
+                        },
                         f,
                         indent=2,
                         ensure_ascii=False,
@@ -1350,6 +1405,10 @@ async def startup_event():
     print(f"Inference execution mode: {INFERENCE_EXECUTION_MODE}")
     print(f"Inference prewarm enabled: {INFERENCE_PREWARM_ENABLED}")
     print(f"Inference health requires warmup: {INFERENCE_HEALTH_REQUIRES_WARMUP}")
+    init_region_snr_api()
+    print("[SNR init] 区域 SNR 服务初始化完成")
+    init_double_wire_api()
+    print("[double-wire init] 双丝分辨率服务初始化完成")
     # 后台预热 OCR，不阻塞 health check
     app.state.ocr_warmup_task = asyncio.create_task(_warmup_ocr())
     app.state.inference_warmup_task = (
@@ -1357,13 +1416,13 @@ async def startup_event():
         if INFERENCE_PREWARM_ENABLED
         else None
     )
-    app.state.ocr_debug_cleanup_task = asyncio.create_task(_periodic_ocr_debug_cleanup())
+    app.state.debug_image_cleanup_task = asyncio.create_task(_periodic_debug_image_cleanup())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """服务关闭时释放后台任务和 OCR / SNR 资源。"""
-    for task_name in ("ocr_warmup_task", "inference_warmup_task", "ocr_debug_cleanup_task"):
+    """服务关闭时释放后台任务和 OCR / SNR / double-wire 资源。"""
+    for task_name in ("ocr_warmup_task", "inference_warmup_task", "debug_image_cleanup_task"):
         task = getattr(app.state, task_name, None)
         if task is None:
             continue
@@ -1378,6 +1437,7 @@ async def shutdown_event():
             setattr(app.state, task_name, None)
     close_region_ocr_api()
     close_region_snr_api()
+    close_double_wire_api()
     for bundle in _runtime_cache.values():
         iqi_inferencer = bundle.get("iqi_inferencer")
         if iqi_inferencer is not None:

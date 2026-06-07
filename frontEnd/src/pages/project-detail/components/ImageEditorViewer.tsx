@@ -70,7 +70,7 @@ import {
   ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, type OcrRecognizeResult, type RegionSnrResult } from "../../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, doubleWireAPI, type OcrRecognizeResult, type RegionSnrResult, type DoubleWireResult } from "../../../utils/api";
 import { fileThumbnailPath } from "../../../utils/constans";
 
 // 移除本地 Mock defectRecordAPI
@@ -81,6 +81,7 @@ import { useWindowLevelTool,preprocessToGrayCache } from '../tool/WindowLevelToo
 import Ruler from '../tool/Ruler';
 import DefectMarking, { DrawingType } from '../tool/DefectMarking';
 import PositionAndSizeTool, { PositionSizeType } from '../tool/PositionAndSizeTool';
+import DoubleWireVisualizationModal from "./DoubleWireVisualizationModal";
 import {
   hydrateDefectRecords,
   parseDefectOrigin,
@@ -147,7 +148,48 @@ type FilmInfoOcrField =
   | 'filmNumber'
   | 'sensitivity';
 
-type FilmInfoRegionField = FilmInfoOcrField | 'normalizedSnr';
+type FilmInfoRegionField = FilmInfoOcrField;
+
+const NORMALIZED_SNR_POINT_COUNT = 6;
+const NORMALIZED_SNR_REGION_WIDTH = 20;
+const NORMALIZED_SNR_REGION_HEIGHT = 55;
+const DOUBLE_WIRE_RESOLUTION_EXPAND = 60;
+const DOUBLE_WIRE_RESOLUTION_BAND_WIDTH = 21;
+const DOUBLE_WIRE_RESOLUTION_STRIP_WIDTH = DOUBLE_WIRE_RESOLUTION_EXPAND * 2;
+const DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH = DOUBLE_WIRE_RESOLUTION_EXPAND;
+const DOUBLE_WIRE_RESOLUTION_TABLE: Record<number, { resolutionLpMm: number; resolvingPowerMm: number }> = {
+  5: { resolutionLpMm: 1.56, resolvingPowerMm: 0.32 },
+  6: { resolutionLpMm: 2.00, resolvingPowerMm: 0.25 },
+  7: { resolutionLpMm: 2.50, resolvingPowerMm: 0.20 },
+  8: { resolutionLpMm: 3.125, resolvingPowerMm: 0.16 },
+  9: { resolutionLpMm: 3.85, resolvingPowerMm: 0.13 },
+  10: { resolutionLpMm: 5.00, resolvingPowerMm: 0.10 },
+  11: { resolutionLpMm: 6.25, resolvingPowerMm: 0.08 },
+  12: { resolutionLpMm: 7.94, resolvingPowerMm: 0.063 },
+  13: { resolutionLpMm: 10.00, resolvingPowerMm: 0.05 },
+};
+
+interface NormalizedSnrPoint {
+  x: number;
+  y: number;
+}
+
+interface ImageLine {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+interface DoubleWireVisualizationState {
+  stripDataUrl: string;
+  result: DoubleWireResult;
+  fileName: string;
+  expand: number;
+  bandWidth: number;
+  stripWidth: number;
+  stripHeight: number;
+}
 
 // 扩展保存的图形接口，增加 label, color 以及新的业务字段
 interface DefectBase {
@@ -194,6 +236,18 @@ interface IqiVisualizationData {
   roi_polygon_xy: IqiPoint[];
   plate_text_items_selected: IqiVisualizationTextItem[];
   wire_lines: IqiVisualizationLine[];
+}
+
+interface FilmDensityRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  bbox?: [number, number, number, number];
+  center_x?: number;
+  center_y?: number;
+  label?: string;
+  source?: string;
 }
 
 // --- 椭圆工具相关接口 ---
@@ -367,6 +421,61 @@ function parseIqiVisualization(visionResult?: string | null): IqiVisualizationDa
   }
 }
 
+function parseFilmDensityRegions(visionResult?: string | null): FilmDensityRegion[] {
+  if (!visionResult) return [];
+
+  try {
+    const parsed = JSON.parse(visionResult);
+    const rawRegions = Array.isArray(parsed?.metadata?.grayscale_density_regions)
+      ? parsed.metadata.grayscale_density_regions
+      : Array.isArray(parsed?.grayscale_density_regions)
+        ? parsed.grayscale_density_regions
+        : [];
+
+    return rawRegions
+      .map((region: any): FilmDensityRegion | null => {
+        let x = toFiniteNumber(region?.x);
+        let y = toFiniteNumber(region?.y);
+        let w = toFiniteNumber(region?.w);
+        let h = toFiniteNumber(region?.h);
+
+        const bboxValues = Array.isArray(region?.bbox) && region.bbox.length >= 4
+          ? region.bbox.slice(0, 4).map(toFiniteNumber)
+          : null;
+        const bbox = bboxValues && bboxValues.every((value: number | null) => value !== null)
+          ? bboxValues as [number, number, number, number]
+          : null;
+
+        if ((x === null || y === null || w === null || h === null) && bbox) {
+          const [x1, y1, x2, y2] = bbox;
+          x = x1;
+          y = y1;
+          w = x2 - x1;
+          h = y2 - y1;
+        }
+
+        if (x === null || y === null || w === null || h === null || w <= 0 || h <= 0) {
+          return null;
+        }
+
+        return {
+          x,
+          y,
+          w,
+          h,
+          bbox: bbox ?? [x, y, x + w, y + h],
+          center_x: toFiniteNumber(region?.center_x) ?? undefined,
+          center_y: toFiniteNumber(region?.center_y) ?? undefined,
+          label: typeof region?.label === 'string' ? region.label : undefined,
+          source: typeof region?.source === 'string' ? region.source : undefined,
+        };
+      })
+      .filter((region: FilmDensityRegion | null): region is FilmDensityRegion => region !== null);
+  } catch {
+    return [];
+  }
+}
+
 function rotateVector(dx: number, dy: number, angle: number) {
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
@@ -399,16 +508,43 @@ const REGION_SNR_ERROR_MESSAGES: Record<number, string> = {
   4002: '区域灰度标准差为 0，无法计算归一化信噪比，请重新框选',
 };
 
-function getRegionSelectionPrompt(field: FilmInfoRegionField) {
-  if (field === 'normalizedSnr') {
-    return '请在图像上框选要计算区域归一化信噪比的区域';
-  }
+function getRegionSelectionPrompt(_field: FilmInfoRegionField) {
   return '请在图像上框选要识别的区域';
 }
 
 function formatNormalizedSnrValue(value: number) {
   const normalized = value.toFixed(4);
   return normalized.replace(/\.?0+$/, '');
+}
+
+function formatDoubleWireResolutionNumber(value: number) {
+  return value.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function formatDoubleWireResolutionValue(info: { resolutionLpMm: number }) {
+  return `${formatDoubleWireResolutionNumber(info.resolutionLpMm)} lp/mm`;
+}
+
+function parseDoubleWireResolutionLpMm(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/[-+]?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getResolvingPowerUmByResolutionValue(value: unknown) {
+  const resolutionLpMm = parseDoubleWireResolutionLpMm(value);
+  if (resolutionLpMm === null) return null;
+
+  const tableInfo = Object.values(DOUBLE_WIRE_RESOLUTION_TABLE).find(
+    info => Math.abs(info.resolutionLpMm - resolutionLpMm) < 1e-6
+  );
+  if (!tableInfo || !Number.isFinite(tableInfo.resolvingPowerMm) || tableInfo.resolvingPowerMm <= 0) {
+    return null;
+  }
+
+  return tableInfo.resolvingPowerMm * 1000;
 }
 
 function getRegionSnrErrorMessage(result: RegionSnrResult) {
@@ -420,6 +556,39 @@ function getRegionSnrErrorMessage(result: RegionSnrResult) {
     return mapped;
   }
   return result.message || '区域归一化信噪比计算失败';
+}
+
+function getDoubleWireResolutionErrorMessage(result: DoubleWireResult) {
+  if (result.result_code === 0) {
+    const linePair = getResolvedDoubleWireLinePair(result);
+    if (linePair !== null && !DOUBLE_WIRE_RESOLUTION_TABLE[linePair]) {
+      return `未配置线对号 D${linePair} 对应的分辨率，请确认查表范围`;
+    }
+    return '未检出可分辨的双丝组，请重新选择';
+  }
+  return result.message || '双丝分辨率计算失败';
+}
+
+function getResolvedDoubleWireLinePair(result: DoubleWireResult) {
+  const payload = result.result;
+  if (!payload || !Array.isArray(payload.pairs) || payload.pairs.length === 0) {
+    return null;
+  }
+
+  const unresolvedGroup = payload.first_unresolved_group;
+  if (typeof unresolvedGroup === 'number') {
+    return unresolvedGroup > 1 ? unresolvedGroup - 1 : null;
+  }
+
+  return payload.num_pairs || payload.pairs.length;
+}
+
+function getDoubleWireResolutionInfo(result: DoubleWireResult) {
+  const linePair = getResolvedDoubleWireLinePair(result);
+  if (linePair === null) {
+    return null;
+  }
+  return DOUBLE_WIRE_RESOLUTION_TABLE[linePair] ?? null;
 }
 
 /**
@@ -938,6 +1107,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [iqiVisualization, setIqiVisualization] = useState<IqiVisualizationData>(() => createEmptyIqiVisualization());
   const [showIqiVisualization, setShowIqiVisualization] = useState(false);
 
+  // --- 底片黑度采样区域（来自 VisionResult.metadata.grayscale_density_regions，矫正后图像坐标系）---
+  const [filmDensityRegions, setFilmDensityRegions] = useState<FilmDensityRegion[]>([]);
+  const [showFilmDensityRegions, setShowFilmDensityRegions] = useState(false);
+
   // --- 新增：折叠状态 ---
   const [isReviewPanelCollapsed, setIsReviewPanelCollapsed] = useState(initialReviewPanelCollapsed);
   const [showDefectList, setShowDefectList] = useState(true);
@@ -948,6 +1121,16 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [ocrLoadingField, setOcrLoadingField] = useState<FilmInfoRegionField | null>(null);
   const [ocrDrawRect, setOcrDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [ocrDrawStart, setOcrDrawStart] = useState<{ x: number; y: number } | null>(null);
+
+  // --- 归一化信噪比：6 点手动选择状态 ---
+  const [isSelectingNormalizedSnrPoints, setIsSelectingNormalizedSnrPoints] = useState(false);
+  const [normalizedSnrPoints, setNormalizedSnrPoints] = useState<NormalizedSnrPoint[]>([]);
+  const [isComputingNormalizedSnr, setIsComputingNormalizedSnr] = useState(false);
+  const [isSelectingDoubleWireResolutionPoints, setIsSelectingDoubleWireResolutionPoints] = useState(false);
+  const [doubleWireResolutionLine, setDoubleWireResolutionLine] = useState<ImageLine | null>(null);
+  const [isDrawingDoubleWireResolutionLine, setIsDrawingDoubleWireResolutionLine] = useState(false);
+  const [isComputingDoubleWireResolution, setIsComputingDoubleWireResolution] = useState(false);
+  const [doubleWireVisualization, setDoubleWireVisualization] = useState<DoubleWireVisualizationState | null>(null);
 
   // --- 新增：每个缺陷项的展开状态 ---
   const [expandedDefects, setExpandedDefects] = useState<Set<string>>(new Set());
@@ -1287,6 +1470,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setCurrentDefectCircle(null);
       setCursorInImage(null);
     }
+    if (activeTool !== 'pan') {
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      setIsDrawingDoubleWireResolutionLine(false);
+    }
     // 当切换到位置和尺寸工具时，重置子类型为 null（默认不选中任何选项），同时重置脏标记
     if (activeTool === 'positionSize') {
       setPositionSizeType(null);
@@ -1407,9 +1597,18 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     // 重置 IQI 可视化结果（新文件加载时重新解析）
     setIqiVisualization(createEmptyIqiVisualization());
     setShowIqiVisualization(false);
+    setFilmDensityRegions([]);
+    setShowFilmDensityRegions(false);
     // 重置缺陷位置检测2原点及来源元信息
     setDefectOriginPoint(null);
     setDefectOriginMeta(null);
+    setIsSelectingNormalizedSnrPoints(false);
+    setNormalizedSnrPoints([]);
+    setIsComputingNormalizedSnr(false);
+    setIsSelectingDoubleWireResolutionPoints(false);
+    setDoubleWireResolutionLine(null);
+    setIsDrawingDoubleWireResolutionLine(false);
+    setIsComputingDoubleWireResolution(false);
   }, [selectedFile]);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -1662,6 +1861,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   let cursorStyle = 'default';
   if (isPanning) {
     cursorStyle = 'grabbing';
+  } else if (isSelectingNormalizedSnrPoints || isSelectingDoubleWireResolutionPoints) {
+    cursorStyle = 'crosshair';
   } else if (isSpacePressed || activeTool === 'pan') {
     cursorStyle = 'grab';
   } else if (activeTool === 'windowing') {
@@ -1731,9 +1932,326 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     };
   };
 
+  const buildNormalizedSnrRegion = (point: NormalizedSnrPoint) => {
+    const sourceWidth = canvasRef.current?.width || trueImageW || originalSize.w;
+    const sourceHeight = canvasRef.current?.height || trueImageH || originalSize.h;
+    const targetWidth = Math.min(NORMALIZED_SNR_REGION_WIDTH, sourceWidth);
+    const targetHeight = Math.min(NORMALIZED_SNR_REGION_HEIGHT, sourceHeight);
+    const x = Math.max(0, Math.min(Math.round(point.x - targetWidth / 2), sourceWidth - targetWidth));
+    const y = Math.max(0, Math.min(Math.round(point.y - targetHeight / 2), sourceHeight - targetHeight));
+    return {
+      x,
+      y,
+      w: targetWidth,
+      h: targetHeight,
+    };
+  };
+
+  const computeRegionSnrAtPoint = (point: NormalizedSnrPoint, fieldName: string, srBUm: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      throw new Error('图像未加载完成');
+    }
+
+    const region = buildNormalizedSnrRegion(point);
+    if (region.w <= 0 || region.h <= 0) {
+      throw new Error('选区无效，请重新选择');
+    }
+
+    const tmp = document.createElement('canvas');
+    tmp.width = region.w;
+    tmp.height = region.h;
+    tmp.getContext('2d')!.drawImage(
+      canvas,
+      region.x,
+      region.y,
+      region.w,
+      region.h,
+      0,
+      0,
+      region.w,
+      region.h
+    );
+
+    return snrAPI.computeRegion(tmp.toDataURL('image/png'), taskId, fieldName, srBUm);
+  };
+
+  const buildDoubleWireResolutionStripCanvas = (line: ImageLine) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      throw new Error('图像未加载完成');
+    }
+
+    const p1 = calculateTrueCoordinates(line.x1, line.y1);
+    const p2 = calculateTrueCoordinates(line.x2, line.y2);
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 5) {
+      throw new Error('起始点和终止点距离过短，请重新选择');
+    }
+
+    const stripWidth = Math.max(1, Math.ceil(length));
+    const stripHeight = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH * 2;
+    const ux = dx / length;
+    const uy = dy / length;
+    const nx = -uy;
+    const ny = ux;
+    const tmp = document.createElement('canvas');
+    tmp.width = stripWidth;
+    tmp.height = stripHeight;
+    const ctx = tmp.getContext('2d');
+    if (!ctx) {
+      throw new Error('无法创建裁剪画布');
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.setTransform(
+      ux,
+      nx,
+      uy,
+      ny,
+      -ux * p1.x - uy * p1.y,
+      DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH - nx * p1.x - ny * p1.y
+    );
+    ctx.drawImage(canvas, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    return tmp;
+  };
+
+  const buildDoubleWireResolutionAnalysisCanvas = (stripCanvas: HTMLCanvasElement) => {
+    const bandWidth = DOUBLE_WIRE_RESOLUTION_BAND_WIDTH;
+    const halfH = Math.floor(stripCanvas.height / 2);
+    const halfBand = Math.floor(bandWidth / 2);
+    const sourceY = Math.max(0, halfH - halfBand);
+    const sourceHeight = Math.min(bandWidth, stripCanvas.height - sourceY);
+
+    const tmp = document.createElement('canvas');
+    tmp.width = stripCanvas.width;
+    tmp.height = bandWidth;
+    const ctx = tmp.getContext('2d');
+    if (!ctx) {
+      throw new Error('无法创建双丝分辨率分析画布');
+    }
+
+    ctx.drawImage(
+      stripCanvas,
+      0,
+      sourceY,
+      stripCanvas.width,
+      sourceHeight,
+      0,
+      0,
+      stripCanvas.width,
+      bandWidth
+    );
+
+    return tmp;
+  };
+
+  const computeNormalizedSnrFromPoints = async (points: NormalizedSnrPoint[]) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (points.length !== NORMALIZED_SNR_POINT_COUNT) {
+      message.warning(`请先选择 ${NORMALIZED_SNR_POINT_COUNT} 个点`);
+      return;
+    }
+
+    const resolvingPowerUm = getResolvingPowerUmByResolutionValue(filmInfoForm.getFieldValue('resolution'));
+    if (resolvingPowerUm === null) {
+      message.warning('请先计算双丝分辨率');
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      return;
+    }
+
+    setIsComputingNormalizedSnr(true);
+    try {
+      const requests = points.map((point, index) => computeRegionSnrAtPoint(point, `normalizedSnr_${index + 1}`, resolvingPowerUm));
+
+      const results = await Promise.all(requests);
+      const failedResult = results.find(result => result.result_code !== 0 || typeof result.snr_n !== 'number');
+      if (failedResult) {
+        message.error(getRegionSnrErrorMessage(failedResult));
+        setIsSelectingNormalizedSnrPoints(false);
+        setNormalizedSnrPoints([]);
+        return;
+      }
+
+      const minSnr = Math.min(...results.map(result => result.snr_n as number));
+      const snrValue = formatNormalizedSnrValue(minSnr);
+      filmInfoForm.setFieldValue('normalizedSnr', snrValue);
+      autoSaveFilmInfo();
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      message.success(`归一化信噪比计算完成: ${snrValue}`);
+    } catch (err) {
+      console.error('[SNR] 6点归一化信噪比计算失败:', err);
+      message.error('归一化信噪比计算失败');
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+    } finally {
+      setIsComputingNormalizedSnr(false);
+    }
+  };
+
+  const computeDoubleWireResolutionFromLine = async (line: ImageLine) => {
+    if (isComputingDoubleWireResolution) return;
+
+    const displayLength = Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+    if (displayLength < 2) {
+      message.warning('起始点和终止点距离过短，请重新选择');
+      setDoubleWireResolutionLine(null);
+      return;
+    }
+
+    setIsComputingDoubleWireResolution(true);
+    try {
+      const stripCanvas = buildDoubleWireResolutionStripCanvas(line);
+      const analysisCanvas = buildDoubleWireResolutionAnalysisCanvas(stripCanvas);
+      const stripDataUrl = stripCanvas.toDataURL('image/png');
+      const result = await doubleWireAPI.compute(analysisCanvas.toDataURL('image/png'), taskId, 'doubleWireResolution');
+      const visualizationData = {
+        stripDataUrl,
+        result,
+        fileName: selectedFile?.FileName || 'double_wire_strip.png',
+        expand: DOUBLE_WIRE_RESOLUTION_EXPAND,
+        bandWidth: DOUBLE_WIRE_RESOLUTION_BAND_WIDTH,
+        stripWidth: stripCanvas.width,
+        stripHeight: stripCanvas.height,
+      };
+      if (Array.isArray(result.result?.profile) && result.result.profile.length > 0) {
+        setDoubleWireVisualization(visualizationData);
+      }
+      const resolutionInfo = getDoubleWireResolutionInfo(result);
+      if (result.result_code !== 0 || resolutionInfo === null) {
+        const hasVisualizationProfile = Array.isArray(result.result?.profile) && result.result.profile.length > 0;
+        if (hasVisualizationProfile) {
+          message.warning(`${getDoubleWireResolutionErrorMessage(result)}，可在可视化窗口中手动选择并输入 D(n)`);
+        } else {
+          message.error(getDoubleWireResolutionErrorMessage(result));
+        }
+        setIsSelectingDoubleWireResolutionPoints(false);
+        setDoubleWireResolutionLine(null);
+        return;
+      }
+
+      const resolutionValue = formatDoubleWireResolutionValue(resolutionInfo);
+      filmInfoForm.setFieldValue('resolution', resolutionValue);
+      autoSaveFilmInfo();
+      setIsSelectingDoubleWireResolutionPoints(false);
+      message.success(`双丝分辨率计算完成: ${resolutionValue}`);
+    } catch (err) {
+      console.error('[double-wire] 双丝分辨率计算失败:', err);
+      message.error(err instanceof Error ? err.message : '双丝分辨率计算失败');
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+    } finally {
+      setIsDrawingDoubleWireResolutionLine(false);
+      setIsComputingDoubleWireResolution(false);
+    }
+  };
+
+  const handleApplyManualDoubleWireResolution = (linePair: number) => {
+    const resolutionInfo = DOUBLE_WIRE_RESOLUTION_TABLE[linePair];
+    if (!resolutionInfo) {
+      message.error(`未配置线对号 D${linePair} 对应的分辨率，请确认查表范围`);
+      return;
+    }
+
+    const resolutionValue = formatDoubleWireResolutionValue(resolutionInfo);
+    filmInfoForm.setFieldValue('resolution', resolutionValue);
+    autoSaveFilmInfo();
+    setDoubleWireVisualization(null);
+    setIsSelectingDoubleWireResolutionPoints(false);
+    setDoubleWireResolutionLine(null);
+    message.success(`双丝分辨率已按 D${linePair} 写回: ${resolutionValue}`);
+  };
+
+  const handleNormalizedSnrPointClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (isComputingNormalizedSnr) return;
+
+    const displayPoint = getImageCoordinates(e);
+    const rawPoint = calculateTrueCoordinates(displayPoint.x, displayPoint.y);
+    const nextPoints = [
+      ...normalizedSnrPoints,
+      {
+        x: Math.max(0, Math.min(rawPoint.x, trueImageW || originalSize.w || rawPoint.x)),
+        y: Math.max(0, Math.min(rawPoint.y, trueImageH || originalSize.h || rawPoint.y)),
+      },
+    ];
+
+    setNormalizedSnrPoints(nextPoints);
+
+    if (nextPoints.length < NORMALIZED_SNR_POINT_COUNT) {
+      message.info(`已选择 ${nextPoints.length}/${NORMALIZED_SNR_POINT_COUNT} 个点`);
+      return;
+    }
+
+    computeNormalizedSnrFromPoints(nextPoints);
+  };
+
+  const handleDoubleWireResolutionLineStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (isComputingDoubleWireResolution) return;
+
+    const displayPoint = getImageCoordinates(e);
+    const clampedPoint = {
+      x: Math.max(0, Math.min(displayPoint.x, imgSize.w || displayPoint.x)),
+      y: Math.max(0, Math.min(displayPoint.y, imgSize.h || displayPoint.y)),
+    };
+    setDoubleWireResolutionLine({
+      x1: clampedPoint.x,
+      y1: clampedPoint.y,
+      x2: clampedPoint.x,
+      y2: clampedPoint.y,
+    });
+    setIsDrawingDoubleWireResolutionLine(true);
+  };
+
+  const handleDoubleWireResolutionLineMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawingDoubleWireResolutionLine || !doubleWireResolutionLine) return;
+    const displayPoint = getImageCoordinates(e);
+    setDoubleWireResolutionLine({
+      ...doubleWireResolutionLine,
+      x2: Math.max(0, Math.min(displayPoint.x, imgSize.w || displayPoint.x)),
+      y2: Math.max(0, Math.min(displayPoint.y, imgSize.h || displayPoint.y)),
+    });
+  };
+
+  const handleDoubleWireResolutionLineEnd = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawingDoubleWireResolutionLine || !doubleWireResolutionLine) return;
+    setIsDrawingDoubleWireResolutionLine(false);
+    const displayPoint = getImageCoordinates(e);
+    const finalLine = {
+      ...doubleWireResolutionLine,
+      x2: Math.max(0, Math.min(displayPoint.x, imgSize.w || displayPoint.x)),
+      y2: Math.max(0, Math.min(displayPoint.y, imgSize.h || displayPoint.y)),
+    };
+    setDoubleWireResolutionLine(finalLine);
+    computeDoubleWireResolutionFromLine(finalLine);
+  };
+
   // --- 鼠标按下 ---
   const handleMouseDownWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
     const isPanMode = isSpacePressed || activeTool === 'pan';
+
+    if (isSelectingNormalizedSnrPoints && !isSpacePressed && activeTool === 'pan') {
+      handleNormalizedSnrPointClick(e);
+      return;
+    }
+
+    if (isSelectingDoubleWireResolutionPoints && !isSpacePressed && activeTool === 'pan') {
+      handleDoubleWireResolutionLineStart(e);
+      return;
+    }
 
     if (ocrTargetField !== null) {
       e.stopPropagation();
@@ -1909,6 +2427,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       return;
     }
 
+    if (isSelectingDoubleWireResolutionPoints && activeTool === 'pan') {
+      handleDoubleWireResolutionLineMove(e);
+      return;
+    }
+
     if (activeTool === 'defect') {
       if (drawingType === 'rect' && isDrawingDefect && defectStartPoint) {
         const { x: currX, y: currY } = getImageCoordinates(e);
@@ -2033,6 +2556,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   // --- 鼠标松开 ---
   const handleMouseUpWrapper = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isSelectingDoubleWireResolutionPoints && activeTool === 'pan') {
+      handleDoubleWireResolutionLineEnd(e);
+      return;
+    }
+
     if (ocrTargetField !== null) {
       const field = ocrTargetField;
       setOcrTargetField(null);
@@ -2201,6 +2729,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     if (isPanning) setIsPanning(false);
     if (activeTool === 'setOrigin') setIsSettingOrigin(false);
     if (activeTool === 'positionSize' && positionSizeType === 'positioning') setIsSettingPositioning(false);
+    if (isDrawingDoubleWireResolutionLine) {
+      setIsDrawingDoubleWireResolutionLine(false);
+      setDoubleWireResolutionLine(null);
+    }
     if (isDrawingDefect) {
       setIsDrawingDefect(false);
       setCurrentDefectRect(null);
@@ -2633,6 +3165,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
       // 从 VisionResult 解析 IQI 可视化数据（不单独存 DB，直接读推理结果 JSON）
       setIqiVisualization(parseIqiVisualization(selectedFile.VisionResult));
+      setFilmDensityRegions(parseFilmDensityRegions(selectedFile.VisionResult));
 
       // 立即清空缺陷列表，防止在加载新数据前显示旧数据或发生时序闪烁
       setDefectRects([]);
@@ -2744,6 +3277,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setOcrTargetField(null); // 切换文件时退出OCR模式
       setOcrDrawRect(null);
       setOcrDrawStart(null);
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      setIsDrawingDoubleWireResolutionLine(false);
+      setIsComputingDoubleWireResolution(false);
+      setDoubleWireVisualization(null);
       // 重置工具状态
       setActiveTool('pan');
       setIsSettingOrigin(false);
@@ -2936,6 +3474,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     iqiVisualization.roi_polygon_xy.length > 0 ||
     iqiVisualization.plate_text_items_selected.length > 0 ||
     iqiVisualization.wire_lines.length > 0;
+  const hasFilmDensityRegions = filmDensityRegions.length > 0;
 
   // 旋转90°/270°后，水平轴对应原图高度、垂直轴对应原图宽度，标尺需交换 ratio 和 maxImageSize
   const corrNormR = ((rotation % 360) + 360) % 360;
@@ -2958,6 +3497,23 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     // originPoint 已存储为矫正后坐标系，直接显示；fallback 到 AI 检测原点
     return originPoint || defectOriginPoint || { x: 0, y: 0 };
   }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize, selectedFile, rawImageWidth, rawImageHeight]);
+
+  const getScreenUprightTextTransform = useCallback((tx: number, ty: number) => {
+    const normCSS = ((rotation % 360) + 360) % 360;
+    const transforms: string[] = [];
+
+    if (normCSS !== 0) {
+      transforms.push(`rotate(${-normCSS}, ${tx}, ${ty})`);
+    }
+
+    if (flipH === -1 || flipV === -1) {
+      const translateX = flipH === -1 ? 2 * tx : 0;
+      const translateY = flipV === -1 ? 2 * ty : 0;
+      transforms.push(`translate(${translateX}, ${translateY}) scale(${flipH}, ${flipV})`);
+    }
+
+    return transforms.length > 0 ? transforms.join(' ') : undefined;
+  }, [rotation, flipH, flipV]);
 
   // --- 更新缺陷信息的辅助函数 ---
   const updateDefectInfo = (
@@ -3039,6 +3595,56 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     }
   };
 
+  const handleNormalizedSnrSelectClick = () => {
+    if (isComputingNormalizedSnr) return;
+
+    if (isSelectingNormalizedSnrPoints) {
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      message.info('已取消归一化信噪比手动选择');
+      return;
+    }
+
+    if (getResolvingPowerUmByResolutionValue(filmInfoForm.getFieldValue('resolution')) === null) {
+      message.warning('请先计算双丝分辨率');
+      return;
+    }
+
+    setActiveTool('pan');
+    setOcrTargetField(null);
+    setOcrDrawRect(null);
+    setOcrDrawStart(null);
+    setIsSelectingDoubleWireResolutionPoints(false);
+    setDoubleWireResolutionLine(null);
+    setIsDrawingDoubleWireResolutionLine(false);
+    setNormalizedSnrPoints([]);
+    setIsSelectingNormalizedSnrPoints(true);
+    message.info(`请在图像上依次选择 ${NORMALIZED_SNR_POINT_COUNT} 个点，可滚轮缩放或按住空格拖动图片`);
+  };
+
+  const handleDoubleWireResolutionSelectClick = () => {
+    if (isComputingDoubleWireResolution) return;
+
+    if (isSelectingDoubleWireResolutionPoints) {
+      setIsSelectingDoubleWireResolutionPoints(false);
+      setDoubleWireResolutionLine(null);
+      setIsDrawingDoubleWireResolutionLine(false);
+      message.info('已取消双丝分辨率手动选择');
+      return;
+    }
+
+    setActiveTool('pan');
+    setOcrTargetField(null);
+    setOcrDrawRect(null);
+    setOcrDrawStart(null);
+    setIsSelectingNormalizedSnrPoints(false);
+    setNormalizedSnrPoints([]);
+    setDoubleWireResolutionLine(null);
+    setIsDrawingDoubleWireResolutionLine(false);
+    setIsSelectingDoubleWireResolutionPoints(true);
+    message.info('请在图像上拖拽选择双丝分辨率的起始点和终止点，可滚轮缩放或按住空格拖动图片');
+  };
+
   const handleOcrRegionSelected = async (
     rect: { x: number; y: number; w: number; h: number },
     field: FilmInfoRegionField
@@ -3067,22 +3673,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     console.log('[OCR] 开始识别, field:', field, '裁剪区域:', { sx, sy, sw, sh }, 'canvas尺寸:', { w: canvas.width, h: canvas.height });
     setOcrLoadingField(field);
     try {
-      if (field === 'normalizedSnr') {
-        const result: RegionSnrResult = await snrAPI.computeRegion(base64, taskId, field);
-        console.log('[SNR] 后端返回结果:', result);
-        if (result.result_code === 0 && typeof result.snr_n === 'number') {
-          const snrValue = formatNormalizedSnrValue(result.snr_n);
-          filmInfoForm.setFieldValue('normalizedSnr', snrValue);
-          autoSaveFilmInfo();
-          message.success(`区域归一化信噪比计算成功: ${snrValue}`);
-        } else if (result.result_code === 0) {
-          message.error('区域归一化信噪比计算成功，但未返回 snr_n');
-        } else {
-          message.error(getRegionSnrErrorMessage(result));
-        }
-        return;
-      }
-
       const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64, taskId, field);
       console.log('[OCR] 后端返回结果:', result);
       const recognized = result?.text?.trim();
@@ -3098,7 +3688,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       }
     } catch (err) {
       console.error('[OCR] 请求失败:', err);
-      message.error(field === 'normalizedSnr' ? '区域归一化信噪比计算失败' : 'OCR识别失败');
+      message.error('OCR识别失败');
     } finally {
       setOcrLoadingField(null);
     }
@@ -3387,31 +3977,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
             style={{ padding: '0 8px' }}
             onValuesChange={autoSaveFilmInfo}
           >
-            {/* <Form.Item label="分辨率" style={{ marginBottom: 12 }}>
-              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.resolution !== currentValues.resolution}>
-                {({ getFieldValue }) => {
-                  const resolution = getFieldValue('resolution');
-                  return (
-                    <div
-                      style={{
-                        width: '100%',
-                        minHeight: 24,
-                        padding: '1px 11px',
-                        border: '1px solid #d9d9d9',
-                        borderRadius: 6,
-                        background: '#fafafa',
-                        lineHeight: '22px',
-                      }}
-                    >
-                      {resolution || <Text type="secondary">暂无结果</Text>}
-                    </div>
-                  );
-                }}
-              </Form.Item>
-              <Form.Item name="resolution" hidden>
-                <Input />
-              </Form.Item>
-            </Form.Item> */}
             <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
               <Space.Compact style={{ width: '100%' }}>
                 <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
@@ -3501,31 +4066,87 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 <Input />
               </Form.Item>
             </Form.Item>
+
+            <Form.Item label="双丝分辨率" style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', width: '100%' }}>
+                <Form.Item name="resolution" noStyle>
+                  <Input
+                    placeholder="手动选择后计算"
+                    readOnly
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={isSelectingDoubleWireResolutionPoints ? 'primary' : 'default'}
+                  loading={isComputingDoubleWireResolution}
+                  disabled={!selectedFile || !imageReady || ocrLoadingField !== null}
+                  onClick={handleDoubleWireResolutionSelectClick}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {isSelectingDoubleWireResolutionPoints ? '选择中' : '手动选择'}
+                </Button>
+              </div>
+            </Form.Item>
             
+            <Form.Item label="归一化信噪比" style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', width: '100%' }}>
+                <Form.Item name="normalizedSnr" noStyle>
+                  <Input
+                    placeholder="手动选择后计算"
+                    readOnly
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={isSelectingNormalizedSnrPoints ? 'primary' : 'default'}
+                  loading={isComputingNormalizedSnr}
+                  disabled={!selectedFile || !imageReady || ocrLoadingField !== null}
+                  onClick={handleNormalizedSnrSelectClick}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {isSelectingNormalizedSnrPoints ? `${normalizedSnrPoints.length}/${NORMALIZED_SNR_POINT_COUNT}` : '手动选择'}
+                </Button>
+              </div>
+            </Form.Item>
+
             <Form.Item label="底片黑度" style={{ marginBottom: 12 }}>
-              <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
-                {({ getFieldValue }) => {
-                  const filmDensity = getFieldValue('filmDensity');
-                  return (
-                    <div
-                      style={{
-                        width: '100%',
-                        minHeight: 24,
-                        padding: '1px 11px',
-                        border: '1px solid #d9d9d9',
-                        borderRadius: 6,
-                        background: '#fafafa',
-                        lineHeight: '22px',
-                      }}
-                    >
-                      {filmDensity || <Text type="secondary">暂无结果</Text>}
-                    </div>
-                  );
-                }}
-              </Form.Item>
-              <Form.Item name="filmDensity" hidden>
-                <Input />
-              </Form.Item>
+              <div style={{ display: 'flex', width: '100%' }}>
+                <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.filmDensity !== currentValues.filmDensity}>
+                  {({ getFieldValue }) => {
+                    const filmDensity = getFieldValue('filmDensity');
+                    return (
+                      <div
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          minHeight: 24,
+                          padding: '1px 11px',
+                          border: '1px solid #d9d9d9',
+                          borderRadius: 6,
+                          background: '#fafafa',
+                          lineHeight: '22px',
+                        }}
+                      >
+                        {filmDensity || <Text type="secondary">暂无结果</Text>}
+                      </div>
+                    );
+                  }}
+                </Form.Item>
+                <Button
+                  size="small"
+                  type={showFilmDensityRegions ? 'primary' : 'default'}
+                  disabled={!selectedFile || !hasFilmDensityRegions}
+                  onClick={() => setShowFilmDensityRegions(v => !v)}
+                  style={{ marginLeft: 8, flexShrink: 0 }}
+                >
+                  {showFilmDensityRegions ? '隐藏结果' : '显示结果'}
+                </Button>
+                <Form.Item name="filmDensity" hidden>
+                  <Input />
+                </Form.Item>
+              </div>
             </Form.Item>
             <Form.Item label="像质计灵敏度" style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', width: '100%' }}>
@@ -3546,22 +4167,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 </Button>
               </div>
             </Form.Item>
-            {/* <Form.Item label="区域归一化信噪比" style={{ marginBottom: 8 }}>
-              <Space.Compact style={{ width: '100%' }}>
-                <Tooltip title={ocrTargetField === 'normalizedSnr' ? '点击取消框选' : '框选计算区域归一化信噪比'} getPopupContainer={getEditorPopupContainer}>
-                  <Button
-                    size="small"
-                    icon={<ScanOutlined spin={ocrLoadingField === 'normalizedSnr'} />}
-                    type={ocrTargetField === 'normalizedSnr' ? 'primary' : 'default'}
-                    onClick={() => handleOcrButtonClick('normalizedSnr')}
-                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'normalizedSnr')}
-                  />
-                </Tooltip>
-                <Form.Item name="normalizedSnr" noStyle>
-                  <Input placeholder="框选后识别区域归一化信噪比" readOnly />
-                </Form.Item>
-              </Space.Compact>
-            </Form.Item> */}
           </Form>
         )}
       </div>
@@ -3969,7 +4574,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     maxWidth: "100%",
                     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
                     display: 'block',
-                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin') ? 'none' : 'auto',
+                    userSelect: (activeTool === 'measure' || activeTool === 'calibrate' || activeTool === 'setOrigin' || isSelectingDoubleWireResolutionPoints) ? 'none' : 'auto',
                     filter: isNegative ? 'invert(100%)' : 'none',
                     visibility: imageReady ? 'visible' : 'hidden',
                   }}
@@ -4087,12 +4692,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                           {/* 时钟位置点：12'/3'/6'/9' 为主方向（较大），其余等距插值 */}
                           {dispClockPts.map((pt, ki) => {
                             const isCardinal = ki % 3 === 0; // 12', 3', 6', 9'
-                            const normCSS = ((rotation % 360) + 360) % 360;
                             const tx = pt.x + 6 / scale;
                             const ty = pt.y - 4 / scale;
-                            let textTfm = '';
-                            if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${tx}, ${ty}) `;
-                            if (flipH === -1) textTfm += `translate(${2 * tx}, 0) scale(-1, 1)`;
                             return (
                               <g key={ki}>
                                 <circle cx={pt.x} cy={pt.y}
@@ -4108,7 +4709,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                                   fontWeight="bold"
                                   textAnchor="start"
                                   style={{ filter: 'drop-shadow(0 0 2px #000)' }}
-                                  transform={textTfm || undefined}
+                                  transform={getScreenUprightTextTransform(tx, ty)}
                                 >
                                   {pt.label}
                                 </text>
@@ -4122,7 +4723,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                    {/* 0-B. 缺陷位置检测2原点层（来自 location_1.pt D路径，center_mark 十字架）*/}
                    {/* 只有在显示坐标且没有手动设置原点时，才显示 AI 检测的原点 */}
-                   {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && !originPoint && (() => {
+                  {showPositioningCoords && imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && defectOriginPoint && !originPoint && (() => {
                      const corrRotation = selectedFile?.CorrectionRotation ?? 0;
                      const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
                      const normR = ((corrRotation % 360) + 360) % 360;
@@ -4142,12 +4743,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                      const doy = heightRatio > 0 ? oy / heightRatio : oy;
 
                      // 文字防旋转/翻转处理
-                     const normCSS = ((rotation % 360) + 360) % 360;
                      const textX = dox + 15 / scale;
                      const textY = doy - 15 / scale;
-                     let textTfm = '';
-                     if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                     if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                      return (
                        <g key="defect-origin">
@@ -4167,7 +4764,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                            fontSize={12 / scale}
                            fontWeight="bold"
                            style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
-                           transform={textTfm || undefined}
+                           transform={getScreenUprightTextTransform(textX, textY)}
                          >
                            原点
                          </text>
@@ -4175,7 +4772,61 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                      );
                    })()}
 
-                  {/* 0-C. IQI 可视化层（来自 ocr.visualization，原始图像坐标系）*/}
+                  {/* 0-C. 底片黑度采样区域（来自 metadata.grayscale_density_regions，矫正后图像坐标系）*/}
+                  {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showFilmDensityRegions && hasFilmDensityRegions && (
+                    <g>
+                      {(() => {
+                        const corrRotation = selectedFile?.CorrectionRotation ?? 0;
+                        const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
+                        const normR = ((corrRotation % 360) + 360) % 360;
+                        const needsInverse = corrRotation !== 0 || corrFlipH === -1;
+                        const rimgW = (normR === 90 || normR === 270)
+                          ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
+                        const rimgH = (normR === 90 || normR === 270)
+                          ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
+
+                        const toDisplayRect = (region: FilmDensityRegion) => {
+                          const points = [
+                            { x: region.x, y: region.y },
+                            { x: region.x + region.w, y: region.y },
+                            { x: region.x + region.w, y: region.y + region.h },
+                            { x: region.x, y: region.y + region.h },
+                          ].map((pt) => {
+                            let px = pt.x;
+                            let py = pt.y;
+                            if (needsInverse && rimgW > 0 && rimgH > 0) {
+                              const transformed = inverseTransformPoint(px, py, rimgW, rimgH, corrRotation, corrFlipH);
+                              px = transformed.x;
+                              py = transformed.y;
+                            }
+                            return {
+                              x: widthRatio > 0 ? px / widthRatio : px,
+                              y: heightRatio > 0 ? py / heightRatio : py,
+                            };
+                          });
+                          return points.map((pt) => `${pt.x},${pt.y}`).join(' ');
+                        };
+
+                        return (
+                          <>
+                            {filmDensityRegions.map((region, index) => (
+                              <polygon
+                                key={`film-density-region-${index}`}
+                                points={toDisplayRect(region)}
+                                fill="rgba(255, 45, 45, 0.12)"
+                                stroke="#ff2d2d"
+                                strokeWidth={2 / scale}
+                                strokeLinejoin="round"
+                                opacity={0.95}
+                              />
+                            ))}
+                          </>
+                        );
+                      })()}
+                    </g>
+                  )}
+
+                  {/* 0-D. IQI 可视化层（来自 ocr.visualization，原始图像坐标系）*/}
                   {imageReady && !isImageResetingRef.current && selectedFile?.TaskFileId === prevTaskFileIdRef.current && showIqiVisualization && hasIqiVisualization && (
                     <g>
                       {(() => {
@@ -4186,7 +4837,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                         const roiPoints = iqiVisualization.roi_polygon_xy.map(toDisplayPoint);
                         const roiPointString = roiPoints.map((pt) => `${pt.x},${pt.y}`).join(' ');
-                        const normCSS = ((rotation % 360) + 360) % 360;
 
                         return (
                           <>
@@ -4228,9 +4878,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                               const minY = ys.length > 0 ? Math.min(...ys) : 0;
                               const textX = minX + 6 / scale;
                               const textY = Math.max(minY - 8 / scale, 16 / scale);
-                              let textTransform = '';
-                              if (normCSS !== 0) textTransform += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                              if (flipH === -1) textTransform += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                               return (
                                 <g key={`iqi-text-${index}`}>
@@ -4252,7 +4899,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                                       fontSize={13 / scale}
                                       fontWeight="bold"
                                       style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
-                                      transform={textTransform || undefined}
+                                      transform={getScreenUprightTextTransform(textX, textY)}
                                     >
                                       {item.text}
                                     </text>
@@ -4287,21 +4934,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const rimgH = (normR === 90 || normR === 270)
                       ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
 
-                    // 文字反变换：抵消 CSS 旋转和翻转，使标注文字固定正向显示
-                    // SVG transform 应用顺序：先右边再左边，所以写为 rotate 然后 scale
-                    const makeTextTransform = (tx: number, ty: number) => {
-                      let t = '';
-                      // 先抖消旋转（相对于文字中心）
-                      if (corrRotation !== 0) {
-                        t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                      }
-                      // 再抖消水平翻转（如果有）
-                      if (corrFlipH === -1) {
-                        t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                      }
-                      return t || undefined;
-                    };
-
                     return defectRects.map((rect, idx) => {
                       let rx = rect.x, ry = rect.y, rw = rect.w, rh = rect.h;
                       if (needsInverse && rimgW > 0 && rimgH > 0) {
@@ -4331,7 +4963,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
-                            transform={makeTextTransform(labelX, labelY)}
+                            transform={getScreenUprightTextTransform(labelX, labelY)}
                           >
                             {rect.label}
                           </text>
@@ -4352,13 +4984,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const needsInverse = corrRotation !== 0 || corrFlipH === -1;
                     const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
                     const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
-
-                    const makeTextTransform = (tx: number, ty: number) => {
-                      let t = '';
-                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                      return t || undefined;
-                    };
 
                     return defectPolygons.map((poly, idx) => {
                       const transformedPoints = poly.points.map(p => {
@@ -4386,7 +5011,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
-                            transform={makeTextTransform(lx, ly)}
+                            transform={getScreenUprightTextTransform(lx, ly)}
                           >
                             {poly.label}
                           </text>
@@ -4407,13 +5032,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     const needsInverse = corrRotation !== 0 || corrFlipH === -1;
                     const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
                     const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
-
-                    const makeTextTransform = (tx: number, ty: number) => {
-                      let t = '';
-                      if (corrRotation !== 0) t += `rotate(${-corrRotation}, ${tx}, ${ty}) `;
-                      if (corrFlipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                      return t || undefined;
-                    };
 
                     return defectCircles.map((circle, idx) => {
                       let { x: cirX, y: cirY } = circle;
@@ -4441,7 +5059,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
                             fontWeight="bold"
                             style={{ textShadow: '0 0 2px #000' }}
-                            transform={makeTextTransform(labelX, labelY)}
+                            transform={getScreenUprightTextTransform(labelX, labelY)}
                           >
                             {circle.label}
                           </text>
@@ -4472,6 +5090,110 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       stroke="#fa8c16" strokeWidth={2 / scale} strokeDasharray="4 2" fill="rgba(250, 140, 22, 0.1)"
                     />
                   )}
+
+                  {/* D3. 归一化信噪比 6 点选择区域 */}
+                  {normalizedSnrPoints.map((point, idx) => {
+                    const region = buildNormalizedSnrRegion(point);
+                    const displayX = widthRatio > 0 ? region.x / widthRatio : region.x;
+                    const displayY = heightRatio > 0 ? region.y / heightRatio : region.y;
+                    const displayW = widthRatio > 0 ? region.w / widthRatio : region.w;
+                    const displayH = heightRatio > 0 ? region.h / heightRatio : region.h;
+                    const centerX = widthRatio > 0 ? point.x / widthRatio : point.x;
+                    const centerY = heightRatio > 0 ? point.y / heightRatio : point.y;
+                    const labelX = centerX + 7 / scale;
+                    const labelY = centerY - 7 / scale;
+                    return (
+                      <g key={`normalized-snr-point-${idx}`}>
+                        <rect
+                          x={displayX}
+                          y={displayY}
+                          width={displayW}
+                          height={displayH}
+                          stroke="#13c2c2"
+                          strokeWidth={2 / scale}
+                          strokeDasharray={`${4 / scale} ${2 / scale}`}
+                          fill="rgba(19, 194, 194, 0.12)"
+                        />
+                        <circle
+                          cx={centerX}
+                          cy={centerY}
+                          r={4 / scale}
+                          fill="#13c2c2"
+                          stroke="#fff"
+                          strokeWidth={1.5 / scale}
+                        />
+                        <text
+                          x={labelX}
+                          y={labelY}
+                          fill="#13c2c2"
+                          fontSize={12 / scale}
+                          fontWeight="bold"
+                          style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #000)' }}
+                          transform={getScreenUprightTextTransform(labelX, labelY)}
+                        >
+                          {idx + 1}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {/* D4. 双丝分辨率线段选择区域 */}
+                  {doubleWireResolutionLine && (() => {
+                    const { x1, y1, x2, y2 } = doubleWireResolutionLine;
+                    const dx = x2 - x1;
+                    const dy = y2 - y1;
+                    const len = Math.hypot(dx, dy);
+                    if (len <= 0) return null;
+                    const nx = -dy / len;
+                    const ny = dx / len;
+                    const halfW = DOUBLE_WIRE_RESOLUTION_STRIP_HALF_WIDTH / Math.max(widthRatio || 1, heightRatio || 1);
+                    const polygonPoints = [
+                      { x: x1 + nx * halfW, y: y1 + ny * halfW },
+                      { x: x2 + nx * halfW, y: y2 + ny * halfW },
+                      { x: x2 - nx * halfW, y: y2 - ny * halfW },
+                      { x: x1 - nx * halfW, y: y1 - ny * halfW },
+                    ].map(pt => `${pt.x},${pt.y}`).join(' ');
+                    return (
+                      <g key="double-wire-resolution-line">
+                        <polygon
+                          points={polygonPoints}
+                          stroke="#fa8c16"
+                          strokeWidth={1.5 / scale}
+                          strokeDasharray={`${4 / scale} ${2 / scale}`}
+                          fill="rgba(250, 140, 22, 0.12)"
+                        />
+                        <line
+                          x1={x1}
+                          y1={y1}
+                          x2={x2}
+                          y2={y2}
+                          stroke="#fa8c16"
+                          strokeWidth={2 / scale}
+                          strokeLinecap="round"
+                        />
+                        <circle
+                          cx={x1}
+                          cy={y1}
+                          r={4 / scale}
+                          fill="#fa8c16"
+                          stroke="#fff"
+                          strokeWidth={1.5 / scale}
+                        />
+                        <circle
+                          cx={x2}
+                          cy={y2}
+                          r={4 / scale}
+                          fill="#fa8c16"
+                          stroke="#fff"
+                          strokeWidth={1.5 / scale}
+                        />
+                        <line x1={x1 - 6 / scale} y1={y1} x2={x1 + 6 / scale} y2={y1} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <line x1={x1} y1={y1 - 6 / scale} x2={x1} y2={y1 + 6 / scale} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <line x1={x2 - 6 / scale} y1={y2} x2={x2 + 6 / scale} y2={y2} stroke="#fa8c16" strokeWidth={1 / scale} />
+                        <line x1={x2} y1={y2 - 6 / scale} x2={x2} y2={y2 + 6 / scale} stroke="#fa8c16" strokeWidth={1 / scale} />
+                      </g>
+                    );
+                  })()}
 
                   {/* E. 绘制当前正在绘制的多边形 (蓝色折线 + 橡皮筋线) */}
                   {activeTool === 'defect' && drawingType === 'polygon' && currentPolygonPoints.length > 0 && (
@@ -4513,20 +5235,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 {/* 3. 坐标原点十字线 */}
                 {showPositioningCoords && activeTool === 'setOrigin' && tempOrigin && (() => {
                   // 文字防旋转/翻转处理
-                  const normCSS = ((rotation % 360) + 360) % 360;
                   const textX = tempOrigin.x + 15 / scale;
                   const textY = tempOrigin.y - 15 / scale;
                   const textY2 = tempOrigin.y + 15 / scale;
-                  let textTfm1 = '';
-                  let textTfm2 = '';
-                  if (normCSS !== 0) {
-                    textTfm1 += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                    textTfm2 += `rotate(${-normCSS}, ${textX}, ${textY2}) `;
-                  }
-                  if (flipH === -1) {
-                    textTfm1 += `translate(${2 * textX}, 0) scale(-1, 1)`;
-                    textTfm2 += `translate(${2 * textX}, 0) scale(-1, 1)`;
-                  }
                   return (
                     <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 12 }}>
                       {/* 全屏贯穿红色十字虚线 */}
@@ -4538,8 +5249,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       <line x1={tempOrigin.x - 10 / scale} y1={tempOrigin.y} x2={tempOrigin.x + 10 / scale} y2={tempOrigin.y} stroke="#f5222d" strokeWidth={2 / scale} />
                       <line x1={tempOrigin.x} y1={tempOrigin.y - 10 / scale} x2={tempOrigin.x} y2={tempOrigin.y + 10 / scale} stroke="#f5222d" strokeWidth={2 / scale} />
 
-                      <text x={textX} y={textY} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm1 || undefined}>x (原点)</text>
-                      <text x={textX} y={textY2} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={textTfm2 || undefined}>y</text>
+                      <text x={textX} y={textY} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(textX, textY)}>x (原点)</text>
+                      <text x={textX} y={textY2} fill="#f5222d" fontSize={12 / scale} style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(textX, textY2)}>y</text>
                     </svg>
                   );
                 })()}
@@ -4563,16 +5274,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         ? inverseTransformPoint(originPoint.x, originPoint.y, _corrImgW, _corrImgH, _corrR, _corrF)
                         : { x: originPoint.x, y: originPoint.y };
                       const imageCoords = calculateImageCoordinates(rawPt.x, rawPt.y);
-                      const normR = ((rotation % 360) + 360) % 360;
                       // CSS rotate(90°/270°) 当画满屏十字坐标系时不需要特意区分宽高交换
                       
                       // 文字防旋转/翻转处理
-                      const normCSS = ((rotation % 360) + 360) % 360;
                       const textX = imageCoords.x + 15 / scale;
                       const textY = imageCoords.y - 15 / scale;
-                      let textTfm = '';
-                      if (normCSS !== 0) textTfm += `rotate(${-normCSS}, ${textX}, ${textY}) `;
-                      if (flipH === -1) textTfm += `translate(${2 * textX}, 0) scale(-1, 1)`;
 
                       return (
                         <g>
@@ -4600,7 +5306,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontSize={12 / scale}
                             fontWeight="bold"
                             style={{ userSelect: 'none', filter: 'drop-shadow(0 0 2px #fff)' }}
-                            transform={textTfm || undefined}
+                            transform={getScreenUprightTextTransform(textX, textY)}
                           >
                             原点
                           </text>
@@ -4701,7 +5407,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                       const R = shape.rotation;
                       const cosR = Math.cos(R);
                       const sinR = Math.sin(R);
-                      const normCSS = ((rotation % 360) + 360) % 360;
 
                       const startAngleLbl = -Math.PI / 2 - (rotation * Math.PI / 180);
                       return Array.from({ length: 12 }).map((_, i) => {
@@ -4714,10 +5419,6 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                         // 转换到绝对SVG坐标
                         const absTx = shape.cx + lx * cosR - ly * sinR;
                         const absTy = shape.cy + lx * sinR + ly * cosR;
-                        // 抵消CSS旋转与翻转
-                        let tfm = '';
-                        if (normCSS !== 0) tfm += `rotate(${-normCSS}, ${absTx}, ${absTy}) `;
-                        if (flipH === -1) tfm += `translate(${2 * absTx}, 0) scale(-1, 1)`;
                         const label = i === 0 ? "12'" : `${i}'`;
                         return (
                           <text
@@ -4728,7 +5429,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                             fontWeight="bold"
                             textAnchor="middle"
                             dominantBaseline="middle"
-                            transform={tfm || undefined}
+                            transform={getScreenUprightTextTransform(absTx, absTy)}
                           >
                             {label}
                           </text>
@@ -4870,21 +5571,14 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                     />
                     {/* x 和 y 标签（抵消CSS旋转，保持文字正向显示） */}
                     {(() => {
-                      const normCSS = ((rotation % 360) + 360) % 360;
                       const lx1 = tempOrigin.x + 10 / scale, ly1 = tempOrigin.y - 6 / scale;
                       const lx2 = tempOrigin.x + 6 / scale, ly2 = tempOrigin.y + 14 / scale;
-                      const makeTfm = (tx: number, ty: number) => {
-                        let t = '';
-                        if (normCSS !== 0) t += `rotate(${-normCSS}, ${tx}, ${ty}) `;
-                        if (flipH === -1) t += `translate(${2 * tx}, 0) scale(-1, 1)`;
-                        return t || undefined;
-                      };
                       return (
                         <>
                           <text x={lx1} y={ly1} fill="#f5222d" fontSize={12 / scale}
-                            style={{ userSelect: 'none' }} transform={makeTfm(lx1, ly1)}>x</text>
+                            style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(lx1, ly1)}>x</text>
                           <text x={lx2} y={ly2} fill="#f5222d" fontSize={12 / scale}
-                            style={{ userSelect: 'none' }} transform={makeTfm(lx2, ly2)}>y</text>
+                            style={{ userSelect: 'none' }} transform={getScreenUprightTextTransform(lx2, ly2)}>y</text>
                         </>
                       );
                     })()}
@@ -5070,6 +5764,24 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           {/* 显示图像尺寸和实时鼠标坐标 */}
           图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
+
+        {doubleWireVisualization && (
+          <DoubleWireVisualizationModal
+            open={!!doubleWireVisualization}
+            onClose={() => setDoubleWireVisualization(null)}
+            stripDataUrl={doubleWireVisualization.stripDataUrl}
+            result={doubleWireVisualization.result}
+            fileName={doubleWireVisualization.fileName}
+            expand={doubleWireVisualization.expand}
+            bandWidth={doubleWireVisualization.bandWidth}
+            stripWidth={doubleWireVisualization.stripWidth}
+            stripHeight={doubleWireVisualization.stripHeight}
+            automaticLinePair={getResolvedDoubleWireLinePair(doubleWireVisualization.result)}
+            resolutionTable={DOUBLE_WIRE_RESOLUTION_TABLE}
+            onApplyManualResolution={handleApplyManualDoubleWireResolution}
+            getContainer={() => editorContainerRef.current || document.body}
+          />
+        )}
 
         {/* 测量距离前的尺寸定标确认弹窗 */}
         <Modal

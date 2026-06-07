@@ -66,8 +66,8 @@ from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
-from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc0  # noqa: E402
-from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density as compute_grayscale_loc1  # noqa: E402
+from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density_with_regions as compute_grayscale_loc0  # noqa: E402
+from utils.weld_locaiont_1 import WeldDefectPositionDetector, DEFAULT_LOCATION1_MODEL_PATH, compute_grayscale_density_with_regions as compute_grayscale_loc1  # noqa: E402
 # IQI Grade Inferencer (replaces legacy OCR runner)
 IQIDDET_ROOT = PROJECT_ROOT / "IQIDDET"
 IQIDDET_SRC_ROOT = IQIDDET_ROOT / "src"
@@ -75,17 +75,16 @@ for _iqi_import_path in (str(IQIDDET_SRC_ROOT), str(IQIDDET_ROOT)):
     if _iqi_import_path in sys.path:
         sys.path.remove(_iqi_import_path)
 sys.path[:0] = [str(IQIDDET_SRC_ROOT), str(IQIDDET_ROOT)]
+_IQI_IMPORT_ERROR: Optional[str] = None
 try:
-    from gauge.iqi_inferencer import (  # noqa: E402
-        IQIInferencer,
-        build_delivery_record,
-        build_iqi_statistics,
-        save_debug_visualizations,
-    )
+    from gauge.app.iqi_inferencer import IQIInferencer  # noqa: E402
+    from gauge.domain.record_builders import build_delivery_record, build_iqi_statistics  # noqa: E402
+    from gauge.imaging.visualization import save_debug_visualizations  # noqa: E402
     _IQI_AVAILABLE = True
 except ImportError as _iqi_err:
     _IQI_AVAILABLE = False
-    print(f"[警告] IQIInferencer 加载失败，IQI 功能不可用: {_iqi_err}")
+    _IQI_IMPORT_ERROR = str(_iqi_err)
+    print(f"[警告] IQIInferencer 加载失败，IQI 功能不可用: {_IQI_IMPORT_ERROR}")
 
 try:
     import pydicom
@@ -578,6 +577,7 @@ class InferencePipelineRunner:
                 # should use native high-bit data after applying the same correction label so
                 # coordinates remain aligned with weld_location keypoints.
                 grayscale_density: Optional[str] = None
+                grayscale_density_regions: List[Dict[str, Any]] = []
                 density_image = None
                 try:
                     density_image = _load_density_image(image_path, label)
@@ -587,12 +587,16 @@ class InferencePipelineRunner:
 
                 if density_image is not None:
                     try:
+                        density_detail = None
                         if weld_location:
                             # B path detected: use ellipse/vertical clock positions
-                            grayscale_density = compute_grayscale_loc0(density_image, weld_location)
-                        if grayscale_density is None:
+                            density_detail = compute_grayscale_loc0(density_image, weld_location)
+                        if density_detail is None:
                             # Fallback to linear sampling (D path or no location detection)
-                            grayscale_density = compute_grayscale_loc1(density_image)
+                            density_detail = compute_grayscale_loc1(density_image, defect_position)
+                        if density_detail is not None:
+                            grayscale_density = density_detail.get("value")
+                            grayscale_density_regions = density_detail.get("regions") or []
                     except Exception as gs_exc:
                         print(f"[警告] 灰度值计算失败 ({image_path.name}): {gs_exc}")
 
@@ -613,6 +617,7 @@ class InferencePipelineRunner:
                     "defect_position": defect_position,
                     "ocr": iqi_result,
                     "grayscale_density": grayscale_density,
+                    "grayscale_density_regions": grayscale_density_regions,
                 })
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
@@ -970,7 +975,7 @@ def main():
             # IQI 模块加载失败（如缺少依赖），写入错误占位文件后继续
             iqi_out_path = output_dir / args.iqi_results_json
             with open(iqi_out_path, "w", encoding="utf-8") as f:
-                json.dump({"ok": False, "fatal_error": str(_iqi_err),
+                json.dump({"ok": False, "fatal_error": _IQI_IMPORT_ERROR,
                            "results": []}, f, indent=2, ensure_ascii=False)
             print(f"[警告] IQI 模块不可用，已写入错误占位: {iqi_out_path}")
         else:

@@ -20,15 +20,16 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from gauge.iqi_inferencer import (
-    IQIInferencer,
-    build_delivery_record,
-    build_iqi_statistics,
-    collect_input_images,
-    save_debug_visualizations,
-)
-from gauge.iqi_rules import DEFAULT_ALLOWED_NUMBERS_SPEC
-from gauge.pipeline_utils import SUPPORTED_IMAGE_EXTS, ensure_dir
+from gauge.app.inputs import collect_input_images
+from gauge.app.iqi_inferencer import IQIInferencer
+from gauge.domain.iqi_rules import DEFAULT_ALLOWED_NUMBERS_SPEC
+from gauge.domain.record_builders import build_delivery_record, build_iqi_statistics
+from gauge.imaging.preprocess import SUPPORTED_IMAGE_EXTS, ensure_dir
+from gauge.imaging.visualization import save_debug_visualizations
+import logging
+from gauge.logging_setup import setup_logging
+
+logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover
     from tqdm import tqdm
