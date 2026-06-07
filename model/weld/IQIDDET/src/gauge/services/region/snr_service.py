@@ -71,6 +71,7 @@ class RegionSNRService:
         gray_std: Optional[float],
         snr_m: Optional[float],
         snr_n: Optional[float],
+        sr_b_um: float,
         timings_ms: Dict[str, float],
         message: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -78,7 +79,7 @@ class RegionSNRService:
             **self._build_status(result_code, message=message),
             "snr_m": None if snr_m is None else float(snr_m),
             "snr_n": None if snr_n is None else float(snr_n),
-            "sr_b_um": float(self.sr_b_um),
+            "sr_b_um": float(sr_b_um),
             "gray_mean": None if gray_mean is None else float(gray_mean),
             "gray_std": None if gray_std is None else float(gray_std),
             "width": int(width),
@@ -89,9 +90,15 @@ class RegionSNRService:
         }
         return payload
 
-    def compute_image(self, image: np.ndarray) -> Dict[str, Any]:
+    def compute_image(
+        self,
+        image: np.ndarray,
+        sr_b_um: Optional[float] = None,
+    ) -> Dict[str, Any]:
         if image is None or not isinstance(image, np.ndarray) or image.size == 0:
             raise ValueError("输入图像为空")
+
+        sr_b = float(sr_b_um) if sr_b_um is not None else self.sr_b_um
 
         total_start = time.perf_counter()
 
@@ -117,6 +124,7 @@ class RegionSNRService:
                     "输入区域面积必须不小于 20 像素 × 55 像素，"
                     f"当前区域为 {width} × {height} 像素（面积 {area_pixels}）"
                 ),
+                sr_b_um=sr_b,
                 timings_ms={
                     "gray_ms": gray_ms,
                     "stats_ms": 0.0,
@@ -142,6 +150,7 @@ class RegionSNRService:
                 gray_std=gray_std,
                 snr_m=None,
                 snr_n=None,
+                sr_b_um=sr_b,
                 timings_ms={
                     "gray_ms": gray_ms,
                     "stats_ms": stats_ms,
@@ -152,7 +161,7 @@ class RegionSNRService:
 
         snr_start = time.perf_counter()
         snr_m = gray_mean / gray_std
-        snr_n = snr_m * 88.6 / self.sr_b_um
+        snr_n = snr_m * 88.6 / sr_b
         snr_ms = (time.perf_counter() - snr_start) * 1000.0
         total_ms = (time.perf_counter() - total_start) * 1000.0
 
@@ -165,6 +174,7 @@ class RegionSNRService:
             gray_std=gray_std,
             snr_m=snr_m,
             snr_n=snr_n,
+            sr_b_um=sr_b,
             timings_ms={
                 "gray_ms": gray_ms,
                 "stats_ms": stats_ms,

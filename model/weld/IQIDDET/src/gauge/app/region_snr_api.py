@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover
 
 class SNRRequest(BaseModel):
     image_base64: str = Field(..., description="前端框选后的区域图像，base64 编码，支持 data URL 前缀。")
+    sr_b_um: Optional[float] = Field(default=None, description="基本空间分辨力，单位微米(μm)。不传则使用初始化时的默认值 88.6 μm。")
 
 
 class SNRResponse(BaseModel):
@@ -92,17 +93,22 @@ def close_region_snr_api() -> None:
 register_region_service_shutdown(close_region_snr_api)
 
 
-def _sync_compute_region_snr(img: np.ndarray) -> Dict[str, Any]:
+def _sync_compute_region_snr(img: np.ndarray, sr_b_um: Optional[float] = None) -> Dict[str, Any]:
     service = get_region_snr_service()
-    return service.compute_image(img)
+    return service.compute_image(img, sr_b_um=sr_b_um)
 
 
-async def compute_region_snr(request: SNRRequest) -> SNRResponse:
-    """计算单个区域的归一化信噪比（base64 输入）。"""
+async def compute_region_snr(request: SNRRequest, sr_b_um: Optional[float] = None) -> SNRResponse:
+    """计算单个区域的归一化信噪比（base64 输入）。
+
+    sr_b_um: 基本空间分辨力，单位微米(μm)。传入则覆盖请求体中的值和服务默认值。
+    """
     img = decode_base64(request.image_base64)
+    # request 中的 sr_b_um 优先于参数默认值，参数 sr_b_um 优先于 request 中的值
+    resolved_sr_b = sr_b_um if sr_b_um is not None else request.sr_b_um
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(executor, _sync_compute_region_snr, img)
+        result = await loop.run_in_executor(executor, _sync_compute_region_snr, img, resolved_sr_b)
         return SNRResponse(**result)
     except HTTPException:
         raise

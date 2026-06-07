@@ -525,6 +525,28 @@ function formatDoubleWireResolutionValue(info: { resolutionLpMm: number }) {
   return `${formatDoubleWireResolutionNumber(info.resolutionLpMm)} lp/mm`;
 }
 
+function parseDoubleWireResolutionLpMm(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/[-+]?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getResolvingPowerUmByResolutionValue(value: unknown) {
+  const resolutionLpMm = parseDoubleWireResolutionLpMm(value);
+  if (resolutionLpMm === null) return null;
+
+  const tableInfo = Object.values(DOUBLE_WIRE_RESOLUTION_TABLE).find(
+    info => Math.abs(info.resolutionLpMm - resolutionLpMm) < 1e-6
+  );
+  if (!tableInfo || !Number.isFinite(tableInfo.resolvingPowerMm) || tableInfo.resolvingPowerMm <= 0) {
+    return null;
+  }
+
+  return tableInfo.resolvingPowerMm * 1000;
+}
+
 function getRegionSnrErrorMessage(result: RegionSnrResult) {
   const mapped = REGION_SNR_ERROR_MESSAGES[result.result_code];
   if (mapped && result.message && result.message !== '未知错误') {
@@ -1925,7 +1947,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     };
   };
 
-  const computeRegionSnrAtPoint = (point: NormalizedSnrPoint, fieldName: string) => {
+  const computeRegionSnrAtPoint = (point: NormalizedSnrPoint, fieldName: string, srBUm: number) => {
     const canvas = canvasRef.current;
     if (!canvas) {
       throw new Error('图像未加载完成');
@@ -1951,7 +1973,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       region.h
     );
 
-    return snrAPI.computeRegion(tmp.toDataURL('image/png'), taskId, fieldName);
+    return snrAPI.computeRegion(tmp.toDataURL('image/png'), taskId, fieldName, srBUm);
   };
 
   const buildDoubleWireResolutionStripCanvas = (line: ImageLine) => {
@@ -2037,9 +2059,17 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       return;
     }
 
+    const resolvingPowerUm = getResolvingPowerUmByResolutionValue(filmInfoForm.getFieldValue('resolution'));
+    if (resolvingPowerUm === null) {
+      message.warning('请先计算双丝分辨率');
+      setIsSelectingNormalizedSnrPoints(false);
+      setNormalizedSnrPoints([]);
+      return;
+    }
+
     setIsComputingNormalizedSnr(true);
     try {
-      const requests = points.map((point, index) => computeRegionSnrAtPoint(point, `normalizedSnr_${index + 1}`));
+      const requests = points.map((point, index) => computeRegionSnrAtPoint(point, `normalizedSnr_${index + 1}`, resolvingPowerUm));
 
       const results = await Promise.all(requests);
       const failedResult = results.find(result => result.result_code !== 0 || typeof result.snr_n !== 'number');
@@ -3572,6 +3602,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setIsSelectingNormalizedSnrPoints(false);
       setNormalizedSnrPoints([]);
       message.info('已取消归一化信噪比手动选择');
+      return;
+    }
+
+    if (getResolvingPowerUmByResolutionValue(filmInfoForm.getFieldValue('resolution')) === null) {
+      message.warning('请先计算双丝分辨率');
       return;
     }
 

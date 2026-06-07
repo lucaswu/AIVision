@@ -518,13 +518,15 @@ export const snrAPI = {
     base64WithPrefix: string,
     taskId?: string,
     fieldName?: string,
+    srBUm?: number,
   ): Promise<RegionSnrResult> => {
     const base64 = base64WithPrefix.startsWith('data:')
       ? base64WithPrefix.split(',')[1]
       : base64WithPrefix;
-    const body: Record<string, string> = { base64 };
+    const body: { base64: string; task_id?: string; field_name?: string; sr_b_um?: number } = { base64 };
     if (taskId) body['task_id'] = taskId;
     if (fieldName) body['field_name'] = fieldName;
+    if (typeof srBUm === 'number' && Number.isFinite(srBUm)) body['sr_b_um'] = srBUm;
     const result = await request<RegionSnrResult>(
       '/api/v1/ocr/region-snr',
       { method: 'POST', body: JSON.stringify(body) }

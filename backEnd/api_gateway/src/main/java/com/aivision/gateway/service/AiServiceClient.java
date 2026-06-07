@@ -760,8 +760,9 @@ public class AiServiceClient {
      * @param base64Image base64编码的图片
      * @param taskId      可选，任务ID，用于调试图片文件命名
      * @param fieldName   可选，字段名称，用于调试图片文件命名
+     * @param srBUm       可选，基本空间分辨力，单位微米
      */
-    public Map<String, Object> computeImageRegionSnr(String base64Image, String taskId, String fieldName) {
+    public Map<String, Object> computeImageRegionSnr(String base64Image, String taskId, String fieldName, Double srBUm) {
         String url = ocrInferenceServiceUrl + "/inference/region-snr";
 
         Map<String, Object> body = new HashMap<>();
@@ -772,12 +773,15 @@ public class AiServiceClient {
         if (fieldName != null && !fieldName.isBlank()) {
             body.put("field_name", fieldName);
         }
+        if (srBUm != null && Double.isFinite(srBUm)) {
+            body.put("sr_b_um", srBUm);
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
 
-        logger.info("调用区域归一化信噪比接口: taskId={}, fieldName={}", taskId, fieldName);
+        logger.info("调用区域归一化信噪比接口: taskId={}, fieldName={}, srBUm={}", taskId, fieldName, srBUm);
         try {
             ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
             if (!response.getStatusCode().is2xxSuccessful()) {
@@ -793,8 +797,15 @@ public class AiServiceClient {
     /**
      * 兼容旧签名：无 taskId/fieldName 的调用
      */
+    public Map<String, Object> computeImageRegionSnr(String base64Image, String taskId, String fieldName) {
+        return computeImageRegionSnr(base64Image, taskId, fieldName, null);
+    }
+
+    /**
+     * 兼容旧签名：无 taskId/fieldName 的调用
+     */
     public Map<String, Object> computeImageRegionSnr(String base64Image) {
-        return computeImageRegionSnr(base64Image, null, null);
+        return computeImageRegionSnr(base64Image, null, null, null);
     }
 
     /**

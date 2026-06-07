@@ -987,7 +987,7 @@ async def compute_region_snr_endpoint(request: RegionSNRRequest):
     )
 
     base_req = _BaseSNRRequest(image_base64=request.image_base64)
-    return await _compute_region_snr(base_req)
+    return await _compute_region_snr(base_req, sr_b_um=request.sr_b_um)
 
 
 @app.post("/inference/double-wire", response_model=DoubleWireResponse)
