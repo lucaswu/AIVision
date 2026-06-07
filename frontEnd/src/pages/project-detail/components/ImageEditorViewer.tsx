@@ -2097,7 +2097,12 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       }
       const resolutionInfo = getDoubleWireResolutionInfo(result);
       if (result.result_code !== 0 || resolutionInfo === null) {
-        message.error(getDoubleWireResolutionErrorMessage(result));
+        const hasVisualizationProfile = Array.isArray(result.result?.profile) && result.result.profile.length > 0;
+        if (hasVisualizationProfile) {
+          message.warning(`${getDoubleWireResolutionErrorMessage(result)}，可在可视化窗口中手动选择并输入 D(n)`);
+        } else {
+          message.error(getDoubleWireResolutionErrorMessage(result));
+        }
         setIsSelectingDoubleWireResolutionPoints(false);
         setDoubleWireResolutionLine(null);
         return;
@@ -2117,6 +2122,22 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setIsDrawingDoubleWireResolutionLine(false);
       setIsComputingDoubleWireResolution(false);
     }
+  };
+
+  const handleApplyManualDoubleWireResolution = (linePair: number) => {
+    const resolutionInfo = DOUBLE_WIRE_RESOLUTION_TABLE[linePair];
+    if (!resolutionInfo) {
+      message.error(`未配置线对号 D${linePair} 对应的分辨率，请确认查表范围`);
+      return;
+    }
+
+    const resolutionValue = formatDoubleWireResolutionValue(resolutionInfo);
+    filmInfoForm.setFieldValue('resolution', resolutionValue);
+    autoSaveFilmInfo();
+    setDoubleWireVisualization(null);
+    setIsSelectingDoubleWireResolutionPoints(false);
+    setDoubleWireResolutionLine(null);
+    message.success(`双丝分辨率已按 D${linePair} 写回: ${resolutionValue}`);
   };
 
   const handleNormalizedSnrPointClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -5720,6 +5741,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
             bandWidth={doubleWireVisualization.bandWidth}
             stripWidth={doubleWireVisualization.stripWidth}
             stripHeight={doubleWireVisualization.stripHeight}
+            automaticLinePair={getResolvedDoubleWireLinePair(doubleWireVisualization.result)}
+            resolutionTable={DOUBLE_WIRE_RESOLUTION_TABLE}
+            onApplyManualResolution={handleApplyManualDoubleWireResolution}
             getContainer={() => editorContainerRef.current || document.body}
           />
         )}
