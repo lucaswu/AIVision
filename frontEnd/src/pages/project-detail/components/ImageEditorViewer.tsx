@@ -3642,7 +3642,16 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     setDoubleWireResolutionLine(null);
     setIsDrawingDoubleWireResolutionLine(false);
     setIsSelectingDoubleWireResolutionPoints(true);
-    message.info('请在图像上拖拽选择双丝分辨率的起始点和终止点，可滚轮缩放或按住空格拖动图片');
+    message.info({
+      content: (
+        <div>
+          <div>请在图像上拖拽选择双丝分辨率的起始点和终止点，可滚轮缩放或按住空格拖动图片。</div>
+          <div style={{ color: '#ff4d4f' }}>需要注意以下两点：</div>
+          <div style={{ color: '#ff4d4f' }}>1. 拉取剖面线时尽可能与双丝垂直</div>
+          <div style={{ color: '#ff4d4f' }}>2. 剖面线从粗像质丝拉向细像质丝</div>
+        </div>
+      ),
+    });
   };
 
   const handleOcrRegionSelected = async (
