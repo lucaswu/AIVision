@@ -3,11 +3,13 @@ import json
 import time
 import os
 import sys
+from pathlib import Path
 
 # Configuration
 BASE_URL = "http://localhost:9541/api/v1"
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "password"  # Using the corrected password
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 class Color:
     GREEN = '\033[92m'
@@ -94,26 +96,19 @@ class TaskApiTester:
 
         # 3. Upload File
         try:
-            # Use real image 'qwe.png' located in the same directory as the script
-            # Ensure 'qwe.png' exists, otherwise fallback to generation (or fail)
-            real_image_path = "qwe.png"
-            if not os.path.exists(real_image_path):
-                print_error(f"Real image {real_image_path} not found! Falling back to generated image.")
-                with open("test_task_image.png", "wb") as f:
-                    f.write(os.urandom(1024))
-                real_image_path = "test_task_image.png"
+            image_path = SCRIPT_DIR / "defect_img_1.bmp"
+            if not image_path.exists():
+                print_error(f"Test image not found: {image_path}")
+                return False
 
             # Param name must be 'File' (capital F) as per FileController
-            files = {'File': ('test_image.png', open(real_image_path, 'rb'), 'image/png')}
-            
-            # directory-id must be in header
-            headers["directory-id"] = self.directory_id
-            
-            resp = self.session.post(f"{BASE_URL}/files/upload", files=files, headers=headers)
-            
-            # Clean up only if we generated it
-            if real_image_path == "test_task_image.png" and os.path.exists("test_task_image.png"):
-                os.remove("test_task_image.png")
+            with image_path.open('rb') as f:
+                files = {'File': (image_path.name, f, 'image/bmp')}
+
+                # directory-id must be in header
+                headers["directory-id"] = self.directory_id
+
+                resp = self.session.post(f"{BASE_URL}/files/upload", files=files, headers=headers)
             
             if resp.status_code == 200:
                 data = resp.json().get("Data")
@@ -305,18 +300,22 @@ class TaskApiTester:
             return False
 
     def run(self):
-        if not self.login(): return
-        if not self.setup_project_and_file(): return
-        if not self.test_submit_task(): return
-        if not self.wait_for_task_completion(): return
-        if not self.test_archive_and_restart(): return
+        if not self.login(): return False
+        if not self.setup_project_and_file(): return False
+        if not self.test_submit_task(): return False
+        if not self.wait_for_task_completion(): return False
+        if not self.test_archive_and_restart(): return False
         # Wait for restarted task to finish (optional, but good for cleanup stability)
-        self.wait_for_task_completion() 
-        if not self.test_delete_task(): return
+        if not self.wait_for_task_completion(): return False
+        if not self.test_delete_task(): return False
         
         print(f"\n{Color.GREEN}=== ALL TASK E2E TESTS PASSED ==={Color.RESET}")
+        return True
+
+def test_task_api_flow():
+    tester = TaskApiTester()
+    assert tester.run()
 
 if __name__ == "__main__":
     tester = TaskApiTester()
-    tester.run()
-
+    sys.exit(0 if tester.run() else 1)

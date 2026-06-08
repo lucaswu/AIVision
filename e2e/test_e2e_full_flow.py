@@ -3,11 +3,13 @@ import json
 import time
 import os
 import sys
+from pathlib import Path
 
 # Configuration
 BASE_URL = "http://localhost:9541/api/v1"
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "password"
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 class Color:
     GREEN = '\033[92m'
@@ -96,15 +98,16 @@ class FullFlowTester:
         # 3. Upload Files
         print_info(f"Uploading {len(self.test_images)} images...")
         for img_name in self.test_images:
-            if not os.path.exists(img_name):
-                print_error(f"Image {img_name} not found! Please run 'cp' commands first.")
+            img_path = SCRIPT_DIR / img_name
+            if not img_path.exists():
+                print_error(f"Image {img_path} not found.")
                 return False
             
             try:
                 # directory-id must be in header
                 headers["directory-id"] = self.directory_id
                 
-                with open(img_name, 'rb') as f:
+                with img_path.open('rb') as f:
                     files = {'File': (img_name, f, 'image/bmp')}
                     resp = self.session.post(f"{BASE_URL}/files/upload", files=files, headers=headers)
                 
@@ -225,6 +228,7 @@ class FullFlowTester:
                         print(f"      Contour Points: {len(contour)}")
                     else:
                         print_error("      Invalid or missing vvContour")
+                        return False
             
             if total_defects_found > 0:
                 print_success(f"Total defects found across all images: {total_defects_found}")
@@ -238,12 +242,17 @@ class FullFlowTester:
         return True
 
     def run(self):
-        if not self.login(): return
-        if not self.setup_project_resources(): return
-        if not self.submit_and_monitor_task(): return
+        if not self.login(): return False
+        if not self.setup_project_resources(): return False
+        if not self.submit_and_monitor_task(): return False
         
         print(f"\n{Color.GREEN}=== INTEGRATION TEST PASSED ==={Color.RESET}")
+        return True
+
+def test_full_ai_inference_flow():
+    tester = FullFlowTester()
+    assert tester.run()
 
 if __name__ == "__main__":
     tester = FullFlowTester()
-    tester.run()
+    sys.exit(0 if tester.run() else 1)

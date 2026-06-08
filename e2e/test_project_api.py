@@ -1,6 +1,7 @@
 import requests
 import json
 import uuid
+import sys
 
 BASE_URL = "http://localhost:9541/api/v1/projects"
 USER_ID = "admin-001"  # 使用已知的 Admin 用户 ID
@@ -27,8 +28,8 @@ def test_project_lifecycle():
     print(f"Creating project: {project_name}")
     resp = requests.post(f"{BASE_URL}/create", json=create_payload, headers=headers)
     create_data = print_response(resp, "Create Project")
-    if not create_data or create_data.get("Code") != 200:
-        return
+    assert create_data is not None
+    assert create_data.get("Code") == 200
 
     project_id = create_data["Data"]["ProjectId"]
     print(f"Created Project ID: {project_id}")
@@ -48,7 +49,7 @@ def test_project_lifecycle():
     
     if not found:
         print("ERROR: Created project not found in list")
-        return
+    assert found, "Created project not found in list"
 
     # 3. Update Project
     update_payload = {
@@ -57,23 +58,30 @@ def test_project_lifecycle():
     }
     print(f"Updating project {project_id}...")
     resp = requests.put(f"{BASE_URL}/{project_id}", json=update_payload, headers=headers)
-    print_response(resp, "Update Project")
+    update_data = print_response(resp, "Update Project")
+    assert update_data is not None
+    assert update_data.get("Code") == 200
 
     # Verify update
     resp = requests.get(f"{BASE_URL}/list", headers=headers)
     list_data = resp.json()
+    update_verified = False
     for proj in list_data["Data"]:
         if proj["Id"] == project_id:
             if proj["Name"] == update_payload["ProjectName"] and proj["Description"] == update_payload["Description"]:
                 print("Update verified successfully")
+                update_verified = True
             else:
                 print(f"ERROR: Update verification failed. Got {proj['Name']}, {proj['Description']}")
             break
+    assert update_verified, "Project update was not reflected in project list"
 
     # 4. Delete Project
     print(f"Deleting project {project_id}...")
     resp = requests.delete(f"{BASE_URL}/{project_id}", headers=headers)
-    print_response(resp, "Delete Project")
+    delete_data = print_response(resp, "Delete Project")
+    assert delete_data is not None
+    assert delete_data.get("Code") == 200
 
     # Verify deletion
     resp = requests.get(f"{BASE_URL}/list", headers=headers)
@@ -90,10 +98,11 @@ def test_project_lifecycle():
     else:
         print("Deletion verified successfully")
         print("\nAll Project API tests passed!")
+    assert not found_after_delete, "Project still exists after deletion"
 
 if __name__ == "__main__":
     try:
         test_project_lifecycle()
     except Exception as e:
         print(f"An error occurred: {e}")
-
+        sys.exit(1)
