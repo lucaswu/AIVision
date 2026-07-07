@@ -26,6 +26,7 @@ import {
   Collapse,
   Popconfirm,
   Alert,
+  Switch,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -200,6 +201,8 @@ interface DefectBase {
   size?: string;     // 缺陷尺寸
   quality?: string;  // 质量等级
   remark?: string;   // 备注
+  showLabel?: boolean; // 是否显示缺陷名称（默认 true）
+  showRegion?: boolean; // 是否显示缺陷区域（默认 true）
   _positionMode?: 'auto' | 'manual';
   _positionLinear?: string;
   _positionClock?: string;
@@ -3929,7 +3932,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
               </Select>
             </div>
             {/* 备注 */}
-            <div>
+            <div style={{ marginBottom: 8 }}>
               <Input
                 size="small"
                 placeholder="请输入备注"
@@ -3937,6 +3940,25 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 value={item.remark}
                 onChange={(e) => updateDefectInfo(type, index, 'remark', e.target.value)}
               />
+            </div>
+            {/* 显示控制开关 */}
+            <div style={{ display: 'flex', gap: 16, justifyContent: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Switch
+                  size="small"
+                  checked={item.showLabel !== false}
+                  onChange={(val) => updateDefectInfo(type, index, 'showLabel', val)}
+                />
+                <span style={{ fontSize: 12, color: '#595959', whiteSpace: 'nowrap' }}>缺陷名称</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Switch
+                  size="small"
+                  checked={item.showRegion !== false}
+                  onChange={(val) => updateDefectInfo(type, index, 'showRegion', val)}
+                />
+                <span style={{ fontSize: 12, color: '#595959', whiteSpace: 'nowrap' }}>缺陷区域</span>
+              </div>
             </div>
           </div>
         )}
@@ -4960,22 +4982,26 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                       return (
                         <g key={`rect-${idx}`}>
-                          <rect
-                            x={displayX} y={displayY} width={displayW} height={displayH}
-                            stroke={rect.color}
-                            strokeWidth={(hoveredDefectKey === `rect-${idx}` ? 4 : 2) / scale}
-                            fill={hoveredDefectKey === `rect-${idx}` ? `${rect.color}4D` : "none"}
-                          />
-                          <text
-                            x={labelX} y={labelY}
-                            fill={rect.color}
-                            fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
-                            fontWeight="bold"
-                            style={{ textShadow: '0 0 2px #000' }}
-                            transform={getScreenUprightTextTransform(labelX, labelY)}
-                          >
-                            {rect.label}
-                          </text>
+                          {rect.showRegion !== false && (
+                            <rect
+                              x={displayX} y={displayY} width={displayW} height={displayH}
+                              stroke={rect.color}
+                              strokeWidth={(hoveredDefectKey === `rect-${idx}` ? 4 : 2) / scale}
+                              fill={hoveredDefectKey === `rect-${idx}` ? `${rect.color}4D` : "none"}
+                            />
+                          )}
+                          {rect.showLabel !== false && (
+                            <text
+                              x={labelX} y={labelY}
+                              fill={rect.color}
+                              fontSize={(hoveredDefectKey === `rect-${idx}` ? 18 : 14) / scale}
+                              fontWeight="bold"
+                              style={{ textShadow: '0 0 2px #000' }}
+                              transform={getScreenUprightTextTransform(labelX, labelY)}
+                            >
+                              {rect.label}
+                            </text>
+                          )}
                         </g>
                       );
                     });
@@ -5008,22 +5034,26 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                       return (
                         <g key={`poly-${idx}`}>
-                          <polygon
-                            points={pointsStr}
-                            stroke={poly.color}
-                            strokeWidth={(hoveredDefectKey === `polygon-${idx}` ? 4 : 2) / scale}
-                            fill={hoveredDefectKey === `polygon-${idx}` ? `${poly.color}4D` : "none"}
-                          />
-                          <text
-                            x={lx} y={ly}
-                            fill={poly.color}
-                            fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
-                            fontWeight="bold"
-                            style={{ textShadow: '0 0 2px #000' }}
-                            transform={getScreenUprightTextTransform(lx, ly)}
-                          >
-                            {poly.label}
-                          </text>
+                          {poly.showRegion !== false && (
+                            <polygon
+                              points={pointsStr}
+                              stroke={poly.color}
+                              strokeWidth={(hoveredDefectKey === `polygon-${idx}` ? 4 : 2) / scale}
+                              fill={hoveredDefectKey === `polygon-${idx}` ? `${poly.color}4D` : "none"}
+                            />
+                          )}
+                          {poly.showLabel !== false && (
+                            <text
+                              x={lx} y={ly}
+                              fill={poly.color}
+                              fontSize={(hoveredDefectKey === `polygon-${idx}` ? 18 : 14) / scale}
+                              fontWeight="bold"
+                              style={{ textShadow: '0 0 2px #000' }}
+                              transform={getScreenUprightTextTransform(lx, ly)}
+                            >
+                              {poly.label}
+                            </text>
+                          )}
                         </g>
                       );
                     });
@@ -5054,24 +5084,28 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
                       return (
                         <g key={`circle-${idx}`}>
-                          <circle
-                            cx={cx}
-                            cy={cy}
-                            r={r}
-                            stroke={circle.color}
-                            strokeWidth={(hoveredDefectKey === `circle-${idx}` ? 4 : 2) / scale}
-                            fill={hoveredDefectKey === `circle-${idx}` ? `${circle.color}4D` : "none"}
-                          />
-                          <text
-                            x={labelX} y={labelY}
-                            fill={circle.color}
-                            fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
-                            fontWeight="bold"
-                            style={{ textShadow: '0 0 2px #000' }}
-                            transform={getScreenUprightTextTransform(labelX, labelY)}
-                          >
-                            {circle.label}
-                          </text>
+                          {circle.showRegion !== false && (
+                            <circle
+                              cx={cx}
+                              cy={cy}
+                              r={r}
+                              stroke={circle.color}
+                              strokeWidth={(hoveredDefectKey === `circle-${idx}` ? 4 : 2) / scale}
+                              fill={hoveredDefectKey === `circle-${idx}` ? `${circle.color}4D` : "none"}
+                            />
+                          )}
+                          {circle.showLabel !== false && (
+                            <text
+                              x={labelX} y={labelY}
+                              fill={circle.color}
+                              fontSize={(hoveredDefectKey === `circle-${idx}` ? 18 : 14) / scale}
+                              fontWeight="bold"
+                              style={{ textShadow: '0 0 2px #000' }}
+                              transform={getScreenUprightTextTransform(labelX, labelY)}
+                            >
+                              {circle.label}
+                            </text>
+                          )}
                         </g>
                       );
                     });
