@@ -3,11 +3,13 @@ import type { TaskFile } from "../../../utils/data";
 import {
   buildDefectPositionPayload,
   buildReviewFilePayload,
+  buildWeldJointPayloads,
   persistDefectRecords,
+  persistWeldJoints,
   saveReviewSession,
   syncFilmInfoToTaskFile,
 } from "./imageEditorPersistence";
-import type { FilmInfoFormValues } from "./imageEditorFileState";
+import type { FilmInfoFormValues, WeldJointDraft } from "./imageEditorFileState";
 
 function buildTaskFile(overrides: Partial<TaskFile> = {}): TaskFile {
   return {
@@ -29,12 +31,18 @@ function buildFilmInfoValues(
     resolution: "4 lp/mm",
     specification: "NB/T 47013",
     inspectionDate: "2026-04-26",
-    weldId: "W-01",
     filmNumber: "P-001",
     filmDensity: "2.5",
     sensitivity: "1.8%",
     normalizedSnr: "18.2",
     ...overrides,
+  };
+}
+
+function buildWeldJointApi() {
+  return {
+    replace: vi.fn().mockResolvedValue(undefined),
+    deleteByTaskFileId: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -49,7 +57,6 @@ describe("imageEditorPersistence", () => {
       Resolution: "4 lp/mm",
       Specification: "NB/T 47013",
       InspectionDate: "2026-04-26",
-      WeldId: "W-01",
       FilmNumber: "P-001",
       FilmDensity: "2.5",
       Sensitivity: "1.8%",
@@ -129,11 +136,15 @@ describe("imageEditorPersistence", () => {
       replace: vi.fn().mockResolvedValue(undefined),
       deleteByTaskFileId: vi.fn().mockResolvedValue(undefined),
     };
+    const weldJointApi = buildWeldJointApi();
+    const weldJoints: WeldJointDraft[] = [{ id: "weld-joint-1", weldNo: "W-01" }];
 
     await saveReviewSession({
       selectedFile,
       taskFileId: selectedFile.TaskFileId,
       filmInfoValues,
+      weldJoints,
+      weldJointApi,
       originPoint: { x: 120, y: 48 },
       reportApi,
       defectRecordApi,
@@ -157,6 +168,9 @@ describe("imageEditorPersistence", () => {
         ManualResult: '{"result":"ok"}',
       })
     );
+    expect(weldJointApi.replace).toHaveBeenCalledWith("task-file-1", [
+      { WeldJointId: "weld-joint-1", WeldNo: "W-01", SortOrder: 0 },
+    ]);
     expect(defectRecordApi.replace).toHaveBeenCalledTimes(1);
     expect(reportApi.updateFileLocation).toHaveBeenCalledWith("task-file-1", {
       DefectPosition: buildDefectPositionPayload({ x: 120, y: 48 }),
@@ -164,7 +178,9 @@ describe("imageEditorPersistence", () => {
     expect(selectedFile.DefectPosition).toBe(
       buildDefectPositionPayload({ x: 120, y: 48 })
     );
-    expect(selectedFile.WeldId).toBe("W-01");
+    expect(selectedFile.WeldJoints).toEqual([
+      { WeldJointId: "weld-joint-1", TaskFileId: "task-file-1", WeldNo: "W-01", SortOrder: 0 },
+    ]);
   });
 
   it("stops before saving defects when review info persistence fails", async () => {
@@ -177,12 +193,15 @@ describe("imageEditorPersistence", () => {
       replace: vi.fn().mockResolvedValue(undefined),
       deleteByTaskFileId: vi.fn().mockResolvedValue(undefined),
     };
+    const weldJointApi = buildWeldJointApi();
 
     await expect(
       saveReviewSession({
         selectedFile,
         taskFileId: selectedFile.TaskFileId,
         filmInfoValues: buildFilmInfoValues(),
+        weldJoints: [],
+        weldJointApi,
         originPoint: { x: 120, y: 48 },
         reportApi,
         defectRecordApi,
@@ -192,6 +211,7 @@ describe("imageEditorPersistence", () => {
       })
     ).rejects.toThrow("review failed");
 
+    expect(weldJointApi.replace).not.toHaveBeenCalled();
     expect(defectRecordApi.replace).not.toHaveBeenCalled();
     expect(reportApi.updateFileLocation).not.toHaveBeenCalled();
   });
@@ -206,12 +226,15 @@ describe("imageEditorPersistence", () => {
       replace: vi.fn().mockRejectedValue(new Error("replace failed")),
       deleteByTaskFileId: vi.fn().mockResolvedValue(undefined),
     };
+    const weldJointApi = buildWeldJointApi();
 
     await expect(
       saveReviewSession({
         selectedFile,
         taskFileId: selectedFile.TaskFileId,
         filmInfoValues: buildFilmInfoValues(),
+        weldJoints: [],
+        weldJointApi,
         originPoint: { x: 120, y: 48 },
         reportApi,
         defectRecordApi,
@@ -222,6 +245,49 @@ describe("imageEditorPersistence", () => {
     ).rejects.toThrow("replace failed");
 
     expect(reportApi.reviewFile).toHaveBeenCalledTimes(1);
+    expect(weldJointApi.replace).not.toHaveBeenCalled();
     expect(reportApi.updateFileLocation).not.toHaveBeenCalled();
+  });
+
+  it("builds weld joint payloads with sequential sort order", () => {
+    const payloads = buildWeldJointPayloads([
+      { id: "weld-1", weldNo: "EE12-06" },
+      { id: "weld-2", weldNo: "EE12-07" },
+    ]);
+
+    expect(payloads).toEqual([
+      { WeldJointId: "weld-1", WeldNo: "EE12-06", SortOrder: 0 },
+      { WeldJointId: "weld-2", WeldNo: "EE12-07", SortOrder: 1 },
+    ]);
+  });
+
+  it("replaces stored weld joints when there are entries to save", async () => {
+    const weldJointApi = buildWeldJointApi();
+
+    const result = await persistWeldJoints({
+      taskFileId: "task-file-1",
+      weldJoints: [{ id: "weld-1", weldNo: "EE12-06" }],
+      weldJointApi,
+    });
+
+    expect(result.mode).toBe("replace");
+    expect(weldJointApi.replace).toHaveBeenCalledWith("task-file-1", [
+      { WeldJointId: "weld-1", WeldNo: "EE12-06", SortOrder: 0 },
+    ]);
+    expect(weldJointApi.deleteByTaskFileId).not.toHaveBeenCalled();
+  });
+
+  it("deletes stored weld joints when none are left", async () => {
+    const weldJointApi = buildWeldJointApi();
+
+    const result = await persistWeldJoints({
+      taskFileId: "task-file-1",
+      weldJoints: [],
+      weldJointApi,
+    });
+
+    expect(result.mode).toBe("delete");
+    expect(weldJointApi.deleteByTaskFileId).toHaveBeenCalledWith("task-file-1");
+    expect(weldJointApi.replace).not.toHaveBeenCalled();
   });
 });

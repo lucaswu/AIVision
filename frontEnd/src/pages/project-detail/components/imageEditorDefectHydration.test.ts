@@ -61,6 +61,7 @@ describe("imageEditorDefectHydration", () => {
         {
           DefectRecordId: "rect-1",
           TaskFileId: "task-file-1",
+          WeldJointId: "weld-joint-1",
           DefectName: "裂纹(A)",
           Position: "",
           Size: "",
@@ -143,6 +144,7 @@ describe("imageEditorDefectHydration", () => {
       size: "300.00mm²",
       quality: "II",
       remark: "rect",
+      weldJointId: "weld-joint-1",
       defectRecordId: "rect-1",
       _isCorrectedCoord: true,
       x: 10,

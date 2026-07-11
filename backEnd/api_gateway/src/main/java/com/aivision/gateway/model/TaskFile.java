@@ -114,6 +114,13 @@ public class TaskFile {
     @JsonProperty("DefectRecords")
     private List<DefectRecord> defectRecords = new ArrayList<>();
 
+    // --- 新增：焊口记录列表（一对多关系，一张底片可关联多个焊口编号）---
+    @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JoinColumn(name = "task_file_id", referencedColumnName = "task_file_id", insertable = false, updatable = false)
+    @OrderBy("sortOrder ASC")
+    @JsonProperty("WeldJoints")
+    private List<WeldJoint> weldJoints = new ArrayList<>();
+
     // --- 新增：焊缝底片方向矫正信息 ---
     @Column(name = "correction_rotation")
     @JsonProperty("CorrectionRotation")
@@ -365,6 +372,15 @@ public class TaskFile {
 
     public void setDefectRecords(List<DefectRecord> defectRecords) {
         this.defectRecords = defectRecords;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public List<WeldJoint> getWeldJoints() {
+        return weldJoints;
+    }
+
+    public void setWeldJoints(List<WeldJoint> weldJoints) {
+        this.weldJoints = weldJoints;
         this.updatedAt = LocalDateTime.now();
     }
 

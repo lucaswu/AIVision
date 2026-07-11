@@ -12,6 +12,7 @@ describe("buildDefectRecordPayloads", () => {
           size: "15.40mm²",
           quality: "II",
           remark: "矩形缺陷",
+          weldJointId: "weld-joint-1",
           x: 10,
           y: 20,
           w: 30,
@@ -49,6 +50,7 @@ describe("buildDefectRecordPayloads", () => {
     expect(payloads).toEqual([
       {
         TaskFileId: "task-file-1",
+        WeldJointId: "weld-joint-1",
         DefectName: "裂纹(A)",
         Position: "+12~18mm",
         Geometry: JSON.stringify({ type: "rect", x: 10, y: 20, w: 30, h: 40 }),
@@ -58,6 +60,7 @@ describe("buildDefectRecordPayloads", () => {
       },
       {
         TaskFileId: "task-file-1",
+        WeldJointId: null,
         DefectName: "未熔合(B)",
         Position: "6'-7'",
         Geometry: JSON.stringify({
@@ -74,6 +77,7 @@ describe("buildDefectRecordPayloads", () => {
       },
       {
         TaskFileId: "task-file-1",
+        WeldJointId: null,
         DefectName: "圆形缺陷(E)",
         Position: "-4~2mm",
         Geometry: JSON.stringify({ type: "circle", x: 50, y: 60, r: 12 }),
@@ -103,6 +107,7 @@ describe("buildDefectRecordPayloads", () => {
     expect(payloads).toEqual([
       {
         TaskFileId: "task-file-2",
+        WeldJointId: null,
         DefectName: "其他(H)",
         Position: "",
         Geometry: JSON.stringify({ type: "rect", x: 0, y: 0, w: 1, h: 1 }),

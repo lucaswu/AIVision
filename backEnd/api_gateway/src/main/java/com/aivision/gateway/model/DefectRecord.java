@@ -21,6 +21,10 @@ public class DefectRecord {
     @JsonProperty("TaskFileId")
     private String taskFileId;
 
+    @Column(name = "weld_joint_id", length = 255)
+    @JsonProperty("WeldJointId")
+    private String weldJointId;
+
     @Column(name = "defect_name", length = 100)
     @JsonProperty("DefectName")
     private String defectName;
@@ -84,6 +88,15 @@ public class DefectRecord {
 
     public void setTaskFileId(String taskFileId) {
         this.taskFileId = taskFileId;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public String getWeldJointId() {
+        return weldJointId;
+    }
+
+    public void setWeldJointId(String weldJointId) {
+        this.weldJointId = weldJointId;
         this.updatedAt = LocalDateTime.now();
     }
 
@@ -173,6 +186,7 @@ public class DefectRecord {
         return "DefectRecord{" +
                 "defectRecordId='" + defectRecordId + '\'' +
                 ", taskFileId='" + taskFileId + '\'' +
+                ", weldJointId='" + weldJointId + '\'' +
                 ", defectName='" + defectName + '\'' +
                 ", position='" + position + '\'' +
                 ", size='" + size + '\'' +

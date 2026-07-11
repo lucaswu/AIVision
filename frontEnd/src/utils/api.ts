@@ -291,7 +291,6 @@ export const reportAPI = {
     Resolution?: string;
     Specification?: string;
     InspectionDate?: string;
-    WeldId?: string;
     FilmNumber?: string;
     FilmDensity?: string;
     Sensitivity?: string;
@@ -402,6 +401,21 @@ export const defectRecordAPI = {
     }),
   deleteByTaskFileId: (taskFileId: string) =>
     request<void>(`/api/v1/defect-records/task-file/${taskFileId}`, {
+      method: "DELETE",
+    }),
+};
+
+// 焊口记录相关API（一张底片可以关联多个焊口编号）
+export const weldJointAPI = {
+  getByTaskFileId: (taskFileId: string) =>
+    request<any[]>(`/api/v1/weld-joints/task-file/${taskFileId}`),
+  replace: (taskFileId: string, data: any[]) =>
+    request<any>(`/api/v1/weld-joints/task-file/${taskFileId}/replace`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteByTaskFileId: (taskFileId: string) =>
+    request<void>(`/api/v1/weld-joints/task-file/${taskFileId}`, {
       method: "DELETE",
     }),
 };

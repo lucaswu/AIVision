@@ -221,6 +221,32 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
     return defects.length > 0;
   };
 
+  // 编辑页会自动保留一行空焊口输入框，未填写编号的占位焊口不参与展示
+  const getNamedWeldJoints = (f: TaskFile) =>
+    (f.WeldJoints || []).filter(joint => joint.WeldNo && joint.WeldNo.trim() !== '');
+
+  // 一张底片可能关联多个焊口，缺陷按所属焊口分组展示；
+  // 没有已命名焊口的底片保持原有的平铺展示（不显示分组标题）
+  const groupDefectsByWeldJoint = (f: TaskFile, defects: any[]) => {
+    const joints = getNamedWeldJoints(f);
+    if (joints.length === 0) {
+      return [{ weldNo: null as string | null, items: defects }];
+    }
+
+    const groups = joints.map(joint => ({
+      weldNo: joint.WeldNo as string,
+      items: defects.filter(d => d.WeldJointId === joint.WeldJointId),
+    }));
+
+    const groupedIds = new Set(joints.map(joint => joint.WeldJointId));
+    const ungrouped = defects.filter(d => !d.WeldJointId || !groupedIds.has(d.WeldJointId));
+    if (ungrouped.length > 0) {
+      groups.push({ weldNo: '未分组', items: ungrouped });
+    }
+
+    return groups;
+  };
+
   // 统计数据
   const stats = useMemo(() => {
     const confirmed = allFiles.filter(f => f.ReviewStatus === "CONFIRMED");
@@ -584,7 +610,9 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                       </Col>
                                       <Col span={6}>
                                         <Text type="secondary" style={{ fontSize: '12px' }}>焊口编号</Text>
-                                        <div style={{ fontWeight: 500 }}>{file.WeldId || '-'}</div>
+                                        <div style={{ fontWeight: 500 }}>
+                                          {getNamedWeldJoints(file).map(j => j.WeldNo).join('、') || '-'}
+                                        </div>
                                       </Col>
                                       <Col span={6}>
                                         <Text type="secondary" style={{ fontSize: '12px' }}>片号</Text>
@@ -610,36 +638,47 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
                                       <div style={{ color: '#ff4d4f', fontSize: '14px', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
                                         <InfoCircleOutlined /> <span>检测到 {defects.length} 处缺陷</span>
                                       </div>
-                                      {defects.map((d: any, idx: number) => {
-                                        const isSevere = d.strName.toLowerCase().includes('crack') || d.strName.toLowerCase().includes('unfused') || d.strName.toLowerCase().includes('penetration');
-
-                                        // 直接使用 Position 字段（与 ReportEditorPage 中保持一致的用户录入位置信息）
-                                        const position = d.Position || "-";
-                                        const size = d.Size || "-";
-
-                                        return (
-                                          <div key={idx} style={{ background: isSevere ? '#fff1f0' : '#fff7e6', padding: '16px', borderRadius: '8px', border: `1px solid ${isSevere ? '#ffa39e' : '#ffe58f'}`, position: 'relative' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                              <div style={{ flex: 1 }}>
-                                                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                                  <Space>
-                                                    <Text strong style={{ fontSize: '15px' }}>缺陷类型: {d.strName}</Text>
-                                                    <Tag color={isSevere ? "red" : "orange"} style={{ border: 'none', borderRadius: '10px' }}>{isSevere ? "严重" : "一般"}</Tag>
-                                                  </Space>
-
-                                                  {/* 只显示 defect_record 表的数据 */}
-                                                  <div style={{ marginTop: 4, display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '8px 24px', fontSize: '13px', color: '#595959' }}>
-                                                    <div><span style={{ color: '#8c8c8c' }}>位置:</span> {position}</div>
-                                                    <div><span style={{ color: '#8c8c8c' }}>尺寸:</span> {size}</div>
-                                                    <div><span style={{ color: '#8c8c8c' }}>等级:</span> {d.Grade || '-'}</div>
-                                                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#8c8c8c' }}>备注:</span> {d.Remark || '-'}</div>
-                                                  </div>
-                                                </Space>
-                                              </div>
+                                      {groupDefectsByWeldJoint(file, defects).map((group, groupIdx) => (
+                                        group.items.length === 0 ? null : (
+                                        <div key={groupIdx} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                          {group.weldNo !== null && (
+                                            <div style={{ fontSize: '13px', fontWeight: 600, color: '#1890ff' }}>
+                                              焊口: {group.weldNo}
                                             </div>
-                                          </div>
-                                        );
-                                      })}
+                                          )}
+                                          {group.items.map((d: any, idx: number) => {
+                                            const isSevere = d.strName.toLowerCase().includes('crack') || d.strName.toLowerCase().includes('unfused') || d.strName.toLowerCase().includes('penetration');
+
+                                            // 直接使用 Position 字段（与 ReportEditorPage 中保持一致的用户录入位置信息）
+                                            const position = d.Position || "-";
+                                            const size = d.Size || "-";
+
+                                            return (
+                                              <div key={idx} style={{ background: isSevere ? '#fff1f0' : '#fff7e6', padding: '16px', borderRadius: '8px', border: `1px solid ${isSevere ? '#ffa39e' : '#ffe58f'}`, position: 'relative' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                  <div style={{ flex: 1 }}>
+                                                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                      <Space>
+                                                        <Text strong style={{ fontSize: '15px' }}>缺陷类型: {d.strName}</Text>
+                                                        <Tag color={isSevere ? "red" : "orange"} style={{ border: 'none', borderRadius: '10px' }}>{isSevere ? "严重" : "一般"}</Tag>
+                                                      </Space>
+
+                                                      {/* 只显示 defect_record 表的数据 */}
+                                                      <div style={{ marginTop: 4, display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '8px 24px', fontSize: '13px', color: '#595959' }}>
+                                                        <div><span style={{ color: '#8c8c8c' }}>位置:</span> {position}</div>
+                                                        <div><span style={{ color: '#8c8c8c' }}>尺寸:</span> {size}</div>
+                                                        <div><span style={{ color: '#8c8c8c' }}>等级:</span> {d.Grade || '-'}</div>
+                                                        <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#8c8c8c' }}>备注:</span> {d.Remark || '-'}</div>
+                                                      </div>
+                                                    </Space>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                        )
+                                      ))}
                                     </div>
                                   ) : (
                                     <div style={{ background: '#f6ffed', padding: '20px', borderRadius: '8px', border: '1px solid #b7eb8f', display: 'flex', alignItems: 'center', gap: 12 }}>

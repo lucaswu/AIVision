@@ -4,6 +4,7 @@ export interface RectDefectRecordInput {
   size?: string;
   quality?: string;
   remark?: string;
+  weldJointId?: string;
   x: number;
   y: number;
   w: number;
@@ -16,6 +17,7 @@ export interface PolygonDefectRecordInput {
   size?: string;
   quality?: string;
   remark?: string;
+  weldJointId?: string;
   points: { x: number; y: number }[];
 }
 
@@ -25,6 +27,7 @@ export interface CircleDefectRecordInput {
   size?: string;
   quality?: string;
   remark?: string;
+  weldJointId?: string;
   x: number;
   y: number;
   r: number;
@@ -32,6 +35,8 @@ export interface CircleDefectRecordInput {
 
 export interface DefectRecordPayload {
   TaskFileId: string;
+  // 未分配焊口时必须为 null（空字符串会违反数据库外键约束）
+  WeldJointId: string | null;
   DefectName: string;
   Position: string;
   Geometry: string;
@@ -46,9 +51,11 @@ function createBaseDefectRecordPayload(taskFileId: string, defect: {
   size?: string;
   quality?: string;
   remark?: string;
+  weldJointId?: string;
 }) {
   return {
     TaskFileId: taskFileId,
+    WeldJointId: defect.weldJointId || null,
     DefectName: defect.label,
     Position: defect.position || "",
     Size: defect.size || "",

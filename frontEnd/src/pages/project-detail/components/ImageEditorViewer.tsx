@@ -71,7 +71,7 @@ import {
   ScanOutlined,
 } from "@ant-design/icons";
 import { useRequest, useDebounceFn } from "ahooks";
-import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, ocrAPI, snrAPI, doubleWireAPI, type OcrRecognizeResult, type RegionSnrResult, type DoubleWireResult } from "../../../utils/api";
+import { reportAPI, defectTypeAPI, getUserId, defectRecordAPI, weldJointAPI, ocrAPI, snrAPI, doubleWireAPI, type OcrRecognizeResult, type RegionSnrResult, type DoubleWireResult } from "../../../utils/api";
 import { fileThumbnailPath } from "../../../utils/constans";
 
 // 移除本地 Mock defectRecordAPI
@@ -91,16 +91,20 @@ import {
 import {
   buildInitialFilmInfo,
   buildInitialImageTransform,
+  buildInitialWeldJoints,
   createEmptyHistorySnapshot,
   createIdleEllipseToolState,
   createIdleVerticalToolState,
   type FilmInfoFormValues,
+  type WeldJointDraft,
 } from "./imageEditorFileState";
 import {
   buildReviewFilePayload,
   persistDefectRecords,
+  persistWeldJoints,
   saveReviewSession,
   syncFilmInfoToTaskFile,
+  syncWeldJointsToTaskFile,
 } from "./imageEditorPersistence";
 import {
   isSameHistorySnapshot,
@@ -201,6 +205,7 @@ interface DefectBase {
   size?: string;     // 缺陷尺寸
   quality?: string;  // 质量等级
   remark?: string;   // 备注
+  weldJointId?: string; // 所属焊口ID（关联 weldJoints 列表中某一项的 id）
   showLabel?: boolean; // 是否显示缺陷名称（默认 true）
   showRegion?: boolean; // 是否显示缺陷区域（默认 true）
   _positionMode?: 'auto' | 'manual';
@@ -1124,6 +1129,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const [ocrLoadingField, setOcrLoadingField] = useState<FilmInfoRegionField | null>(null);
   const [ocrDrawRect, setOcrDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [ocrDrawStart, setOcrDrawStart] = useState<{ x: number; y: number } | null>(null);
+  // OCR 识别"焊口编号"时，记录当前正在编辑/识别的是焊口列表中的哪一行
+  const [ocrTargetWeldJointId, setOcrTargetWeldJointId] = useState<string | null>(null);
+  const [ocrLoadingWeldJointId, setOcrLoadingWeldJointId] = useState<string | null>(null);
+
+  // --- 焊口列表（一张底片可以关联多个焊口编号）---
+  const [weldJoints, setWeldJoints] = useState<WeldJointDraft[]>([]);
+  const originalWeldJointsRef = useRef<WeldJointDraft[]>([]);
 
   // --- 归一化信噪比：6 点手动选择状态 ---
   const [isSelectingNormalizedSnrPoints, setIsSelectingNormalizedSnrPoints] = useState(false);
@@ -2566,12 +2578,14 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
     if (ocrTargetField !== null) {
       const field = ocrTargetField;
+      const weldJointId = ocrTargetWeldJointId;
       setOcrTargetField(null);
+      setOcrTargetWeldJointId(null);
       const rect = ocrDrawRect;
       setOcrDrawRect(null);
       setOcrDrawStart(null);
       if (rect && rect.w > 5 && rect.h > 5) {
-        handleOcrRegionSelected(rect, field);
+        handleOcrRegionSelected(rect, field, weldJointId);
       }
       return;
     }
@@ -2955,7 +2969,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       position: '',
       size: '',
       quality: '',
-      remark: ''
+      remark: '',
+      // 只有一个焊口时自动归入该焊口，减少单焊口场景（多数底片）下的手动操作；
+      // 有多个焊口时留空，由用户手动在缺陷卡片中选择所属焊口
+      weldJointId: weldJoints.length === 1 ? weldJoints[0].id : undefined,
     };
 
     // 确定当前有效的0点（原点）：优先使用手动设置的 originPoint，其次使用 AI 检测的 defectOriginPoint
@@ -3151,6 +3168,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       isInitialLoadRef.current = true;
       cancelAutoSaveFilmInfo();
       cancelAutoSaveDefects();
+      cancelAutoSaveWeldJoints();
 
       // 切换瞬间，如果当前图片是就绪的（说明是旧图），则标记为重置中，防止闪烁
       // 如果当前图片本身就不就绪（如首屏加载），则不需要锁，否则会导致死锁（因为解锁逻辑依赖 imageReady 变 false 的动作）
@@ -3165,6 +3183,15 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const initialFilmInfo = buildInitialFilmInfo(selectedFile);
       filmInfoForm.setFieldsValue(initialFilmInfo);
       originalFilmInfoRef.current = initialFilmInfo;
+
+      // 从后端加载焊口列表（一张底片可关联多个焊口编号）；
+      // 即使没有识别出焊口编号，也始终显示一行空输入框供录入
+      const loadedWeldJoints = buildInitialWeldJoints(selectedFile);
+      const initialWeldJoints = loadedWeldJoints.length > 0
+        ? loadedWeldJoints
+        : [{ id: crypto.randomUUID(), weldNo: '' }];
+      setWeldJoints(initialWeldJoints);
+      originalWeldJointsRef.current = initialWeldJoints;
 
       // 从 VisionResult 解析 IQI 可视化数据（不单独存 DB，直接读推理结果 JSON）
       setIqiVisualization(parseIqiVisualization(selectedFile.VisionResult));
@@ -3278,6 +3305,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setShowDefectList(true); // 每次切换文件，默认展开缺陷列表
       setShowFilmInfo(true);   // 每次切换文件，默认展开底片信息
       setOcrTargetField(null); // 切换文件时退出OCR模式
+      setOcrTargetWeldJointId(null);
       setOcrDrawRect(null);
       setOcrDrawStart(null);
       setIsSelectingDoubleWireResolutionPoints(false);
@@ -3313,6 +3341,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     autoSaveDefects();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defectRects, defectPolygons, defectCircles, pixelRatio]);
+
+  // --- 监听焊口列表变化，触发自动保存（跳过初始加载）---
+  useEffect(() => {
+    if (isInitialLoadRef.current || !selectedFile) return;
+    autoSaveWeldJoints();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weldJoints]);
 
   // --- 将手动绘制中的椭圆/垂直成像实时转换为矫正坐标系下的 WeldLocationRect，
   //     供位置重计算 effect 使用（避免等到关闭工具才更新）---
@@ -3394,6 +3429,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         selectedFile,
         taskFileId: selectedFile.TaskFileId,
         filmInfoValues: infoValues,
+        weldJoints,
+        weldJointApi: weldJointAPI,
         originPoint,
         reportApi: reportAPI,
         defectRecordApi: defectRecordAPI,
@@ -3460,12 +3497,32 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     { wait: 500 }
   );
 
+  // --- 自动保存：焊口列表（防抖 500ms）---
+  const { run: autoSaveWeldJoints, cancel: cancelAutoSaveWeldJoints } = useDebounceFn(
+    async () => {
+      if (!selectedFile) return;
+      try {
+        await persistWeldJoints({
+          taskFileId: selectedFile.TaskFileId,
+          weldJoints,
+          weldJointApi: weldJointAPI,
+        });
+        syncWeldJointsToTaskFile(selectedFile, weldJoints);
+        console.log('焊口列表已自动保存');
+      } catch (err) {
+        console.error('自动保存焊口列表失败:', err);
+      }
+    },
+    { wait: 500 }
+  );
+
   useEffect(() => {
     return () => {
       cancelAutoSaveFilmInfo();
       cancelAutoSaveDefects();
+      cancelAutoSaveWeldJoints();
     };
-  }, [cancelAutoSaveDefects, cancelAutoSaveFilmInfo]);
+  }, [cancelAutoSaveDefects, cancelAutoSaveFilmInfo, cancelAutoSaveWeldJoints]);
 
   // 使用 Hook 返回的同步尺寸计算比例，避免 useEffect 更新 originalSize 带来的渲染延迟（闪烁根本原因）
   const trueImageW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
@@ -3588,8 +3645,45 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     updateAllDefects(nextState.rects, nextState.polygons, nextState.circles, true, pixelRatio);
   };
 
+  // --- 焊口列表操作（一张底片可以维护多个焊口编号）---
+  const handleAddWeldJoint = () => {
+    setWeldJoints(prev => [...prev, { id: crypto.randomUUID(), weldNo: '' }]);
+  };
+
+  const handleUpdateWeldJointNo = (id: string, weldNo: string) => {
+    setWeldJoints(prev => prev.map(joint => (joint.id === id ? { ...joint, weldNo } : joint)));
+  };
+
+  const handleRemoveWeldJoint = (id: string) => {
+    // 焊口编号栏始终保留至少一行输入框
+    setWeldJoints(prev => {
+      const next = prev.filter(joint => joint.id !== id);
+      return next.length > 0 ? next : [{ id: crypto.randomUUID(), weldNo: '' }];
+    });
+    // 解除该焊口下所有缺陷的归属，避免残留悬空引用
+    setDefectRects(prev => prev.map(item => (item.weldJointId === id ? { ...item, weldJointId: undefined } : item)));
+    setDefectPolygons(prev => prev.map(item => (item.weldJointId === id ? { ...item, weldJointId: undefined } : item)));
+    setDefectCircles(prev => prev.map(item => (item.weldJointId === id ? { ...item, weldJointId: undefined } : item)));
+    if (ocrTargetWeldJointId === id) {
+      setOcrTargetField(null);
+      setOcrTargetWeldJointId(null);
+    }
+  };
+
+  const handleWeldJointOcrClick = (id: string) => {
+    if (ocrTargetField === 'weldId' && ocrTargetWeldJointId === id) {
+      setOcrTargetField(null);
+      setOcrTargetWeldJointId(null);
+    } else {
+      setOcrTargetField('weldId');
+      setOcrTargetWeldJointId(id);
+      message.info(getRegionSelectionPrompt('weldId'));
+    }
+  };
+
   // --- OCR 框选识别 ---
   const handleOcrButtonClick = (field: FilmInfoRegionField) => {
+    setOcrTargetWeldJointId(null);
     if (ocrTargetField === field) {
       setOcrTargetField(null);
     } else {
@@ -3659,7 +3753,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   const handleOcrRegionSelected = async (
     rect: { x: number; y: number; w: number; h: number },
-    field: FilmInfoRegionField
+    field: FilmInfoRegionField,
+    weldJointId: string | null = null
   ) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -3684,15 +3779,20 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
     console.log('[OCR] 开始识别, field:', field, '裁剪区域:', { sx, sy, sw, sh }, 'canvas尺寸:', { w: canvas.width, h: canvas.height });
     setOcrLoadingField(field);
+    if (field === 'weldId') setOcrLoadingWeldJointId(weldJointId);
     try {
       const result: OcrRecognizeResult = await ocrAPI.recognizeRegion(base64, taskId, field);
       console.log('[OCR] 后端返回结果:', result);
       const recognized = result?.text?.trim();
       console.log('[OCR] 识别文本 (trim后):', JSON.stringify(recognized), '准备写入字段:', field);
       if (recognized) {
-        filmInfoForm.setFieldValue(field, recognized);
-        console.log('[OCR] setFieldValue 后, 表单当前值:', filmInfoForm.getFieldsValue());
-        autoSaveFilmInfo();
+        if (field === 'weldId' && weldJointId) {
+          handleUpdateWeldJointNo(weldJointId, recognized);
+        } else {
+          filmInfoForm.setFieldValue(field, recognized);
+          console.log('[OCR] setFieldValue 后, 表单当前值:', filmInfoForm.getFieldsValue());
+          autoSaveFilmInfo();
+        }
         message.success(`OCR识别成功: "${recognized}"`);
       } else {
         console.warn('[OCR] 识别结果为空, raw result:', result);
@@ -3703,6 +3803,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       message.error('OCR识别失败');
     } finally {
       setOcrLoadingField(null);
+      setOcrLoadingWeldJointId(null);
     }
   };
 
@@ -3710,9 +3811,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const handleResetFilmInfo = () => {
     if (!selectedFile) return;
     filmInfoForm.setFieldsValue(originalFilmInfoRef.current);
+    setWeldJoints(originalWeldJointsRef.current.map(joint => ({ ...joint })));
     message.success("底片信息已重置");
     // 触发自动保存以同步后端
     autoSaveFilmInfo();
+    autoSaveWeldJoints();
   };
 
   // --- 撤销/重做/重置 功能 ---
@@ -3817,6 +3920,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const renderDefectCard = (item: DefectBase, index: number, type: 'rect' | 'polygon' | 'circle', globalIndex: number) => {
     const defectKey = `${type}-${index}`;
     const isExpanded = expandedDefects.has(defectKey);
+    const assignedWeldNo = weldJoints.find(joint => joint.id === item.weldJointId)?.weldNo;
 
     return (
       <div
@@ -3870,6 +3974,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 <span style={{ color: '#262626', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
               </div>
               {item.position && <span style={{ color: '#8c8c8c', fontSize: 12, paddingLeft: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>({item.position})</span>}
+              {assignedWeldNo && <span style={{ color: '#1890ff', fontSize: 12, paddingLeft: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>焊口: {assignedWeldNo}</span>}
             </div>
           )}
 
@@ -3892,6 +3997,38 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 onChange={(e) => updateDefectInfo(type, index, 'position', e.target.value)}
               />
             </div>
+            {/* 所属焊口 - 一张底片有多个焊口时，人工指定该缺陷属于哪一个 */}
+            {weldJoints.length > 0 && (
+              <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', flexWrap: 'nowrap' }}>
+                <span style={{
+                  flexShrink: 0,
+                  backgroundColor: '#fafafa',
+                  border: '1px solid #d9d9d9',
+                  borderRight: 'none',
+                  borderRadius: '2px 0 0 2px',
+                  padding: '0 11px',
+                  height: '24px',
+                  lineHeight: '22px',
+                  fontSize: '14px',
+                  whiteSpace: 'nowrap',
+                  color: 'rgba(0, 0, 0, 0.85)'
+                }}>所属焊口</span>
+                <Select
+                  size="small"
+                  placeholder="选择所属焊口"
+                  allowClear
+                  value={item.weldJointId || undefined}
+                  style={{ flex: 1, minWidth: 0 }}
+                  getPopupContainer={getEditorPopupContainer}
+                  onChange={(val) => updateDefectInfo(type, index, 'weldJointId', val)}
+                  onClear={() => updateDefectInfo(type, index, 'weldJointId', undefined)}
+                >
+                  {weldJoints.map((joint) => (
+                    <Option key={joint.id} value={joint.id}>{joint.weldNo || '(未命名焊口)'}</Option>
+                  ))}
+                </Select>
+              </div>
+            )}
             {/* 尺寸 */}
             <div style={{ marginBottom: 8 }}>
               <Input
@@ -4009,20 +4146,40 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
             onValuesChange={autoSaveFilmInfo}
           >
             <Form.Item label="焊口编号" style={{ marginBottom: 12 }}>
-              <Space.Compact style={{ width: '100%' }}>
-                <Tooltip title={ocrTargetField === 'weldId' ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
-                  <Button
-                    size="small"
-                    icon={<ScanOutlined spin={ocrLoadingField === 'weldId'} />}
-                    type={ocrTargetField === 'weldId' ? 'primary' : 'default'}
-                    onClick={() => handleOcrButtonClick('weldId')}
-                    disabled={!selectedFile || !imageReady || (ocrLoadingField !== null && ocrLoadingField !== 'weldId')}
-                  />
-                </Tooltip>
-                <Form.Item name="weldId" noStyle>
-                  <Input placeholder="输入焊口编号" />
-                </Form.Item>
-              </Space.Compact>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {weldJoints.map((joint) => {
+                  const isThisRowTarget = ocrTargetField === 'weldId' && ocrTargetWeldJointId === joint.id;
+                  const isThisRowLoading = ocrLoadingField === 'weldId' && ocrLoadingWeldJointId === joint.id;
+                  const isAnyOcrLoading = ocrLoadingField !== null;
+                  return (
+                    <Space.Compact key={joint.id} style={{ width: '100%' }}>
+                      <Tooltip title={isThisRowTarget ? '点击取消OCR' : 'OCR框选识别'} getPopupContainer={getEditorPopupContainer}>
+                        <Button
+                          size="small"
+                          icon={<ScanOutlined spin={isThisRowLoading} />}
+                          type={isThisRowTarget ? 'primary' : 'default'}
+                          onClick={() => handleWeldJointOcrClick(joint.id)}
+                          disabled={!selectedFile || !imageReady || (isAnyOcrLoading && !isThisRowLoading)}
+                        />
+                      </Tooltip>
+                      <Input
+                        placeholder="输入焊口编号"
+                        value={joint.weldNo}
+                        onChange={(e) => handleUpdateWeldJointNo(joint.id, e.target.value)}
+                      />
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveWeldJoint(joint.id)}
+                      />
+                    </Space.Compact>
+                  );
+                })}
+                <Button size="small" type="dashed" block icon={<PlusOutlined />} onClick={handleAddWeldJoint}>
+                  添加焊口
+                </Button>
+              </div>
             </Form.Item>
             <Form.Item label="片号" style={{ marginBottom: 12 }}>
               <Space.Compact style={{ width: '100%' }}>

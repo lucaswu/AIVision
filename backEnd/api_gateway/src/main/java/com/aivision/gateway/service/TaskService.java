@@ -29,7 +29,10 @@ public class TaskService {
     
     @Autowired
     private TaskFileRepository taskFileRepository;
-    
+
+    @Autowired
+    private WeldJointRepository weldJointRepository;
+
     @Autowired
     private FileRepository fileRepository;
     
@@ -152,66 +155,104 @@ public class TaskService {
             validateProjectAccess(projectId, userId);
         }
 
-        // 2. 查询数据
-        List<TaskFile> taskFiles;
-        if (request.getWeldNos() != null && !request.getWeldNos().isEmpty()) {
-            taskFiles = taskFileRepository.findByProjectIdsAndWeldNos(request.getProjectIds(), request.getWeldNos());
-        } else {
-            taskFiles = taskFileRepository.findByProjectIds(request.getProjectIds());
-        }
-        
-        // 3. 组装结果
+        // 2. 组装结果：一张底片可能关联多个焊口，一个焊口对应一条结果
         List<ReportResultResponse.ReportItem> items = new ArrayList<>();
-        for (TaskFile tf : taskFiles) {
-            ReportResultResponse.ReportItem item = new ReportResultResponse.ReportItem();
-            item.setFileId(tf.getFileId());
-            
-            // 尝试获取文件名
-            Optional<File> fileOpt = fileRepository.findById(tf.getFileId());
-            item.setFileName(fileOpt.map(File::getOriginalName).orElse("unknown"));
-            
-            item.setFilmPixelValue(tf.getFilmPixelValue());
-            item.setResolution(tf.getResolution());
-            item.setSpecification(tf.getSpecification());
-            item.setInspectionDate(tf.getInspectionDate());
-            item.setWeldNo(tf.getWeldId());
-            item.setSliceNo(tf.getFilmNumber());
-            item.setFilmDensity(tf.getFilmDensity());
-            item.setIqiSensitivity(tf.getSensitivity());
-            item.setNormalizedSnr(tf.getNormalizedSnr());
-            item.setQualityLevel(tf.getPlateQuality());
-            
-            // 评定结果逻辑：优先取人工结果，没有则取 ReviewStatus，最后取 VisionStatus
-            if (tf.getManualResult() != null && !tf.getManualResult().isEmpty()) {
-                item.setEvaluationResult(tf.getManualResult());
-            } else if (tf.getReviewStatus() == TaskFile.ReviewStatus.CONFIRMED) {
-                item.setEvaluationResult("合格"); // 默认确认即合格，需根据业务调整
-            } else {
-                item.setEvaluationResult(tf.getStatus() == TaskFile.Status.COMPLETED ? "待评定" : "检测中");
+
+        if (request.getWeldNos() != null && !request.getWeldNos().isEmpty()) {
+            // 按焊口编号精确过滤：直接从匹配的焊口出发，一个焊口一条结果
+            List<WeldJoint> matchedJoints = weldJointRepository.findByProjectIdsAndWeldNos(
+                request.getProjectIds(), request.getWeldNos());
+            for (WeldJoint joint : matchedJoints) {
+                taskFileRepository.findById(joint.getTaskFileId())
+                    .ifPresent(tf -> items.add(buildReportItem(tf, joint)));
             }
-            
-            // 备注：使用 ErrorMessage 作为备注，或者 ManualResult 的一部分
-            item.setRemark(tf.getErrorMessage());
-            
-            // 缺陷列表
-            List<ReportResultResponse.DefectItem> defects = new ArrayList<>();
-            for (DefectRecord dr : tf.getDefectRecords()) {
-                ReportResultResponse.DefectItem d = new ReportResultResponse.DefectItem();
-                d.setDefectId(dr.getDefectRecordId());
-                d.setDefectNature(dr.getDefectName());
-                // 优先使用 position (语义描述)，如果没有则使用 geometry (坐标JSON)
-                d.setDefectLocation(dr.getPosition() != null ? dr.getPosition() : dr.getGeometry());
-                d.setDefectSize(dr.getSize());
-                d.setDefectLevel(dr.getGrade());
-                d.setRemark(dr.getRemark());
-                defects.add(d);
+        } else {
+            // 不按焊口过滤：列出项目下所有底片，每张底片按其焊口列表展开
+            List<TaskFile> taskFiles = taskFileRepository.findByProjectIds(request.getProjectIds());
+            for (TaskFile tf : taskFiles) {
+                List<WeldJoint> joints = tf.getWeldJoints();
+                if (joints == null || joints.isEmpty()) {
+                    // 该底片尚未配置焊口（旧数据或未迁移），保留整张底片一条结果、携带全部缺陷
+                    items.add(buildReportItem(tf, null));
+                } else {
+                    for (WeldJoint joint : joints) {
+                        items.add(buildReportItem(tf, joint));
+                    }
+                    // 未被分配到任何焊口的缺陷，单独归入一条"未分组"结果，避免遗漏
+                    boolean hasUnassignedDefect = tf.getDefectRecords().stream()
+                        .anyMatch(dr -> dr.getWeldJointId() == null || dr.getWeldJointId().isEmpty());
+                    if (hasUnassignedDefect) {
+                        items.add(buildReportItem(tf, null));
+                    }
+                }
             }
-            item.setDefects(defects);
-            
-            items.add(item);
         }
-        
+
         return new ReportResultResponse(items);
+    }
+
+    /**
+     * 组装单条报告结果。joint 为 null 表示未按焊口分组（旧数据没有焊口记录，
+     * 或该底片已有焊口但这条结果专门承载"未分配焊口"的缺陷）。
+     */
+    private ReportResultResponse.ReportItem buildReportItem(TaskFile tf, WeldJoint joint) {
+        ReportResultResponse.ReportItem item = new ReportResultResponse.ReportItem();
+        item.setFileId(tf.getFileId());
+
+        // 尝试获取文件名
+        Optional<File> fileOpt = fileRepository.findById(tf.getFileId());
+        item.setFileName(fileOpt.map(File::getOriginalName).orElse("unknown"));
+
+        item.setFilmPixelValue(tf.getFilmPixelValue());
+        item.setResolution(tf.getResolution());
+        item.setSpecification(tf.getSpecification());
+        item.setInspectionDate(tf.getInspectionDate());
+        item.setWeldNo(joint != null ? joint.getWeldNo() : null);
+        item.setSliceNo(tf.getFilmNumber());
+        item.setFilmDensity(tf.getFilmDensity());
+        item.setIqiSensitivity(tf.getSensitivity());
+        item.setNormalizedSnr(tf.getNormalizedSnr());
+        item.setQualityLevel(tf.getPlateQuality());
+
+        // 评定结果逻辑：优先取人工结果，没有则取 ReviewStatus，最后取 VisionStatus
+        if (tf.getManualResult() != null && !tf.getManualResult().isEmpty()) {
+            item.setEvaluationResult(tf.getManualResult());
+        } else if (tf.getReviewStatus() == TaskFile.ReviewStatus.CONFIRMED) {
+            item.setEvaluationResult("合格"); // 默认确认即合格，需根据业务调整
+        } else {
+            item.setEvaluationResult(tf.getStatus() == TaskFile.Status.COMPLETED ? "待评定" : "检测中");
+        }
+
+        // 备注：使用 ErrorMessage 作为备注，或者 ManualResult 的一部分
+        item.setRemark(tf.getErrorMessage());
+
+        // 缺陷列表：按所属焊口过滤
+        List<WeldJoint> allJoints = tf.getWeldJoints();
+        List<ReportResultResponse.DefectItem> defects = new ArrayList<>();
+        for (DefectRecord dr : tf.getDefectRecords()) {
+            boolean belongsToThisItem;
+            if (joint != null) {
+                belongsToThisItem = joint.getWeldJointId().equals(dr.getWeldJointId());
+            } else if (allJoints == null || allJoints.isEmpty()) {
+                belongsToThisItem = true; // 底片未配置焊口，所有缺陷都归入这一条结果
+            } else {
+                belongsToThisItem = dr.getWeldJointId() == null || dr.getWeldJointId().isEmpty();
+            }
+            if (!belongsToThisItem) continue;
+
+            ReportResultResponse.DefectItem d = new ReportResultResponse.DefectItem();
+            d.setDefectId(dr.getDefectRecordId());
+            d.setDefectNature(dr.getDefectName());
+            // 优先使用 position (语义描述)，如果没有则使用 geometry (坐标JSON)
+            d.setDefectLocation(dr.getPosition() != null ? dr.getPosition() : dr.getGeometry());
+            d.setDefectSize(dr.getSize());
+            d.setDefectLevel(dr.getGrade());
+            d.setRemark(dr.getRemark());
+            defects.add(d);
+        }
+        item.setDefects(defects);
+
+        return item;
     }
 
     @Transactional

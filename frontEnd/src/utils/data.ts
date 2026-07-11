@@ -101,12 +101,23 @@ export interface DefectType {
 export interface DefectRecord {
   DefectRecordId: string;
   TaskFileId: string;
+  WeldJointId?: string; // 所属焊口ID（关联 WeldJoint.WeldJointId，未分配时为空）
   DefectName: string;
   Position: string;    // 算法计算的位置（如：左上角、中心等）
   Size: string;
   Grade: string;
   Remark: string;
   Geometry?: string;   // 标注区域的几何坐标 JSON
+  CreatedAt?: string;
+  UpdatedAt?: string;
+}
+
+// 焊口记录接口定义 (基于后端WeldJoint实体，一张底片可以关联多个焊口编号)
+export interface WeldJoint {
+  WeldJointId: string;
+  TaskFileId: string;
+  WeldNo?: string;   // 焊口编号
+  SortOrder?: number;
   CreatedAt?: string;
   UpdatedAt?: string;
 }
@@ -127,11 +138,14 @@ export interface TaskFile {
   Resolution?: string;    // 双丝分辨率
   Specification?: string; // 规格
   InspectionDate?: string; // 检验日期
-  WeldId?: string;       // 焊口编号
+  /** @deprecated 已改为一张底片关联多个焊口，见 WeldJoints；此字段仅为历史数据保留 */
+  WeldId?: string;
   FilmNumber?: string;   // 片号
   FilmDensity?: string;  // 底片黑度
   Sensitivity?: string;  // 像质计灵敏度
   NormalizedSnr?: string; // 区域归一化信噪比
+  // 新增：焊口记录列表（一张底片可关联多个焊口编号）
+  WeldJoints?: WeldJoint[];
   // 新增：缺陷记录列表
   DefectRecords?: DefectRecord[];
   ProcessingStartTime?: string;

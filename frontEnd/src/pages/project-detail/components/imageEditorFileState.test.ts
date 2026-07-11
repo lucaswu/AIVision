@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInitialFilmInfo,
   buildInitialImageTransform,
+  buildInitialWeldJoints,
   createEmptyHistorySnapshot,
   createIdleEllipseToolState,
   createIdleVerticalToolState,
@@ -20,7 +21,6 @@ describe("imageEditorFileState", () => {
         Resolution: "0.1mm",
         Specification: "AB-1",
         InspectionDate: "2026-04-26",
-        WeldId: "W-01",
         FilmNumber: "F-07",
         FilmDensity: "2.5",
         Sensitivity: "A",
@@ -31,7 +31,6 @@ describe("imageEditorFileState", () => {
       resolution: "0.1mm",
       specification: "AB-1",
       inspectionDate: "2026-04-26",
-      weldId: "W-01",
       filmNumber: "F-07",
       filmDensity: "2.5",
       sensitivity: "A",
@@ -51,12 +50,40 @@ describe("imageEditorFileState", () => {
       resolution: "",
       specification: "",
       inspectionDate: "",
-      weldId: "",
       filmNumber: "",
       filmDensity: "",
       sensitivity: "",
       normalizedSnr: "",
     });
+  });
+
+  it("builds initial weld joints sorted by SortOrder, defaulting to an empty list", () => {
+    expect(
+      buildInitialWeldJoints({
+        TaskFileId: "task-file-1",
+        FileId: "file-1",
+        FileName: "image-1.png",
+        Status: "completed",
+        ReviewStatus: "PENDING",
+        WeldJoints: [
+          { WeldJointId: "weld-2", TaskFileId: "task-file-1", WeldNo: "EE12-07", SortOrder: 1 },
+          { WeldJointId: "weld-1", TaskFileId: "task-file-1", WeldNo: "EE12-06", SortOrder: 0 },
+        ],
+      })
+    ).toEqual([
+      { id: "weld-1", weldNo: "EE12-06" },
+      { id: "weld-2", weldNo: "EE12-07" },
+    ]);
+
+    expect(
+      buildInitialWeldJoints({
+        TaskFileId: "task-file-2",
+        FileId: "file-2",
+        FileName: "image-2.png",
+        Status: "completed",
+        ReviewStatus: "PENDING",
+      })
+    ).toEqual([]);
   });
 
   it("creates empty history snapshots and idle tool states", () => {

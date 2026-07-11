@@ -4,10 +4,12 @@ import com.aivision.gateway.model.DefectRecord;
 import com.aivision.gateway.model.DefectType;
 import com.aivision.gateway.model.Task;
 import com.aivision.gateway.model.TaskFile;
+import com.aivision.gateway.model.WeldJoint;
 import com.aivision.gateway.repository.DefectRecordRepository;
 import com.aivision.gateway.repository.DefectTypeRepository;
 import com.aivision.gateway.repository.TaskFileRepository;
 import com.aivision.gateway.repository.TaskRepository;
+import com.aivision.gateway.repository.WeldJointRepository;
 import com.aivision.gateway.service.storage.StorageStrategy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +46,9 @@ public class TaskProcessService {
     
     @Autowired
     private DefectRecordRepository defectRecordRepository;
+
+    @Autowired
+    private WeldJointRepository weldJointRepository;
     
     @Autowired
     private DefectTypeRepository defectTypeRepository;
@@ -752,10 +757,10 @@ public class TaskProcessService {
      * 从 IQIdet ocr 节点提取底片信息并更新 TaskFile
      *
      * 读取路径：
-     *   fields.pipe_specs[0].value              → specification
-     *   fields.weld_film_pairs[0].weld_no  → weldId
-     *   fields.weld_film_pairs[0].film_no  → filmNumber
-     *   grade                              → sensitivity
+     *   fields.pipe_specs[0].value          → specification
+     *   fields.weld_film_pairs[*].weld_no   → 焊口记录列表（一张底片可能识别出多个焊口）
+     *   fields.weld_film_pairs[0].film_no   → filmNumber
+     *   grade                               → sensitivity
      */
     private void parseOcrResultAndUpdateTaskFile(TaskFile tf, String ocrResultJson) throws Exception {
         JsonNode rootNode = objectMapper.readTree(ocrResultJson);
@@ -764,11 +769,10 @@ public class TaskProcessService {
         if (!fieldsNode.isMissingNode() && !fieldsNode.isNull()) {
             JsonNode weldFilmPairs = fieldsNode.path("weld_film_pairs");
             if (weldFilmPairs.isArray() && weldFilmPairs.size() > 0) {
-                JsonNode pair = weldFilmPairs.get(0);
-                String weldNo = pair.path("weld_no").asText(null);
-                String filmNo = pair.path("film_no").asText(null);
-                if (weldNo != null && !weldNo.isEmpty()) tf.setWeldId(weldNo);
+                String filmNo = weldFilmPairs.get(0).path("film_no").asText(null);
                 if (filmNo != null && !filmNo.isEmpty()) tf.setFilmNumber(filmNo);
+
+                saveWeldJointsFromOcrPairs(tf.getTaskFileId(), weldFilmPairs);
             }
 
             JsonNode pipeSpecs = fieldsNode.path("pipe_specs");
@@ -783,8 +787,45 @@ public class TaskProcessService {
             tf.setSensitivity(gradeNode.asText());
         }
 
-        logger.debug("OCR解析完成: taskFileId={}, weldId={}, filmNumber={}, specification={}, sensitivity={}",
-                     tf.getTaskFileId(), tf.getWeldId(), tf.getFilmNumber(), tf.getSpecification(), tf.getSensitivity());
+        logger.debug("OCR解析完成: taskFileId={}, filmNumber={}, specification={}, sensitivity={}",
+                     tf.getTaskFileId(), tf.getFilmNumber(), tf.getSpecification(), tf.getSensitivity());
     }
-    
+
+    /**
+     * 将 OCR 识别到的 weld_film_pairs 数组（一张底片可能拍到多个焊口）
+     * 转换为 weld_joint 记录。与缺陷记录一致：先清空该底片旧的自动识别结果再重建，
+     * 以支持任务重跑；人工在审核页新增/修改的焊口会在重跑后被覆盖，这与现有
+     * 缺陷记录重跑覆盖人工标注的行为保持一致。
+     */
+    private void saveWeldJointsFromOcrPairs(String taskFileId, JsonNode weldFilmPairs) {
+        List<String> weldNos = new ArrayList<>();
+        for (JsonNode pair : weldFilmPairs) {
+            String weldNo = pair.path("weld_no").asText(null);
+            if (weldNo != null && !weldNo.isEmpty()) {
+                weldNos.add(weldNo);
+            }
+        }
+        if (weldNos.isEmpty()) {
+            return;
+        }
+
+        weldJointRepository.deleteByTaskFileId(taskFileId);
+        List<WeldJoint> joints = new ArrayList<>();
+        for (int i = 0; i < weldNos.size(); i++) {
+            joints.add(new WeldJoint(UUID.randomUUID().toString(), taskFileId, weldNos.get(i), i));
+        }
+        weldJointRepository.saveAll(joints);
+
+        // 只识别到一个焊口时，本底片的缺陷归属没有歧义，自动挂到该焊口；
+        // 多个焊口时留空，由人工在审核页指定（缺陷记录在本方法之前已落库）
+        if (joints.size() == 1) {
+            String weldJointId = joints.get(0).getWeldJointId();
+            List<DefectRecord> records = defectRecordRepository.findByTaskFileId(taskFileId);
+            for (DefectRecord record : records) {
+                record.setWeldJointId(weldJointId);
+            }
+            defectRecordRepository.saveAll(records);
+        }
+    }
+
 }

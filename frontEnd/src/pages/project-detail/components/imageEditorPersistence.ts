@@ -5,7 +5,7 @@ import {
   type PolygonDefectRecordInput,
   type RectDefectRecordInput,
 } from "./imageEditorDefectRecords";
-import type { FilmInfoFormValues } from "./imageEditorFileState";
+import type { FilmInfoFormValues, WeldJointDraft } from "./imageEditorFileState";
 
 export interface ReviewFilePayload {
   ManualResult: string;
@@ -14,7 +14,6 @@ export interface ReviewFilePayload {
   Resolution: string;
   Specification: string;
   InspectionDate: string;
-  WeldId: string;
   FilmNumber: string;
   FilmDensity: string;
   Sensitivity: string;
@@ -34,6 +33,11 @@ export interface DefectRecordPersistenceApi {
   deleteByTaskFileId: (taskFileId: string) => Promise<unknown>;
 }
 
+export interface WeldJointPersistenceApi {
+  replace: (taskFileId: string, data: unknown[]) => Promise<unknown>;
+  deleteByTaskFileId: (taskFileId: string) => Promise<unknown>;
+}
+
 export interface PersistDefectRecordsParams {
   taskFileId: string;
   defectRects: RectDefectRecordInput[];
@@ -42,9 +46,17 @@ export interface PersistDefectRecordsParams {
   defectRecordApi: DefectRecordPersistenceApi;
 }
 
+export interface PersistWeldJointsParams {
+  taskFileId: string;
+  weldJoints: WeldJointDraft[];
+  weldJointApi: WeldJointPersistenceApi;
+}
+
 export interface SaveReviewSessionParams extends PersistDefectRecordsParams {
   selectedFile: TaskFile;
   filmInfoValues: FilmInfoFormValues;
+  weldJoints: WeldJointDraft[];
+  weldJointApi: WeldJointPersistenceApi;
   originPoint: { x: number; y: number } | null;
   reportApi: ReportPersistenceApi;
 }
@@ -60,7 +72,6 @@ export function buildReviewFilePayload(
     Resolution: filmInfoValues.resolution,
     Specification: filmInfoValues.specification,
     InspectionDate: filmInfoValues.inspectionDate,
-    WeldId: filmInfoValues.weldId,
     FilmNumber: filmInfoValues.filmNumber,
     FilmDensity: filmInfoValues.filmDensity,
     Sensitivity: filmInfoValues.sensitivity,
@@ -76,11 +87,46 @@ export function syncFilmInfoToTaskFile(
   selectedFile.Resolution = filmInfoValues.resolution;
   selectedFile.Specification = filmInfoValues.specification;
   selectedFile.InspectionDate = filmInfoValues.inspectionDate;
-  selectedFile.WeldId = filmInfoValues.weldId;
   selectedFile.FilmNumber = filmInfoValues.filmNumber;
   selectedFile.FilmDensity = filmInfoValues.filmDensity;
   selectedFile.Sensitivity = filmInfoValues.sensitivity;
   selectedFile.NormalizedSnr = filmInfoValues.normalizedSnr;
+}
+
+export function buildWeldJointPayloads(weldJoints: WeldJointDraft[]) {
+  return weldJoints.map((joint, index) => ({
+    WeldJointId: joint.id,
+    WeldNo: joint.weldNo,
+    SortOrder: index,
+  }));
+}
+
+// 焊口列表不像缺陷那样在切换文件时重新请求后端，而是从 TaskFile.WeldJoints 初始化，
+// 因此保存后必须同步回内存中的 TaskFile，否则切走再切回会显示旧数据
+export function syncWeldJointsToTaskFile(
+  selectedFile: TaskFile,
+  weldJoints: WeldJointDraft[]
+) {
+  selectedFile.WeldJoints = weldJoints.map((joint, index) => ({
+    WeldJointId: joint.id,
+    TaskFileId: selectedFile.TaskFileId,
+    WeldNo: joint.weldNo,
+    SortOrder: index,
+  }));
+}
+
+export async function persistWeldJoints({
+  taskFileId,
+  weldJoints,
+  weldJointApi,
+}: PersistWeldJointsParams) {
+  if (weldJoints.length > 0) {
+    await weldJointApi.replace(taskFileId, buildWeldJointPayloads(weldJoints));
+    return { mode: "replace" as const };
+  }
+
+  await weldJointApi.deleteByTaskFileId(taskFileId);
+  return { mode: "delete" as const };
 }
 
 export function buildDefectPositionPayload(originPoint: { x: number; y: number }) {
@@ -120,6 +166,8 @@ export async function persistDefectRecords({
 export async function saveReviewSession({
   selectedFile,
   filmInfoValues,
+  weldJoints,
+  weldJointApi,
   originPoint,
   reportApi,
   defectRecordApi,
@@ -131,6 +179,10 @@ export async function saveReviewSession({
   const reviewPayload = buildReviewFilePayload(selectedFile, filmInfoValues);
   await reportApi.reviewFile(taskFileId, reviewPayload);
   syncFilmInfoToTaskFile(selectedFile, filmInfoValues);
+
+  // 焊口要先于缺陷落库，保证缺陷保存时引用的 weldJointId 已经存在
+  await persistWeldJoints({ taskFileId, weldJoints, weldJointApi });
+  syncWeldJointsToTaskFile(selectedFile, weldJoints);
 
   const defectPersistence = await persistDefectRecords({
     taskFileId,

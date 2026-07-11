@@ -99,16 +99,7 @@ public interface TaskFileRepository extends JpaRepository<TaskFile, String> {
     List<TaskFile> findByTaskIdInOrderByCreatedAtAsc(List<String> taskIds);
 
     /**
-     * 根据项目ID列表和工件编号列表查询任务文件
-     */
-    @Query("SELECT tf FROM TaskFile tf JOIN Task t ON tf.taskId = t.taskId " +
-           "WHERE t.projectId IN :projectIds AND tf.weldId IN :weldNos " +
-           "ORDER BY tf.createdAt DESC")
-    List<TaskFile> findByProjectIdsAndWeldNos(@Param("projectIds") List<String> projectIds, 
-                                             @Param("weldNos") List<String> weldNos);
-
-    /**
-     * 根据项目ID列表查询任务文件（不过滤工件编号）
+     * 根据项目ID列表查询任务文件（不过滤工件编号，焊口编号过滤见 WeldJointRepository）
      */
     @Query("SELECT tf FROM TaskFile tf JOIN Task t ON tf.taskId = t.taskId " +
            "WHERE t.projectId IN :projectIds " +

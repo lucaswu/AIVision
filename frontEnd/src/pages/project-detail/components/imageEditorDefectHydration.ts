@@ -25,6 +25,7 @@ interface DefectBaseState {
   size?: string;
   quality?: string;
   remark?: string;
+  weldJointId?: string;
   _positionMode?: "auto" | "manual";
   _positionLinear?: string;
   _positionClock?: string;
@@ -197,6 +198,7 @@ export function hydrateDefectRecords({
       size,
       quality: defectRecord.Grade || "",
       remark: defectRecord.Remark || "",
+      weldJointId: defectRecord.WeldJointId || undefined,
       defectRecordId: defectRecord.DefectRecordId,
       _isCorrectedCoord: true,
     };

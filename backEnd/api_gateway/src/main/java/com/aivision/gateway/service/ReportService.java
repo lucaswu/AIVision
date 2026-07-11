@@ -40,6 +40,9 @@ public class ReportService {
     @Autowired
     private DefectRecordRepository defectRecordRepository;
 
+    @Autowired
+    private WeldJointRepository weldJointRepository;
+
     /**
      * 获取报告列表
      */
@@ -76,10 +79,11 @@ public class ReportService {
     public List<TaskFile> getReportFiles(String taskId, String status) {
         List<TaskFile> files = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
         
-        // 填充文件名和缺陷记录
+        // 填充文件名、缺陷记录和焊口列表
         for (TaskFile tf : files) {
             fileRepository.findById(tf.getFileId()).ifPresent(f -> tf.setFileName(f.getOriginalName()));
             tf.setDefectRecords(defectRecordRepository.findByTaskFileId(tf.getTaskFileId()));
+            tf.setWeldJoints(weldJointRepository.findByTaskFileIdOrderBySortOrderAsc(tf.getTaskFileId()));
         }
 
         if (status == null || status.isEmpty() || "all".equalsIgnoreCase(status)) {
@@ -120,7 +124,7 @@ public class ReportService {
  */
 public void updateFileReview(String taskFileId, String manualResult, String plateQuality) {
     updateFileReview(taskFileId, manualResult, plateQuality,
-        null, null, null, null, null, null, null, null, null);
+        null, null, null, null, null, null, null, null);
 }
 
 /**
@@ -128,7 +132,7 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
  */
 public void updateFileReview(String taskFileId, String manualResult, String plateQuality,
                               String filmPixelValue, String resolution, String specification, String inspectionDate,
-                              String weldId, String filmNumber, String filmDensity, String sensitivity,
+                              String filmNumber, String filmDensity, String sensitivity,
                               String normalizedSnr) {
     TaskFile tf = taskFileRepository.findById(taskFileId)
         .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
@@ -148,7 +152,6 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
     if (resolution != null) tf.setResolution(resolution);
     if (specification != null) tf.setSpecification(specification);
     if (inspectionDate != null) tf.setInspectionDate(inspectionDate);
-    if (weldId != null) tf.setWeldId(weldId);
     if (filmNumber != null) tf.setFilmNumber(filmNumber);
     if (filmDensity != null) tf.setFilmDensity(filmDensity);
     if (sensitivity != null) tf.setSensitivity(sensitivity);

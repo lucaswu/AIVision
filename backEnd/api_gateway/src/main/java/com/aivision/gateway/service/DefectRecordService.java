@@ -1,7 +1,9 @@
 package com.aivision.gateway.service;
 
 import com.aivision.gateway.model.DefectRecord;
+import com.aivision.gateway.model.WeldJoint;
 import com.aivision.gateway.repository.DefectRecordRepository;
+import com.aivision.gateway.repository.WeldJointRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -9,7 +11,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 缺陷记录服务层
@@ -19,6 +23,19 @@ public class DefectRecordService {
 
     @Autowired
     private DefectRecordRepository defectRecordRepository;
+
+    @Autowired
+    private WeldJointRepository weldJointRepository;
+
+    /**
+     * 未分配焊口时 weld_joint_id 必须为 null：
+     * 空字符串是非空值，会触发 fk_defect_record_weld_joint 外键校验失败
+     */
+    private static void normalizeWeldJointId(DefectRecord record) {
+        if (record.getWeldJointId() != null && record.getWeldJointId().isEmpty()) {
+            record.setWeldJointId(null);
+        }
+    }
 
     /**
      * 根据 TaskFileId 获取所有缺陷记录
@@ -41,6 +58,7 @@ public class DefectRecordService {
         if (defectRecord.getDefectRecordId() == null || defectRecord.getDefectRecordId().isEmpty()) {
             defectRecord.setDefectRecordId(UUID.randomUUID().toString());
         }
+        normalizeWeldJointId(defectRecord);
         defectRecord.setCreatedAt(LocalDateTime.now());
         defectRecord.setUpdatedAt(LocalDateTime.now());
         return defectRecordRepository.save(defectRecord);
@@ -55,6 +73,7 @@ public class DefectRecordService {
             if (record.getDefectRecordId() == null || record.getDefectRecordId().isEmpty()) {
                 record.setDefectRecordId(UUID.randomUUID().toString());
             }
+            normalizeWeldJointId(record);
             record.setCreatedAt(LocalDateTime.now());
             record.setUpdatedAt(LocalDateTime.now());
         }
@@ -67,6 +86,8 @@ public class DefectRecordService {
     public DefectRecord updateDefectRecord(String defectRecordId, DefectRecord updatedRecord) {
         return defectRecordRepository.findById(defectRecordId)
             .map(existing -> {
+                normalizeWeldJointId(updatedRecord);
+                existing.setWeldJointId(updatedRecord.getWeldJointId());
                 existing.setDefectName(updatedRecord.getDefectName());
                 existing.setPosition(updatedRecord.getPosition());
                 existing.setSize(updatedRecord.getSize());
@@ -99,10 +120,23 @@ public class DefectRecordService {
     @Transactional
     public List<DefectRecord> replaceDefectRecords(String taskFileId, List<DefectRecord> newRecords) {
         defectRecordRepository.deleteByTaskFileId(taskFileId);
+
+        // 引用了不存在焊口的记录（如前端撤销操作恢复了已删焊口的关联）自动置空归属，
+        // 避免单条脏引用触发外键违规、导致整批缺陷保存失败
+        Set<String> validJointIds = weldJointRepository
+            .findByTaskFileIdOrderBySortOrderAsc(taskFileId)
+            .stream()
+            .map(WeldJoint::getWeldJointId)
+            .collect(Collectors.toSet());
+
         for (DefectRecord record : newRecords) {
             record.setTaskFileId(taskFileId);
             if (record.getDefectRecordId() == null || record.getDefectRecordId().isEmpty()) {
                 record.setDefectRecordId(UUID.randomUUID().toString());
+            }
+            normalizeWeldJointId(record);
+            if (record.getWeldJointId() != null && !validJointIds.contains(record.getWeldJointId())) {
+                record.setWeldJointId(null);
             }
             record.setCreatedAt(LocalDateTime.now());
             record.setUpdatedAt(LocalDateTime.now());
