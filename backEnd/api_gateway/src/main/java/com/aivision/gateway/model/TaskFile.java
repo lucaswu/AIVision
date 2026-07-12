@@ -130,6 +130,15 @@ public class TaskFile {
     @JsonProperty("CorrectionFlip")
     private Boolean correctionFlip = false;
 
+    // --- 新增：用户手动矫正方向（相对原始图片的绝对方向，AI 矫正失败时用户兜底；null 表示未设置）---
+    @Column(name = "user_rotation")
+    @JsonProperty("UserRotation")
+    private Integer userRotation;
+
+    @Column(name = "user_flip")
+    @JsonProperty("UserFlip")
+    private Boolean userFlip;
+
     // --- 新增：焊缝位置检测结果 (B 路径) ---
     @Column(name = "weld_location", columnDefinition = "TEXT")
     @JsonProperty("WeldLocation")
@@ -399,6 +408,24 @@ public class TaskFile {
 
     public void setCorrectionFlip(Boolean correctionFlip) {
         this.correctionFlip = correctionFlip;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public Integer getUserRotation() {
+        return userRotation;
+    }
+
+    public void setUserRotation(Integer userRotation) {
+        this.userRotation = userRotation;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public Boolean getUserFlip() {
+        return userFlip;
+    }
+
+    public void setUserFlip(Boolean userFlip) {
+        this.userFlip = userFlip;
         this.updatedAt = LocalDateTime.now();
     }
 

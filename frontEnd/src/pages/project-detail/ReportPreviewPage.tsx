@@ -36,6 +36,12 @@ import {
 import { useRequest } from "ahooks";
 import { reportAPI, userAPI, getUserId } from "../../utils/api";
 import { TaskFile, Report, User, DefectRecord } from "../../utils/data";
+import {
+  applyOrientationToPoint,
+  orientationFromCorrection,
+  orientedSize,
+  unapplyOrientationFromPoint,
+} from "./components/orientation";
 import HighBitPreviewImage from "@/components/HighBitPreviewImage";
 
 
@@ -52,25 +58,22 @@ interface ReportPreviewPageProps {
 }
 
 /**
- * 显示带缺陷标注的图片缩略图/预览。
- *
- * 实现思路：
- *  - 外层容器用 paddingTop 确定矫正后的宽高比（metaHeight/metaWidth），
- *    使容器在视觉上与矫正后图像尺寸一致。
- *  - img 绝对居中并施加与 ReportEditorPage 相同的 CSS 变换（先旋转再翻转），
- *    使原始文件在视觉上以正确方向填满容器。
- *  - 缺陷标注框坐标已存储在矫正后坐标系中，直接以 metaWidth/metaHeight 为基准
- *    计算百分比定位，无需逆变换。
+ * 文件的方向信息：AI 矫正方向（定义存储坐标系）、显示方向（用户矫正优先，AI 矫正兜底）、
+ * 原图画幅与显示画幅。metaWidth/metaHeight 为 VisionResult 记录的矫正后画幅
+ * （orientedSize 的宽高互换是自逆的，可用于还原原图画幅）。
  */
-const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects = null }: {
-  file: TaskFile, projectId: string, userId: string,
-  style?: React.CSSProperties, showLabel?: boolean, defects?: any[] | null
-}) => {
-  const corrRotation = file.CorrectionRotation ?? 0;
-  const flipH = file.CorrectionFlip ? -1 : 1;
-  const normR = ((corrRotation % 360) + 360) % 360;
-  const isAxesSwapped = normR === 90 || normR === 270;
+const getOrientationInfo = (file: TaskFile, metaWidth: number, metaHeight: number) => {
+  const corrOrientation = orientationFromCorrection(file.CorrectionRotation, file.CorrectionFlip);
+  const hasUserOrientation = file.UserRotation != null || file.UserFlip != null;
+  const dispOrientation = hasUserOrientation
+    ? orientationFromCorrection(file.UserRotation, file.UserFlip)
+    : corrOrientation;
+  const rawSize = orientedSize(metaWidth, metaHeight, corrOrientation);
+  const dispSize = orientedSize(rawSize.w, rawSize.h, dispOrientation);
+  return { corrOrientation, dispOrientation, rawSize, dispSize };
+};
 
+const parseVisionMeta = (file: TaskFile) => {
   let metaWidth = 1920, metaHeight = 1080;
   let visionResult: any = { results: [] };
   try {
@@ -78,15 +81,48 @@ const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects
     metaWidth = visionResult.metadata?.width || 1920;
     metaHeight = visionResult.metadata?.height || 1080;
   } catch (e) { /* 保持默认值 */ }
+  return { visionResult, metaWidth, metaHeight };
+};
 
-  // 构建单个标注框（直接使用矫正坐标系百分比）
-  const makeOverlay = (minX: number, minY: number, maxX: number, maxY: number, label: string, key: string) => (
+/**
+ * 显示带缺陷标注的图片缩略图/预览。
+ *
+ * 实现思路：
+ *  - 外层容器用 paddingTop 确定显示方向的宽高比，使容器与显示画幅一致。
+ *  - img 绝对居中并施加与 ReportEditorPage 相同的 CSS 变换（先旋转再翻转），
+ *    使原始文件在视觉上以工作方向填满容器。
+ *  - 缺陷标注框坐标存储在矫正后坐标系中，经原图坐标中转换算到显示坐标系
+ *    后以显示画幅为基准计算百分比定位。
+ */
+const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects = null }: {
+  file: TaskFile, projectId: string, userId: string,
+  style?: React.CSSProperties, showLabel?: boolean, defects?: any[] | null
+}) => {
+  const { visionResult, metaWidth, metaHeight } = parseVisionMeta(file);
+  const { corrOrientation, dispOrientation, rawSize, dispSize } = getOrientationInfo(file, metaWidth, metaHeight);
+  const isAxesSwapped = dispOrientation.rotation === 90 || dispOrientation.rotation === 270;
+
+  // 矫正坐标系 → 显示坐标系（经原图坐标中转）
+  const correctedToDisplay = (x: number, y: number) => {
+    const raw = unapplyOrientationFromPoint(x, y, rawSize.w, rawSize.h, corrOrientation);
+    return applyOrientationToPoint(raw.x, raw.y, rawSize.w, rawSize.h, dispOrientation);
+  };
+
+  // 构建单个标注框（矫正坐标系 bbox → 显示坐标系百分比；90°倍数变换保持轴对齐）
+  const makeOverlay = (cMinX: number, cMinY: number, cMaxX: number, cMaxY: number, label: string, key: string) => {
+    const p1 = correctedToDisplay(cMinX, cMinY);
+    const p2 = correctedToDisplay(cMaxX, cMaxY);
+    const minX = Math.min(p1.x, p2.x);
+    const maxX = Math.max(p1.x, p2.x);
+    const minY = Math.min(p1.y, p2.y);
+    const maxY = Math.max(p1.y, p2.y);
+    return (
     <div key={key} style={{
       position: "absolute",
-      top: `${(minY / metaHeight) * 100}%`,
-      left: `${(minX / metaWidth) * 100}%`,
-      width: `${((maxX - minX) / metaWidth) * 100}%`,
-      height: `${((maxY - minY) / metaHeight) * 100}%`,
+      top: `${(minY / dispSize.h) * 100}%`,
+      left: `${(minX / dispSize.w) * 100}%`,
+      width: `${((maxX - minX) / dispSize.w) * 100}%`,
+      height: `${((maxY - minY) / dispSize.h) * 100}%`,
       border: "1px dashed #ff4d4f",
       pointerEvents: "none",
       zIndex: 10,
@@ -100,7 +136,8 @@ const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects
         }}>{label}</span>
       )}
     </div>
-  );
+    );
+  };
 
   const overlays: JSX.Element[] = [];
   try {
@@ -137,14 +174,14 @@ const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects
     }
   } catch (e) { /* 解析失败时跳过标注 */ }
 
-  // 旋转90°/270°时，原始图像宽高互换；img 宽度设为 metaH/metaW 使旋转后恰好填满容器
-  const imgWidth = isAxesSwapped ? `${(metaHeight / metaWidth) * 100}%` : '100%';
+  // 旋转90°/270°时，原始图像宽高互换；img 宽度设为 dispH/dispW 使旋转后恰好填满容器
+  const imgWidth = isAxesSwapped ? `${(dispSize.h / dispSize.w) * 100}%` : '100%';
   const previewSrc = `/api/v1/files/preview?FileId=${file.FileId}&ProjectId=${projectId}&UserId=${userId}`;
 
   return (
     <div style={{
       position: 'relative',
-      paddingTop: `${(metaHeight / metaWidth) * 100}%`,  // 锁定矫正后宽高比
+      paddingTop: `${(dispSize.h / dispSize.w) * 100}%`,  // 锁定显示方向的宽高比
       overflow: 'hidden',
       background: '#f5f5f5',
       ...style,
@@ -161,7 +198,7 @@ const DefectImage = ({ file, projectId, userId, style, showLabel = true, defects
           top: '50%',
           left: '50%',
           // translate(-50%,-50%) 先将 img 居中，再旋转翻转，使其恰好填满容器
-          transform: `translate(-50%, -50%) scale(${flipH}, 1) rotate(${corrRotation}deg)`,
+          transform: `translate(-50%, -50%) scale(${dispOrientation.flip ? -1 : 1}, 1) rotate(${dispOrientation.rotation}deg)`,
           transformOrigin: 'center center',
         }}
       />
@@ -277,15 +314,11 @@ const ReportPreviewPage: React.FC<ReportPreviewPageProps> = ({
     return timeStr.replace('T', ' ').substring(0, 19); // 包含秒
   };
 
+  // "尺寸"按显示方向展示（用户矫正优先），与缩略图视觉宽高保持一致
   const getFileInfo = (file: TaskFile) => {
-    try {
-      const result = JSON.parse(file.VisionResult || '{}');
-      const width = result.metadata?.width || 1920;
-      const height = result.metadata?.height || 1080;
-      return { width, height };
-    } catch (e) {
-      return { width: 1920, height: 1080 };
-    }
+    const { metaWidth, metaHeight } = parseVisionMeta(file);
+    const { dispSize } = getOrientationInfo(file, metaWidth, metaHeight);
+    return { width: dispSize.w, height: dispSize.h };
   };
 
   return (

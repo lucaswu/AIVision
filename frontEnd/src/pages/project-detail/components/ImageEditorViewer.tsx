@@ -99,6 +99,17 @@ import {
   type WeldJointDraft,
 } from "./imageEditorFileState";
 import {
+  IDENTITY_ORIENTATION,
+  type Orientation,
+  applyOrientationToPoint,
+  flipOrientationH,
+  flipOrientationV,
+  orientationFromCorrection,
+  orientedSize,
+  rotateOrientation,
+  unapplyOrientationFromPoint,
+} from "./orientation";
+import {
   buildReviewFilePayload,
   persistDefectRecords,
   persistWeldJoints,
@@ -760,15 +771,6 @@ function getClockPositionLabel(
   return `${CLOCK_LABELS[sectorIdx]}-${CLOCK_LABELS[nextIdx]}`;
 }
 
-function getClockPositionLabelForShape(
-  ax: number, ay: number,
-  shape: EllipseShape
-): string {
-  if (shape.rx <= 0 || shape.ry <= 0) return '';
-  const local = rotateVector(ax - shape.cx, ay - shape.cy, -shape.rotation);
-  return getClockPositionLabel(local.x, local.y, 0, 0, shape.rx, shape.ry);
-}
-
 /**
  * 从 WeldLocationRect 列表中找到离给定点最近的椭圆，返回其 cx/cy/rx/ry。
  */
@@ -841,9 +843,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   // 图片变换状态
   const [scale, setScale] = useState(1);
-  const [rotation, setRotation] = useState(0);
-  const [flipH, setFlipH] = useState(1);
-  const [flipV, setFlipV] = useState(1);
+  // 视图方向：D4 规范形（90°倍数旋转 + 水平翻转），垂直翻转已归一为"水平翻转+180°"
+  const [viewOrientation, setViewOrientation] = useState<Orientation>(IDENTITY_ORIENTATION);
+  const rotation: number = viewOrientation.rotation;
+  const flipH: number = viewOrientation.flip ? -1 : 1;
+  const flipV: number = 1;
   // 图片平移位置
   const [position, setPosition] = useState({ x: 0, y: 0 });
 
@@ -1240,19 +1244,69 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     }];
   };
 
+  // —— 显示坐标系换算 ——
+  // 所见方向即工作方向：所有面向用户的读数（位置/时钟/原点/鼠标坐标）都在
+  // "当前视图方向 + 原图像素单位"的显示坐标系下表达。
+  // 存储仍保持矫正坐标系不变，换算路径：矫正坐标 →(逆矫正)→ 原图坐标 →(视图方向)→ 显示坐标
+  const correctedToViewPoint = (x: number, y: number): { x: number; y: number } => {
+    const rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
+    const rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
+    if (rawW <= 0 || rawH <= 0) return { x, y };
+    const corrO = orientationFromCorrection(selectedFile?.CorrectionRotation, selectedFile?.CorrectionFlip);
+    const raw = unapplyOrientationFromPoint(x, y, rawW, rawH, corrO);
+    return applyOrientationToPoint(raw.x, raw.y, rawW, rawH, viewOrientation);
+  };
+
+  // 矫正坐标系的轴对齐 bbox → 显示坐标系 bbox（90°倍数变换保持轴对齐，两对角点即可确定）
+  const correctedBBoxToView = (x1: number, y1: number, x2: number, y2: number) => {
+    const p1 = correctedToViewPoint(x1, y1);
+    const p2 = correctedToViewPoint(x2, y2);
+    return {
+      minX: Math.min(p1.x, p2.x),
+      maxX: Math.max(p1.x, p2.x),
+      minY: Math.min(p1.y, p2.y),
+      maxY: Math.max(p1.y, p2.y),
+    };
+  };
+
+  // 线性位置（+->左~右）：在显示坐标系中计算，入参为矫正坐标系的 bbox 与原点
+  const getViewLinearPosition = (
+    cx1: number, cy1: number, cx2: number, cy2: number,
+    origin: { x: number; y: number } | null,
+    originLabel: string
+  ): string => {
+    if (!origin) return '';
+    const bbox = correctedBBoxToView(cx1, cy1, cx2, cy2);
+    const originView = correctedToViewPoint(origin.x, origin.y);
+    return formatDefectPosition(bbox.minX, bbox.maxX, originView.x, pixelRatio, originLabel);
+  };
+
+  // 时钟位置：统一在显示坐标系计算（12'在视觉正上方、顺时针为正），
+  // 编辑中与保存后走同一算法，避免矫正/视图翻转导致时钟走向不一致
+  const getViewClockStr = (
+    shapes: WeldLocationRect[],
+    centerXc: number, centerYc: number
+  ): string => {
+    if (shapes.length === 0) return '';
+    const ellipse = getNearestEllipseParams(shapes, centerXc, centerYc);
+    if (!ellipse) return '';
+    const bbox = correctedBBoxToView(
+      ellipse.cx - ellipse.rx, ellipse.cy - ellipse.ry,
+      ellipse.cx + ellipse.rx, ellipse.cy + ellipse.ry
+    );
+    const c = correctedToViewPoint(centerXc, centerYc);
+    return getClockPositionLabel(
+      c.x, c.y,
+      (bbox.minX + bbox.maxX) / 2, (bbox.minY + bbox.maxY) / 2,
+      (bbox.maxX - bbox.minX) / 2, (bbox.maxY - bbox.minY) / 2
+    );
+  };
+
   const recalculateDisplayedDefectMetrics = (
-    overrideWeldShapes?: WeldLocationRect[],
-    overrideDisplayShape?: EllipseShape | null
+    overrideWeldShapes?: WeldLocationRect[]
   ) => {
     const isEllipseToolActive = activeTool === 'positionSize' && (positionSizeType === 'elliptical' || positionSizeType === 'vertical');
     const effectiveWeldShapes = overrideWeldShapes ?? (isEllipseToolActive ? liveEllipseWeldShapes : weldLocationShapes);
-    const activeDisplayShape = overrideDisplayShape ?? (
-      activeTool === 'positionSize' && positionSizeType === 'elliptical' && ellipseState.mode === 'editing' && ellipseState.shape
-        ? ellipseState.shape
-        : activeTool === 'positionSize' && positionSizeType === 'vertical' && verticalState.mode === 'editing' && verticalState.shape
-          ? verticalState.shape
-          : null
-    );
     const isEllipseActive = effectiveWeldShapes.length > 0 || isEllipseToolActive;
     const effectiveOrigin = isEllipseActive ? null : (originPoint || defectOriginPoint);
     const effectiveOriginLabel = originPoint
@@ -1261,33 +1315,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     const calibrated = pixelRatio > 0;
     let changed = false;
 
-    const correctedToDisplayPoint = (x: number, y: number): { x: number; y: number } => {
-      const corrRotation = selectedFile?.CorrectionRotation ?? 0;
-      const corrFlipH = selectedFile?.CorrectionFlip ? -1 : 1;
-      const normR = ((corrRotation % 360) + 360) % 360;
-      const rimgW = (normR === 90 || normR === 270) ? (rawImageHeight || originalSize.h) : (rawImageWidth || originalSize.w);
-      const rimgH = (normR === 90 || normR === 270) ? (rawImageWidth || originalSize.w) : (rawImageHeight || originalSize.h);
-      let px = x;
-      let py = y;
-      if ((corrRotation !== 0 || corrFlipH === -1) && rimgW > 0 && rimgH > 0) {
-        ({ x: px, y: py } = inverseTransformPoint(px, py, rimgW, rimgH, corrRotation, corrFlipH));
-      }
-      return {
-        x: widthRatio > 0 ? px / widthRatio : px,
-        y: heightRatio > 0 ? py / heightRatio : py,
-      };
-    };
-
-    const getClockStr = (centerX: number, centerY: number): string => {
-      if (activeDisplayShape) {
-        const displayCenter = correctedToDisplayPoint(centerX, centerY);
-        return getClockPositionLabelForShape(displayCenter.x, displayCenter.y, activeDisplayShape);
-      }
-      if (effectiveWeldShapes.length === 0) return '';
-      const ellipse = getNearestEllipseParams(effectiveWeldShapes, centerX, centerY);
-      if (!ellipse) return '';
-      return getClockPositionLabel(centerX, centerY, ellipse.cx, ellipse.cy, ellipse.rx, ellipse.ry);
-    };
+    const getClockStr = (centerX: number, centerY: number): string =>
+      getViewClockStr(effectiveWeldShapes, centerX, centerY);
 
     const buildPos = (xPosStr: string, clockStr: string): string =>
       buildDefectPosition(xPosStr, clockStr);
@@ -1300,9 +1329,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         changed = true;
       }
       if ((dr._positionMode ?? 'auto') === 'auto') {
-        const xPos = effectiveOrigin
-          ? formatDefectPosition(dr.x, dr.x + dr.w, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-          : '';
+        const xPos = getViewLinearPosition(dr.x, dr.y, dr.x + dr.w, dr.y + dr.h, effectiveOrigin, effectiveOriginLabel);
         const clock = getClockStr(dr.x + dr.w / 2, dr.y + dr.h / 2);
         const newPos = buildPos(xPos, clock);
         if (newPos !== dr.position) {
@@ -1321,9 +1348,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         changed = true;
       }
       if ((dc._positionMode ?? 'auto') === 'auto') {
-        const xPos = effectiveOrigin
-          ? formatDefectPosition(dc.x - dc.r, dc.x + dc.r, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-          : '';
+        const xPos = getViewLinearPosition(dc.x - dc.r, dc.y - dc.r, dc.x + dc.r, dc.y + dc.r, effectiveOrigin, effectiveOriginLabel);
         const clock = getClockStr(dc.x, dc.y);
         const newPos = buildPos(xPos, clock);
         if (newPos !== dc.position) {
@@ -1351,9 +1376,10 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       if (dp.points && dp.points.length >= 1 && (dp._positionMode ?? 'auto') === 'auto') {
         const xs = dp.points.map((p: { x: number; y: number }) => p.x);
         const ys = dp.points.map((p: { x: number; y: number }) => p.y);
-        const xPos = effectiveOrigin
-          ? formatDefectPosition(Math.min(...xs), Math.max(...xs), effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-          : '';
+        const xPos = getViewLinearPosition(
+          Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys),
+          effectiveOrigin, effectiveOriginLabel
+        );
         const clock = getClockStr(
           (Math.min(...xs) + Math.max(...xs)) / 2,
           (Math.min(...ys) + Math.max(...ys)) / 2
@@ -1896,15 +1922,14 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   const handleMouseMoveTracker = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!imageWrapperRef.current || imgSize.w === 0 || originalSize.w === 0) return;
-    const rect = imageWrapperRef.current.getBoundingClientRect();
-    const rawX = (e.clientX - rect.left) / scale;
-    const rawY = (e.clientY - rect.top) / scale;
-    const ratioX = originalSize.w / imgSize.w;
-    const ratioY = originalSize.h / imgSize.h;
-    const trueX = Math.floor(rawX * ratioX);
-    const trueY = Math.floor(rawY * ratioY);
-    const clampedX = Math.max(0, Math.min(originalSize.w, trueX));
-    const clampedY = Math.max(0, Math.min(originalSize.h, trueY));
+    // getImageCoordinates 已逆推当前视图的 scale/flip/rotate，直接得到原图元素坐标系的点
+    const displayPoint = getImageCoordinates(e);
+    const { x: trueX, y: trueY } = calculateTrueCoordinates(displayPoint.x, displayPoint.y);
+    // 读数统一为显示坐标系（当前工作方向 + 原图像素单位），与标尺/原点读数一致
+    const viewPoint = applyOrientationToPoint(trueX, trueY, originalSize.w, originalSize.h, viewOrientation);
+    const viewSize = orientedSize(originalSize.w, originalSize.h, viewOrientation);
+    const clampedX = Math.max(0, Math.min(viewSize.w, Math.round(viewPoint.x)));
+    const clampedY = Math.max(0, Math.min(viewSize.h, Math.round(viewPoint.y)));
     setMousePos({ x: clampedX, y: clampedY });
   };
 
@@ -2510,7 +2535,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           else if (drag.type === 'resize-t') newShape.ry = Math.max(10, startS.ry - localDelta.y);
         }
         setEllipseState(prev => ({ ...prev, shape: newShape }));
-        recalculateDisplayedDefectMetrics(buildLiveWeldShapesFromShape(newShape), newShape);
+        recalculateDisplayedDefectMetrics(buildLiveWeldShapesFromShape(newShape));
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'vertical') {
@@ -2545,7 +2570,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
           newShape.rotation = 0;
         }
         setVerticalState(prev => ({ ...prev, shape: newShape }));
-        recalculateDisplayedDefectMetrics(buildLiveWeldShapesFromShape(newShape), newShape);
+        recalculateDisplayedDefectMetrics(buildLiveWeldShapesFromShape(newShape));
       }
     }
     else if (activeTool === 'positionSize' && positionSizeType === 'positioning' && isSettingPositioning) {
@@ -2648,7 +2673,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const corrCoords = forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
       setOriginPoint(corrCoords);
       positionSizeOriginDirtyRef.current = true;
-      message.success(`定位标记已设置（坐标原点）: (${corrCoords.x}, ${corrCoords.y})`);
+      // 提示读数使用显示坐标系（与原点读数/位置文本一致）；存储仍为矫正坐标系
+      const viewCoords = applyOrientationToPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, viewOrientation);
+      message.success(`定位标记已设置（坐标原点）: (${Math.round(viewCoords.x)}, ${Math.round(viewCoords.y)})`);
       setTempOrigin(null);
       // 立即持久化原点到数据库
       if (selectedFile) {
@@ -2677,7 +2704,9 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const _rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
       const corrCoords = forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
       setOriginPoint(corrCoords);
-      message.success(`坐标原点已设置: (${corrCoords.x}, ${corrCoords.y})`);
+      // 提示读数使用显示坐标系（与原点读数/位置文本一致）；存储仍为矫正坐标系
+      const viewCoords = applyOrientationToPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, viewOrientation);
+      message.success(`坐标原点已设置: (${Math.round(viewCoords.x)}, ${Math.round(viewCoords.y)})`);
       setTempOrigin(null);
       setActiveTool('pan');
       // 持久化原点到数据库
@@ -3020,18 +3049,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
         sizeStr = `${areaPx.toFixed(2)}px²`;
       }
 
-      // 自动计算位置（基于0点的X轴距离）
-      const posStr = effectiveOrigin
-        ? formatDefectPosition(rx1, rx2, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-        : '';
+      // 自动计算位置（基于0点的X轴距离，显示坐标系）
+      const posStr = getViewLinearPosition(rx1, ry1, rx2, ry2, effectiveOrigin, effectiveOriginLabel);
 
-      // 椭圆时钟位置（大口径管，存在焊缝椭圆时追加）
+      // 椭圆时钟位置（大口径管，存在焊缝椭圆时追加，显示坐标系）
       const rectCenterX = (rx1 + rx2) / 2;
       const rectCenterY = (ry1 + ry2) / 2;
-      const rectEllipse = getNearestEllipseParams(weldLocationShapes, rectCenterX, rectCenterY);
-      const rectClockPos = rectEllipse
-        ? getClockPositionLabel(rectCenterX, rectCenterY, rectEllipse.cx, rectEllipse.cy, rectEllipse.rx, rectEllipse.ry)
-        : '';
+      const rectClockPos = getViewClockStr(weldLocationShapes, rectCenterX, rectCenterY);
       const rectFinalPos = [posStr, rectClockPos].filter(Boolean).join(' ');
 
       const newRect: SavedRect = {
@@ -3076,17 +3100,15 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const polyYs = newPoints.map((p: { x: number; y: number }) => p.y);
       const polyMinX = Math.min(...polyXs);
       const polyMaxX = Math.max(...polyXs);
-      const polyPosStr = effectiveOrigin
-        ? formatDefectPosition(polyMinX, polyMaxX, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-        : '';
+      const polyPosStr = getViewLinearPosition(
+        polyMinX, Math.min(...polyYs), polyMaxX, Math.max(...polyYs),
+        effectiveOrigin, effectiveOriginLabel
+      );
 
-      // 椭圆时钟位置（大口径管）
+      // 椭圆时钟位置（大口径管，显示坐标系）
       const polyCenterX = (polyMinX + polyMaxX) / 2;
       const polyCenterY = (Math.min(...polyYs) + Math.max(...polyYs)) / 2;
-      const polyEllipse = getNearestEllipseParams(weldLocationShapes, polyCenterX, polyCenterY);
-      const polyClockPos = polyEllipse
-        ? getClockPositionLabel(polyCenterX, polyCenterY, polyEllipse.cx, polyEllipse.cy, polyEllipse.rx, polyEllipse.ry)
-        : '';
+      const polyClockPos = getViewClockStr(weldLocationShapes, polyCenterX, polyCenterY);
       const polyFinalPos = [polyPosStr, polyClockPos].filter(Boolean).join(' ');
 
       const newPoly: SavedPolygon = {
@@ -3116,15 +3138,13 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       }
 
       // 自动计算位置（圆形：左边 = cx - r，右边 = cx + r）
-      const circlePosStr = effectiveOrigin
-        ? formatDefectPosition(cx - trueR, cx + trueR, effectiveOrigin.x, pixelRatio, effectiveOriginLabel)
-        : '';
+      const circlePosStr = getViewLinearPosition(
+        cx - trueR, cy - trueR, cx + trueR, cy + trueR,
+        effectiveOrigin, effectiveOriginLabel
+      );
 
-      // 椭圆时钟位置（大口径管）
-      const circleEllipse = getNearestEllipseParams(weldLocationShapes, cx, cy);
-      const circleClockPos = circleEllipse
-        ? getClockPositionLabel(cx, cy, circleEllipse.cx, circleEllipse.cy, circleEllipse.rx, circleEllipse.ry)
-        : '';
+      // 椭圆时钟位置（大口径管，显示坐标系）
+      const circleClockPos = getViewClockStr(weldLocationShapes, cx, cy);
       const circleFinalPos = [circlePosStr, circleClockPos].filter(Boolean).join(' ');
 
       const newCircle: SavedCircle = {
@@ -3287,9 +3307,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       setPixelRatio(0); // 每次切换图片，重置物理尺寸定标比例
       // 使用矫正信息初始化旋转/翻转，让图片以正确方向显示
       const initialImageTransform = buildInitialImageTransform(selectedFile);
-      setRotation(initialImageTransform.rotation);
-      setFlipH(initialImageTransform.flipH);
-      setFlipV(initialImageTransform.flipV);
+      setViewOrientation(initialImageTransform.orientation);
       // 注意：不重置 isNegative（负片状态在切换图片时保留）
       setPosition(initialImageTransform.position);
       setCalibratePromptModalVisible(false);
@@ -3382,12 +3400,15 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       selectedFile?.CorrectionRotation, selectedFile?.CorrectionFlip, rawImageWidth, rawImageHeight,
       originalSize.w, originalSize.h, imgSize.w, imgSize.h]);
 
-  // --- 监听 pixelRatio / originPoint / defectOriginPoint 变化，
-  //     重新计算所有缺陷的尺寸（mm/px²）和位置（+->X~Ypx/mm）---
+  // --- 监听 pixelRatio / originPoint / defectOriginPoint / 视图方向变化，
+  //     重新计算所有缺陷的尺寸（mm/px²）和位置（+->X~Ypx/mm，显示坐标系）---
+  // 旋转/镜像后位置随新方向重算，并经缺陷自动保存落库，与报告输出保持一致
   useEffect(() => {
     recalculateDisplayedDefectMetrics();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes, activeTool, positionSizeType, liveEllipseWeldShapes]);
+  }, [pixelRatio, originPoint, defectOriginPoint, weldLocationShapes, activeTool, positionSizeType, liveEllipseWeldShapes,
+      // 视图方向与原图尺寸影响显示坐标系换算：尺寸就绪/方向变化后需重算位置
+      viewOrientation, rawImageWidth, rawImageHeight, originalSize]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -3516,13 +3537,43 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     { wait: 500 }
   );
 
+  // --- 自动保存：用户矫正方向（防抖 500ms）---
+  // 所见方向即工作方向：工具栏旋转/镜像立即生效并持久化，下次打开直接呈现矫正后的方向
+  const { run: autoSaveOrientation, flush: flushAutoSaveOrientation } = useDebounceFn(
+    async (taskFileId: string, orientation: Orientation) => {
+      try {
+        await reportAPI.updateFileOrientation(taskFileId, {
+          UserRotation: orientation.rotation,
+          UserFlip: orientation.flip,
+        });
+        console.log('用户矫正方向已自动保存');
+      } catch (err) {
+        console.error('自动保存用户矫正方向失败:', err);
+      }
+    },
+    { wait: 500 }
+  );
+
+  const applyOrientationOp = (op: (o: Orientation) => Orientation) => {
+    const next = op(viewOrientation);
+    setViewOrientation(next);
+    if (selectedFile) {
+      // 同步到本地 TaskFile，切换文件再切回时无需重新拉取也能保持方向
+      selectedFile.UserRotation = next.rotation;
+      selectedFile.UserFlip = next.flip;
+      autoSaveOrientation(selectedFile.TaskFileId, next);
+    }
+  };
+
   useEffect(() => {
     return () => {
       cancelAutoSaveFilmInfo();
       cancelAutoSaveDefects();
       cancelAutoSaveWeldJoints();
+      // 方向保存不丢弃，卸载前立即执行挂起的持久化
+      flushAutoSaveOrientation();
     };
-  }, [cancelAutoSaveDefects, cancelAutoSaveFilmInfo, cancelAutoSaveWeldJoints]);
+  }, [cancelAutoSaveDefects, cancelAutoSaveFilmInfo, cancelAutoSaveWeldJoints, flushAutoSaveOrientation]);
 
   // 使用 Hook 返回的同步尺寸计算比例，避免 useEffect 更新 originalSize 带来的渲染延迟（闪烁根本原因）
   const trueImageW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
@@ -3544,19 +3595,22 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
   const rulerHorizMax = isAxesSwapped ? trueImageH : trueImageW;
   const rulerVertMax = isAxesSwapped ? trueImageW : trueImageH;
 
+  // 状态栏"图像尺寸"按显示坐标系展示（90°/270°时宽高互换）
+  const displayImageSize = orientedSize(originalSize.w, originalSize.h, viewOrientation);
+
   const displayOrigin = useMemo(() => {
-    // 如果是设置原点工具或定位标记成像工具，且有临时原点，显示矫正后坐标
+    // 原点读数统一显示为"显示坐标系"（当前工作方向 + 原图像素单位）
     if ((activeTool === 'setOrigin' || (activeTool === 'positionSize' && positionSizeType === 'positioning')) && tempOrigin) {
       const rawCoords = calculateTrueCoordinates(tempOrigin.x, tempOrigin.y);
-      const _corrR = selectedFile?.CorrectionRotation ?? 0;
-      const _corrF = selectedFile?.CorrectionFlip ? -1 : 1;
       const _rawW = rawImageWidth > 0 ? rawImageWidth : originalSize.w;
       const _rawH = rawImageHeight > 0 ? rawImageHeight : originalSize.h;
-      return forwardTransformPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, _corrR, _corrF);
+      return applyOrientationToPoint(rawCoords.x, rawCoords.y, _rawW, _rawH, viewOrientation);
     }
-    // originPoint 已存储为矫正后坐标系，直接显示；fallback 到 AI 检测原点
-    return originPoint || defectOriginPoint || { x: 0, y: 0 };
-  }, [activeTool, positionSizeType, tempOrigin, originPoint, originalSize, imgSize, selectedFile, rawImageWidth, rawImageHeight]);
+    // originPoint 存储在矫正坐标系；换算到显示坐标系后展示；fallback 到 AI 检测原点
+    const stored = originPoint || defectOriginPoint;
+    return stored ? correctedToViewPoint(stored.x, stored.y) : { x: 0, y: 0 };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool, positionSizeType, tempOrigin, originPoint, defectOriginPoint, originalSize, imgSize, selectedFile, rawImageWidth, rawImageHeight, viewOrientation]);
 
   const getScreenUprightTextTransform = useCallback((tx: number, ty: number) => {
     const normCSS = ((rotation % 360) + 360) % 360;
@@ -4541,9 +4595,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
                 style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 onClick={() => {
                   setScale(1);
-                  setRotation(selectedFile?.CorrectionRotation ?? 0);
-                  setFlipH(selectedFile?.CorrectionFlip ? -1 : 1);
-                  setFlipV(1);
+                  // 回到已保存的工作方向（用户矫正优先，AI 矫正兜底），不丢弃用户矫正
+                  setViewOrientation(selectedFile ? buildInitialImageTransform(selectedFile).orientation : IDENTITY_ORIENTATION);
                   setPosition({ x: 0, y: 0 });
                   resetWindow();
                 }} /></Tooltip>
@@ -4614,11 +4667,11 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
 
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r - 90)} /></Tooltip>
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 90)} /></Tooltip>
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setRotation(r => r + 180)} /></Tooltip>
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipH(h => h * -1)} /></Tooltip>
-            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFlipV(v => v * -1)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="左旋90°"><Button type="text" ghost icon={<img src="/rotate-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => applyOrientationOp(o => rotateOrientation(o, -90))} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="右转90°"><Button type="text" ghost icon={<img src="/rotate-cw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => applyOrientationOp(o => rotateOrientation(o, 90))} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="旋转180°"><Button type="text" ghost icon={<img src="/refresh-ccw.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => applyOrientationOp(o => rotateOrientation(o, 180))} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="水平翻转"><Button type="text" ghost icon={<img src="/flip-horizontal-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => applyOrientationOp(flipOrientationH)} /></Tooltip>
+            <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="垂直翻转"><Button type="text" ghost icon={<img src="/flip-vertical-2.svg" alt="alert" style={{ width: 16, height: 16, filter: 'invert(1)' }} />} style={{ color: '#fff', width: 36, height: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => applyOrientationOp(flipOrientationV)} /></Tooltip>
 
             <Divider type="vertical" style={{ background: '#434343', margin: '0 8px', height: 20 }} />
             <Tooltip getPopupContainer={() => editorContainerRef.current || document.body} title="位置和尺寸">
@@ -5961,8 +6014,8 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
         {/* 底部状态条 */}
         <div style={{ height: 28, background: '#f8f9fa', borderTop: '1px solid #e9ecef', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '11px', color: '#6c757d' }}>
-          {/* 显示图像尺寸和实时鼠标坐标 */}
-          图像尺寸：{originalSize.w}*{originalSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具: {activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
+          {/* 显示图像尺寸和实时鼠标坐标（显示坐标系：当前工作方向，90°/270°时宽高互换） */}
+          图像尺寸：{displayImageSize.w}*{displayImageSize.h}，鼠标位置：{mousePos.x}*{mousePos.y},当前工具:{activeTool === 'calibrate' ? '尺寸定标' : activeTool === 'measure' ? '测量' : activeTool === 'setOrigin' ? '设置原点' : activeTool === 'defect' ? '缺陷标注' : activeTool === 'windowing' ? '窗位窗宽' : activeTool === 'positionSize' ? '位置和尺寸' : '平移'}
         </div>
 
         {doubleWireVisualization && (

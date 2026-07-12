@@ -176,6 +176,17 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
     }
 
     /**
+     * 更新用户手动矫正方向（相对原始图片的绝对方向，UserRotation/UserFlip 同时为 null 表示清除，回退 AI 矫正）
+     */
+    public void updateFileOrientation(String taskFileId, Integer userRotation, Boolean userFlip) {
+        TaskFile tf = taskFileRepository.findById(taskFileId)
+            .orElseThrow(() -> new RuntimeException("任务文件不存在: " + taskFileId));
+        tf.setUserRotation(userRotation);
+        tf.setUserFlip(userFlip);
+        taskFileRepository.save(tf);
+    }
+
+    /**
      * 批量确认文件
      */
     public void batchConfirmFiles(List<String> taskFileIds) {
@@ -326,69 +337,121 @@ public void updateFileReview(String taskFileId, String manualResult, String plat
             report.getStatus().toString()
         ));
         
-        sb.append("详细检测结果\n");
-        sb.append("文件名,审核状态,缺陷详情 (类型 | 位置 | 尺寸)\n");
-        
+        // 详细检测结果与页面（ReportPreviewPage）同源：
+        // 文件信息来自 TaskFile 持久化字段，缺陷明细来自 defect_record 表
+        //（含用户在编辑页确认/修改的类型、位置、尺寸、等级、备注，位置为显示坐标系语义）
         List<TaskFile> files = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(report.getTaskId());
+
+        StringBuilder fileRows = new StringBuilder();
+        StringBuilder defectRows = new StringBuilder();
+
         for (TaskFile tf : files) {
             String fileName = fileRepository.findById(tf.getFileId())
                 .map(File::getOriginalName)
                 .orElse("未知文件");
-            
-            String resultStr = tf.getManualResult() != null ? tf.getManualResult() : tf.getVisionResult();
-            StringBuilder defects = new StringBuilder();
-            if (resultStr != null) {
-                try {
-                    JsonNode node = objectMapper.readTree(resultStr);
-                    if (node.has("results") && node.get("results").isArray()) {
-                        for (JsonNode res : node.get("results")) {
-                            String type = res.get("strName").asText();
-                            if ("normal".equalsIgnoreCase(type)) continue;
-                            
-                            if (defects.length() > 0) defects.append("; ");
-                            
-                            defects.append("[").append(type);
-                            
-                            // 提取位置和尺寸 (从 vvContour 计算)
-                            if (res.has("vvContour") && res.get("vvContour").isArray() && res.get("vvContour").size() > 0) {
-                                int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
-                                int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
-                                boolean hasValidPoints = false;
-                                
-                                for (JsonNode point : res.get("vvContour")) {
-                                    if (point.isArray() && point.size() >= 2) {
-                                        int x = point.get(0).asInt();
-                                        int y = point.get(1).asInt();
-                                        minX = Math.min(minX, x);
-                                        maxX = Math.max(maxX, x);
-                                        minY = Math.min(minY, y);
-                                        maxY = Math.max(maxY, y);
-                                        hasValidPoints = true;
-                                    }
-                                }
-                                
-                                if (hasValidPoints) {
-                                    defects.append(String.format(" | 位置:(%d, %d) | 尺寸:%dx%dpx", 
-                                        minX, minY, (maxX - minX), (maxY - minY)));
-                                }
-                            }
-                            
-                            defects.append("]");
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.warn("导出报告解析缺陷详情失败: {}", e.getMessage());
+            String reviewStatus = TaskFile.ReviewStatus.CONFIRMED.equals(tf.getReviewStatus()) ? "已确认" : "待审核";
+
+            List<WeldJoint> namedJoints = new ArrayList<>();
+            for (WeldJoint joint : weldJointRepository.findByTaskFileIdOrderBySortOrderAsc(tf.getTaskFileId())) {
+                if (joint.getWeldNo() != null && !joint.getWeldNo().trim().isEmpty()) {
+                    namedJoints.add(joint);
                 }
             }
-            
-            sb.append(String.format("\"%s\",\"%s\",\"%s\"\n",
-                fileName,
-                tf.getReviewStatus(),
-                defects.length() == 0 ? "无缺陷" : defects.toString()
+            StringBuilder weldNos = new StringBuilder();
+            for (WeldJoint joint : namedJoints) {
+                if (weldNos.length() > 0) weldNos.append("、");
+                weldNos.append(joint.getWeldNo());
+            }
+
+            List<DefectRecord> defects = defectRecordRepository.findByTaskFileId(tf.getTaskFileId());
+            int[] dispSize = getDisplaySize(tf);
+
+            fileRows.append(String.format("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%d\n",
+                csv(fileName),
+                reviewStatus,
+                dispSize[0] + "×" + dispSize[1],
+                tf.getProcessingEndTime() != null ? tf.getProcessingEndTime().format(DATE_FORMATTER) : "-",
+                csv(tf.getFilmPixelValue()),
+                csv(tf.getResolution()),
+                csv(tf.getSpecification()),
+                csv(tf.getInspectionDate()),
+                csv(weldNos.toString()),
+                csv(tf.getFilmNumber()),
+                csv(tf.getFilmDensity()),
+                csv(tf.getSensitivity()),
+                csv(tf.getNormalizedSnr()),
+                defects.size()
             ));
+
+            for (DefectRecord d : defects) {
+                // 与页面分组规则一致：匹配已命名焊口显示焊口编号；
+                // 存在已命名焊口但未匹配的记为"未分组"；无已命名焊口则不分组
+                String weldNo = "-";
+                if (!namedJoints.isEmpty()) {
+                    weldNo = "未分组";
+                    for (WeldJoint joint : namedJoints) {
+                        if (joint.getWeldJointId().equals(d.getWeldJointId())) {
+                            weldNo = joint.getWeldNo();
+                            break;
+                        }
+                    }
+                }
+                String defectName = d.getDefectName() != null ? d.getDefectName() : "";
+                defectRows.append(String.format("\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
+                    csv(fileName),
+                    csv(weldNo),
+                    csv(defectName),
+                    isSevere(defectName) ? "严重" : "一般",
+                    csv(d.getPosition()),
+                    csv(d.getSize()),
+                    csv(d.getGrade()),
+                    csv(d.getRemark())
+                ));
+            }
         }
-        
+
+        sb.append("文件信息\n");
+        sb.append("文件名,审核状态,尺寸,检测时间,底片像素值,双丝分辨率,规格,检验日期,焊口编号,片号,黑度,灵敏度,区域归一化信噪比,缺陷数\n");
+        sb.append(fileRows);
+        sb.append("\n缺陷明细\n");
+        sb.append("文件名,焊口,缺陷类型,严重程度,位置,尺寸,等级,备注\n");
+        sb.append(defectRows.length() == 0 ? "未检测到缺陷\n" : defectRows);
+
         return sb.toString();
+    }
+
+    /** CSV 单元格转义：空值显示 "-"，双引号转义为两个双引号 */
+    private static String csv(String value) {
+        if (value == null || value.trim().isEmpty()) return "-";
+        return value.replace("\"", "\"\"");
+    }
+
+    /**
+     * 与前端 ReportPreviewPage 一致的"显示画幅"：
+     * VisionResult metadata 记录的是矫正后画幅；先还原原图画幅（矫正旋转 90/270 时宽高互换），
+     * 再按显示方向（用户矫正优先，AI 矫正兜底）换算。两次互换仅在旋转奇偶不同时产生净互换。
+     */
+    private int[] getDisplaySize(TaskFile tf) {
+        int w = 1920, h = 1080;
+        try {
+            JsonNode meta = objectMapper.readTree(
+                tf.getVisionResult() != null ? tf.getVisionResult() : "{}").path("metadata");
+            if (meta.has("width")) w = meta.get("width").asInt(w);
+            if (meta.has("height")) h = meta.get("height").asInt(h);
+        } catch (Exception e) {
+            logger.warn("导出报告解析图像画幅失败: {}", e.getMessage());
+        }
+        int corrRotation = tf.getCorrectionRotation() != null ? tf.getCorrectionRotation() : 0;
+        boolean hasUserOrientation = tf.getUserRotation() != null || tf.getUserFlip() != null;
+        int dispRotation = hasUserOrientation
+            ? (tf.getUserRotation() != null ? tf.getUserRotation() : 0)
+            : corrRotation;
+        boolean corrSwapped = Math.floorMod(corrRotation, 180) != 0;
+        boolean dispSwapped = Math.floorMod(dispRotation, 180) != 0;
+        if (corrSwapped != dispSwapped) {
+            int tmp = w; w = h; h = tmp;
+        }
+        return new int[]{w, h};
     }
 
     private boolean isSevere(String defectType) {

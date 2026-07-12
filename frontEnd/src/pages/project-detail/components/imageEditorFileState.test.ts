@@ -131,9 +131,26 @@ describe("imageEditorFileState", () => {
         CorrectionFlip: true,
       })
     ).toEqual({
-      rotation: 90,
-      flipH: -1,
-      flipV: 1,
+      orientation: { rotation: 90, flip: true },
+      position: { x: 0, y: 0 },
+    });
+  });
+
+  it("prefers the user orientation over AI correction when present", () => {
+    expect(
+      buildInitialImageTransform({
+        TaskFileId: "task-file-4",
+        FileId: "file-4",
+        FileName: "image-4.png",
+        Status: "completed",
+        ReviewStatus: "PENDING",
+        CorrectionRotation: 90,
+        CorrectionFlip: true,
+        UserRotation: 180,
+        UserFlip: false,
+      })
+    ).toEqual({
+      orientation: { rotation: 180, flip: false },
       position: { x: 0, y: 0 },
     });
   });

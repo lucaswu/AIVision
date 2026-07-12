@@ -1,4 +1,5 @@
 import type { TaskFile } from "../../../utils/data";
+import { orientationFromCorrection } from "./orientation";
 
 export interface FilmInfoFormValues {
   filmPixelValue: string;
@@ -118,11 +119,14 @@ export function createIdleVerticalToolState(): VerticalToolStateValue {
   };
 }
 
+// 用户手动矫正（相对原始图片的绝对方向）优先于 AI 矫正；
+// 这样即使重新分析改变了 AI 矫正参数，用户认定的方向依然生效
 export function buildInitialImageTransform(file: TaskFile) {
+  const hasUserOrientation = file.UserRotation != null || file.UserFlip != null;
   return {
-    rotation: file.CorrectionRotation ?? 0,
-    flipH: file.CorrectionFlip ? -1 : 1,
-    flipV: 1,
+    orientation: hasUserOrientation
+      ? orientationFromCorrection(file.UserRotation, file.UserFlip)
+      : orientationFromCorrection(file.CorrectionRotation, file.CorrectionFlip),
     position: { x: 0, y: 0 },
   };
 }

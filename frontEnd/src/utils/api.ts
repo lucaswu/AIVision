@@ -310,6 +310,12 @@ export const reportAPI = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
+  // 用户手动矫正方向；两者同时传 null 表示清除，回退 AI 矫正
+  updateFileOrientation: (taskFileId: string, data: { UserRotation: number | null; UserFlip: boolean | null }) =>
+    request<void>(`/api/v1/reports/files/${taskFileId}/orientation`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
   archiveReport: (reportId: string, archived: boolean) =>
     request<void>(`/api/v1/reports/${reportId}/archive?archived=${archived}`, {
       method: "PUT",

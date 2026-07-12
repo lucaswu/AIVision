@@ -146,6 +146,22 @@ public class ReportController {
         }
     }
 
+    @PutMapping("/files/{taskFileId}/orientation")
+    @Operation(summary = "更新用户手动矫正方向（UserRotation/UserFlip 同时传 null 时清除，回退 AI 矫正）")
+    public ResponseEntity<ApiResponse<Void>> updateFileOrientation(
+        @PathVariable String taskFileId,
+        @RequestBody Map<String, Object> body) {
+        try {
+            Object rotationRaw = body.get("UserRotation");
+            Integer userRotation = rotationRaw == null ? null : ((Number) rotationRaw).intValue();
+            Boolean userFlip = (Boolean) body.get("UserFlip");
+            reportService.updateFileOrientation(taskFileId, userRotation, userFlip);
+            return ResponseEntity.ok(ApiResponse.success("保存成功", null));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
     @PutMapping("/{reportId}/archive")
     @Operation(summary = "归档/取消归档报告")
     public ResponseEntity<ApiResponse<Void>> archiveReport(

@@ -154,6 +154,9 @@ export interface TaskFile {
   // 新增：焊缝底片方向矫正信息（推理时自动计算）
   CorrectionRotation?: number;  // 前端应用的旋转角度: 0 / 90 / 180 / -90
   CorrectionFlip?: boolean;     // 前端是否需要水平翻转
+  // 新增：用户手动矫正方向（相对原始图片的绝对方向，优先于 AI 矫正；null/undefined 表示未设置）
+  UserRotation?: number | null;
+  UserFlip?: boolean | null;
   // 新增：焊缝位置检测结果（B路径，location_0.pt模型检测）
   WeldLocation?: string;        // JSON数组字符串，每条含class/confidence/bbox/keypoints(12个关键点)
   // 新增：缺陷位置检测2结果（D路径，location_1.pt，仅存center_mark原点）
