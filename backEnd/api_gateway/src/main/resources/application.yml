@@ -37,7 +37,7 @@ storage:
     result-dir: ${STORAGE_RESULT_DIR:/app/data/results}
     result-cleanup:
       enabled: ${STORAGE_RESULT_CLEANUP_ENABLED:true}
-      retention-days: ${STORAGE_RESULT_RETENTION_DAYS:7}
+      retention-days: ${STORAGE_RESULT_RETENTION_DAYS:3}
       initial-delay-ms: ${STORAGE_RESULT_CLEANUP_INITIAL_DELAY_MS:60000}
       fixed-delay-ms: ${STORAGE_RESULT_CLEANUP_FIXED_DELAY_MS:86400000}
   minio:

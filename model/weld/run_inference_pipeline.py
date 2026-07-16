@@ -60,7 +60,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-DEBUG_STEP = True
+DEBUG_STEP = False
 
 from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402

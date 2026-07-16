@@ -50,7 +50,7 @@ public class TaskResultCleanupService {
     @Value("${storage.local.result-cleanup.enabled:true}")
     private boolean cleanupEnabled;
 
-    @Value("${storage.local.result-cleanup.retention-days:7}")
+    @Value("${storage.local.result-cleanup.retention-days:3}")
     private int retentionDays;
 
     @Scheduled(
