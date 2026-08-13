@@ -1,0 +1,11 @@
+ARG BASE_IMAGE=python:3.10-slim
+FROM ${BASE_IMAGE}
+
+WORKDIR /app/model-agent
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+RUN groupadd --gid 10001 model && useradd --uid 10001 --gid 10001 --create-home model
+RUN pip install --no-cache-dir cryptography httpx
+COPY weld/model_agent.py /app/model-agent/model_agent.py
+USER 10001:10001
+ENTRYPOINT ["python", "/app/model-agent/model_agent.py"]

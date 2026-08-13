@@ -36,7 +36,6 @@ services:
     image: aivision-backend:latest
     container_name: ai-detection-gateway
     restart: unless-stopped
-    user: root # Force root user to avoid permission issues with volumes
     ports:
       - "9541:8080"
     environment:
@@ -91,6 +90,22 @@ services:
   # ================================
   # AI 推理服务 (CPU / GPU 通用)
   # ================================
+  model-volume-init:
+    image: busybox:1.36
+    restart: "no"
+    user: "0:0"
+    # ai-inference 以 uid 10001 运行，因此它要写的每一个卷都必须归属该用户。
+    # results/files 是推理任务与预热的输出目录，漏掉它们会让激活和正常推理
+    # 都以 Permission denied 失败。
+    command: ["sh", "-c", "mkdir -p /store /active /inbox /paddleocr /results /files && chown -R 10001:10001 /store /active /inbox /paddleocr /results /files && chmod 0770 /store /active /inbox /paddleocr /results /files"]
+    volumes:
+      - model_inbox:/inbox
+      - model_store:/store
+      - model_active:/active
+      - paddleocr_cache:/paddleocr
+      - results_data:/results
+      - files_data:/files
+
   ai-inference:
     # 镜像通过 .env 文件中的 AI_INFERENCE_IMAGE 变量切换
     # GPU 模式: aivision-ai-inference:latest
@@ -100,6 +115,18 @@ services:
     restart: unless-stopped
     environment:
       - USE_GPU=true
+      - BUILD_FLAVOR=${BUILD_FLAVOR:-development}
+      - INFERENCE_VERSION=${INFERENCE_VERSION:-0.0.0-dev}
+      - MODEL_STORE_ROOT=/app/model/store
+      - REVISION_SETS_PATH=/app/model/active/revision_sets.json
+      - DEFAULT_RUNTIME_PROFILE=${DEFAULT_RUNTIME_PROFILE:-det-gpu-default}
+      - MODEL_AGENT_CONTROL_TOKEN=${MODEL_AGENT_CONTROL_TOKEN:-}
+      - MODEL_ADMIN_TOKEN=${MODEL_ADMIN_TOKEN:-}
+      - MODEL_INBOX_ROOT=/app/model/inbox
+      - MODEL_GPU_SAFETY_MARGIN_MB=${MODEL_GPU_SAFETY_MARGIN_MB:-1024}
+      - INFERENCE_TLS_CERT_FILE=/opt/model-mtls/inference.crt
+      - INFERENCE_TLS_KEY_FILE=/opt/model-mtls/inference.key
+      - INFERENCE_TLS_CA_FILE=/opt/model-mtls/ca.crt
       - PYTHONPATH=/app/model/IQIDDET/src:/app/model/IQIDDET:/app/model
       # 模型权重路径（使用绑定挂载的本地目录）
       - ROI_WEIGHTS=/app/model/weights/weldROI4.pt
@@ -115,7 +142,8 @@ services:
       - OCR_DET_MODEL_DIR=IQIDDET/models/PP-OCRv5_server_det
       - OCR_ORIENTATION_MODEL=IQIDDET/models/ocr_orientation_model.pth
     ports:
-      - "8000:8000"
+      # 宿主机 8100 -> 容器 8000。训练平台后端占用宿主机 8000，两者同机部署时必须错开。
+      - "${AI_INFERENCE_PORT:-8100}:8000"
     networks:
       - ai-services
     deploy:
@@ -131,13 +159,55 @@ services:
       - ../data/results/ocr_debug:/app/data/results/ocr_debug
       # 模型权重已通过 Dockerfile.pack COPY weight/ /app/model/weights/ 内置于镜像，无需挂载宿主目录
       # PaddleOCR 模型缓存：持久化到 named volume，首次下载后重启不再重新下载
-      - paddleocr_cache:/root/.paddleocr
+      - paddleocr_cache:/home/model/.paddleocr
+      - model_store:/app/model/store:ro
+      - model_active:/app/model/active:ro
+      # The management API is only an upload/queue entry point: it may write the
+      # inbox, never the store or the active state.
+      - model_inbox:/app/model/inbox
+      - ./model-mtls:/opt/model-mtls:ro
+      # 信任列表（只读）：/models 需要回报 trust_list_version，供平台识别现场状态
+      - ./model-trust:/opt/model-trust:ro
+    depends_on:
+      model-volume-init:
+        condition: service_completed_successfully
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 300s
+
+  model-agent:
+    image: ${MODEL_AGENT_IMAGE:-aivision-model-agent:latest}
+    build:
+      context: ../model
+      dockerfile: weld/Dockerfile.model-agent
+    container_name: ai-detection-model-agent
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      - BUILD_FLAVOR=${BUILD_FLAVOR:-development}
+      # Production must override this to https://ai-inference:9443.
+      - INFERENCE_INTERNAL_URL=${INFERENCE_INTERNAL_URL:-http://ai-inference:8000}
+      - MODEL_AGENT_CONTROL_TOKEN=${MODEL_AGENT_CONTROL_TOKEN:-}
+      - MODEL_AGENT_CA_FILE=/opt/model-mtls/ca.crt
+      - MODEL_AGENT_CLIENT_CERT_FILE=/opt/model-mtls/agent.crt
+      - MODEL_AGENT_CLIENT_KEY_FILE=/opt/model-mtls/agent.key
+    command: ["--inbox", "/app/model/inbox", "--store", "/app/model/store", "--state", "/app/model/active/revision_sets.json", "--trust", "/opt/model-trust/keys.json"]
+    networks:
+      - ai-services
+    depends_on:
+      model-volume-init:
+        condition: service_completed_successfully
+      ai-inference:
+        condition: service_started
+    volumes:
+      - model_inbox:/app/model/inbox
+      - model_store:/app/model/store
+      - model_active:/app/model/active
+      - ./model-trust:/opt/model-trust:ro
+      - ./model-mtls:/opt/model-mtls:ro
 
   # 前端服务
   frontend:
@@ -169,6 +239,15 @@ volumes:
   paddleocr_cache:
     driver: local
     name: ai-detection-paddleocr-cache
+  model_inbox:
+    driver: local
+    name: ai-detection-model-inbox
+  model_store:
+    driver: local
+    name: ai-detection-model-store
+  model_active:
+    driver: local
+    name: ai-detection-model-active
 
 # ================================
 # 网络定义

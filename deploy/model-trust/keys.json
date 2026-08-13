@@ -1,0 +1,10 @@
+{
+  "list_version": 1,
+  "root_key_id": "root-1",
+  "expires_at": "2030-01-01T00:00:00+00:00",
+  "keys": {
+    "delivery-ed25519-v1": "9ATXqNJ4AfHvJ8zNfU4pVFnXHo1LVmqS+BjnxR1RkQo="
+  },
+  "revoked": [],
+  "signature": "dXZ59GO4vFIs3h59BYxi8gyg0lpZdtx8XKnbpRcKwyR+q9ikgLLDHMD6bb03aBtB95ezheCbzQN4GkmnX/8JCw=="
+}

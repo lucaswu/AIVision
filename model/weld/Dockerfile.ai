@@ -9,6 +9,7 @@ ARG BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 FROM ${BASE_IMAGE}
 
 ARG USE_GPU=true
+ARG INFERENCE_VERSION=0.0.0-dev
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive
@@ -22,6 +23,8 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV PYTHONPATH=/app/model/IQIDDET/src:/app/model/IQIDDET:/app/model
 # 确保 PaddlePaddle 能找到系统 cuDNN 库
 ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ENV INFERENCE_VERSION=${INFERENCE_VERSION}
+ENV PADDLE_PDX_CACHE_HOME=/home/model/.paddleocr
 
 # 安装系统依赖
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
@@ -38,6 +41,7 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && 
     libxrender-dev \
     libgomp1 \
     curl \
+    nginx \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -98,11 +102,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --trusted-host pypi.tuna.tsinghua.edu.cn
 
 # 创建必要目录
-RUN mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights
+RUN groupadd --gid 10001 model && useradd --uid 10001 --gid 10001 --create-home model && \
+    mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights /app/model/store /app/model/active && \
+    chown -R model:model /app/data /app/cache /app/model/store /app/model/active /home/model
 
 # 复制焊缝模型代码
 COPY weld/ /app/model/
 RUN rm -rf /app/model/IQIDDET/gauge
+RUN chmod 0755 /app/model/entrypoint.sh && \
+    chown -R model:model /var/lib/nginx /var/log/nginx /run /app/model
 
 # 将模型权重文件显式复制到 /app/model/weights/（本地 weight/ → 容器 weights/）
 COPY weld/weight/ /app/model/weights/
@@ -130,4 +138,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # 启动命令
-CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+USER 10001:10001
+CMD ["/app/model/entrypoint.sh"]

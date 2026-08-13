@@ -18,6 +18,9 @@ import sys
 import time
 import asyncio
 import threading
+import copy
+import secrets
+import uuid as uuid_module
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,9 +28,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, BackgroundTasks, File as FastAPIFile, Form, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File as FastAPIFile, Form, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from model_runtime_manager import (
+    ModelRuntimeManager,
+    RuntimeLease,
+    RuntimeNotReady,
+    RuntimeProfileNotProvisioned,
+    RuntimeSwitchInProgress,
+)
+from revision_sets import RevisionSetStateError, artifact_path, load_active_set, load_pending_committing_set
 
 # 确保能导入模型代码
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -49,10 +60,21 @@ except ImportError:
 # FastAPI 应用配置
 # ==============================================================================
 
+BUILD_FLAVOR = os.environ.get("BUILD_FLAVOR", "development").strip().lower()
+INFERENCE_VERSION = os.environ.get("INFERENCE_VERSION", "0.0.0-dev").strip()
+MODEL_STORE_ROOT = Path(os.environ.get("MODEL_STORE_ROOT", "/app/model/store"))
+REVISION_SETS_PATH = Path(os.environ.get("REVISION_SETS_PATH", "/app/model/active/revision_sets.json"))
+DEFAULT_RUNTIME_PROFILE = os.environ.get("DEFAULT_RUNTIME_PROFILE", "det-gpu-default")
+MODEL_AGENT_CONTROL_TOKEN = os.environ.get("MODEL_AGENT_CONTROL_TOKEN", "")
+MODEL_ADMIN_TOKEN = os.environ.get("MODEL_ADMIN_TOKEN", "")
+MODEL_INBOX_ROOT = Path(os.environ.get("MODEL_INBOX_ROOT", "/app/model/inbox"))
+MODEL_GPU_SAFETY_MARGIN_MB = int(os.environ.get("MODEL_GPU_SAFETY_MARGIN_MB", "1024"))
+MODEL_INSTALL_MAX_BYTES = int(os.environ.get("MODEL_INSTALL_MAX_BYTES", str(8 * 1024**3)))
+
 app = FastAPI(
     title="AIVision Inference Service",
     description="焊缝缺陷检测 AI 推理服务",
-    version="1.0.0",
+    version=INFERENCE_VERSION,
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -86,6 +108,22 @@ INFERENCE_HEALTH_REQUIRES_WARMUP = os.environ.get(
     "no",
     "off",
 }
+def _is_semver(value: str) -> bool:
+    """A release must be comparable against manifest minimum_inference_version."""
+    core = value.split("+", 1)[0].split("-", 1)[0]
+    parts = core.split(".")
+    return len(parts) == 3 and all(part.isdigit() for part in parts)
+
+
+if BUILD_FLAVOR == "production":
+    if INFERENCE_VERSION == "0.0.0-dev" or not _is_semver(INFERENCE_VERSION):
+        raise RuntimeError(f"INFERENCE_VERSION must be an injected semantic version, got {INFERENCE_VERSION!r}")
+    if INFERENCE_EXECUTION_MODE != "direct" or not INFERENCE_PREWARM_ENABLED or not INFERENCE_HEALTH_REQUIRES_WARMUP:
+        raise RuntimeError("production inference requires direct execution and mandatory prewarm health gating")
+    if not MODEL_AGENT_CONTROL_TOKEN:
+        raise RuntimeError("MODEL_AGENT_CONTROL_TOKEN is required for production model-agent control")
+    if not MODEL_ADMIN_TOKEN:
+        raise RuntimeError("MODEL_ADMIN_TOKEN is required for the local model management API")
 _runtime_cache_lock = threading.Lock()
 _runtime_execution_lock = threading.Lock()
 _weld_pipeline_lock = threading.Lock()
@@ -93,6 +131,8 @@ _runtime_cache: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 _weld_pipeline_module = None
 _runtime_warmup_completed = False
 _runtime_warmup_error: Optional[str] = None
+runtime_manager: ModelRuntimeManager | None = None
+_LAST_PROFILE_WARMUP_SECONDS: float = 0.0
 
 
 class _PrefixedStream:
@@ -258,6 +298,7 @@ class InferenceRequest(BaseModel):
     enable_location2: bool = Field(default=True, description="是否启用缺陷位置检测2（location_1.pt）")
     location2_conf: float = Field(default=0.25, description="缺陷位置检测2置信度阈值")
     enable_iqi: bool = Field(default=True, description="是否启用IQI像质计识别")
+    profile_id: Optional[str] = Field(default=None, description="受控运行时 profile")
 
 
 def _build_runtime_args(
@@ -512,6 +553,131 @@ def _get_or_create_runtime_bundle(args: argparse.Namespace) -> Dict[str, Any]:
         return bundle
 
 
+def _close_runtime_bundle(bundle: Dict[str, Any]) -> None:
+    """Release known long-lived resources before removing a retired set."""
+    for key in ("iqi_inferencer", "detector", "locator", "corrector", "roi_detector"):
+        resource = bundle.get(key)
+        close = getattr(resource, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                print(f"[runtime] failed to close {key}: {exc}")
+    if _torch_available:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+def _profile_args_from_revision(profile_id: str, revision: Dict[str, Any]) -> argparse.Namespace:
+    """Build an immutable model configuration from one catalog revision."""
+    output_dir = Path("/app/data/results/__runtime_warmup__") / profile_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_file = output_dir / "input_files.txt"
+    input_file.write_text("", encoding="utf-8")
+    request = _build_default_warmup_request()
+    slots = revision["slots"]
+    updates: Dict[str, Any] = {"task_id": f"__warmup__-{profile_id}", "profile_id": profile_id}
+    slot_to_field = {"primary": "primary_weights", "roi": "roi_weights"}
+    for slot, field in slot_to_field.items():
+        if slot not in slots:
+            raise RevisionSetStateError(f"revision {revision['revision_id']} is missing {slot} slot")
+        updates[field] = artifact_path(MODEL_STORE_ROOT, slots[slot])
+    runtime = revision.get("runtime", {})
+    if not isinstance(runtime, dict):
+        raise RevisionSetStateError("revision runtime must be an object")
+    allowed = {"mode", "device", "primary_conf", "wide_slice", "enable_location", "location_conf", "enable_location2", "location2_conf", "enable_iqi"}
+    updates.update({key: value for key, value in runtime.items() if key in allowed})
+    request = request.model_copy(update=updates)
+    args = _build_runtime_args(request, output_dir, input_file)
+    for slot, attr in (("correction", "correction_model"), ("location_0", "location_model"), ("location_1", "location2_model")):
+        if slot in slots:
+            setattr(args, attr, artifact_path(MODEL_STORE_ROOT, slots[slot]))
+            if slot == "correction":
+                args.enable_correction = True
+    return args
+
+
+def _build_profile_bundle(profile_id: str, revision: Dict[str, Any]) -> Dict[str, Any]:
+    global _LAST_PROFILE_WARMUP_SECONDS
+    args = _profile_args_from_revision(profile_id, revision)
+    started = time.monotonic()
+    bundle = _create_runtime_bundle(args)
+    # Measured cold-load cost feeds the drain-window estimate reported by /models.
+    _LAST_PROFILE_WARMUP_SECONDS = time.monotonic() - started
+    return {"revision_id": revision["revision_id"], "slots": revision["slots"], "bundle": bundle}
+
+
+def _free_vram_mb() -> Optional[int]:
+    """Free device memory, or None when GPU accounting is unavailable."""
+    if not _torch_available:
+        return None
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free_bytes, _total = torch.cuda.mem_get_info()
+        return int(free_bytes // (1024 * 1024))
+    except Exception:
+        return None
+
+
+def _ensure_runtime_manager() -> ModelRuntimeManager:
+    global runtime_manager
+    if runtime_manager is None:
+        runtime_manager = ModelRuntimeManager(
+            _close_runtime_bundle,
+            free_vram_mb=_free_vram_mb,
+            safety_margin_mb=MODEL_GPU_SAFETY_MARGIN_MB,
+        )
+        # Lets the manager rebuild an active set it had to free for a drain that
+        # then failed to warm its candidate.
+        runtime_manager.set_rebuild_profile(_build_profile_bundle)
+    return runtime_manager
+
+
+def _bootstrap_runtime_manager_from_state() -> None:
+    global _runtime_warmup_completed, _runtime_warmup_error
+    manager = _ensure_runtime_manager()
+    active_set = load_active_set(REVISION_SETS_PATH)
+    profiles = {
+        profile_id: _build_profile_bundle(profile_id, revision)
+        for profile_id, revision in active_set["profiles"].items()
+    }
+    manager.bootstrap(
+        active_set["set_id"],
+        active_set["generation"],
+        profiles,
+        specs=dict(active_set["profiles"]),
+    )
+    _runtime_warmup_completed = True
+    _runtime_warmup_error = None
+
+
+def _recover_committing_runtime_from_state() -> None:
+    if runtime_manager is None:
+        return
+    pending = load_pending_committing_set(REVISION_SETS_PATH)
+    if pending is None:
+        return
+    operation_id = pending.get("operation_id")
+    if not isinstance(operation_id, str) or not operation_id:
+        raise RevisionSetStateError("COMMITTING set requires operation_id")
+    runtime_manager.prepare(
+        set_id=pending["set_id"],
+        generation=pending["generation"],
+        operation_id=operation_id,
+        profile_specs=pending["profiles"],
+        build_profile=_build_profile_bundle,
+    )
+    runtime_manager.begin_commit(pending["set_id"], pending["generation"], operation_id)
+
+
 class InferenceResponse(BaseModel):
     """推理响应"""
     task_id: str
@@ -539,6 +705,64 @@ class HealthResponse(BaseModel):
     cuda_device_name: Optional[str] = None
 
 
+class RuntimeOperationRequest(BaseModel):
+    set_id: str = Field(..., min_length=1, max_length=80)
+    generation: int = Field(..., ge=0)
+    operation_id: str = Field(..., min_length=1, max_length=120)
+
+
+class RuntimePrepareRequest(RuntimeOperationRequest):
+    revisions: Dict[str, Dict[str, Any]] = Field(..., min_length=1)
+    drain_timeout_seconds: int = Field(default=900, ge=30, le=7200)
+
+
+class ModelActivateRequest(BaseModel):
+    """Ask the agent to activate an already-installed revision set."""
+
+    set_id: str = Field(..., min_length=1, max_length=80)
+    profiles: Dict[str, Dict[str, Any]] = Field(..., min_length=1)
+
+
+class ModelRollbackRequest(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+def _runtime_status() -> Dict[str, Any]:
+    if runtime_manager is None:
+        return {"runtime_state": "warming", "set_id": None, "generation": None, "profiles": [], "lease_count": 0}
+    return runtime_manager.status()
+
+
+def _require_model_agent(
+    x_model_agent_token: str = Header(default=""),
+    x_model_control_channel: str = Header(default=""),
+) -> None:
+    if not MODEL_AGENT_CONTROL_TOKEN or not secrets.compare_digest(x_model_agent_token, MODEL_AGENT_CONTROL_TOKEN):
+        raise HTTPException(status_code=403, detail="model-agent authentication required")
+    # In production the app binds loopback and only the mTLS server sets this
+    # header, so a plain-port caller cannot reach the control plane even if the
+    # shared token leaks.
+    if BUILD_FLAVOR == "production" and x_model_control_channel != "mtls":
+        raise HTTPException(status_code=403, detail="model control plane requires the mTLS channel")
+
+
+def _require_model_admin(x_model_admin_token: str = Header(default="")) -> None:
+    if not MODEL_ADMIN_TOKEN or not secrets.compare_digest(x_model_admin_token, MODEL_ADMIN_TOKEN):
+        raise HTTPException(status_code=403, detail="local model administration credential required")
+
+
+def _acquire_runtime_lease(request: InferenceRequest) -> RuntimeLease | None:
+    if runtime_manager is None:
+        if BUILD_FLAVOR != "production":
+            return None
+        raise RuntimeNotReady("runtime manager has not completed startup")
+    if BUILD_FLAVOR == "production":
+        unsafe_fields = set(request.model_fields_set) - {"task_id", "file_paths", "profile_id"}
+        if unsafe_fields:
+            raise HTTPException(status_code=400, detail="RUNTIME_PROFILE_REQUIRED: runtime fields are build-time profile settings")
+    return runtime_manager.acquire(request.profile_id or DEFAULT_RUNTIME_PROFILE)
+
+
 # ==============================================================================
 # API 端点
 # ==============================================================================
@@ -555,12 +779,15 @@ async def health_check():
         if cuda_device_count > 0:
             cuda_device_name = torch.cuda.get_device_name(0)
 
-    if (
-        INFERENCE_EXECUTION_MODE not in {"subprocess", "script"}
-        and INFERENCE_PREWARM_ENABLED
-        and INFERENCE_HEALTH_REQUIRES_WARMUP
-        and not _runtime_warmup_completed
-    ):
+    status = _runtime_status()
+    if BUILD_FLAVOR == "production":
+        # The runtime manager is authoritative here: a set activated by the
+        # agent after startup makes the service ready even though the legacy
+        # startup-prewarm flag never flipped. Consulting that flag as well
+        # would keep /health at 503 forever and the container never healthy.
+        if status["runtime_state"] != "active":
+            raise HTTPException(status_code=503, detail=f"Inference runtime is {status['runtime_state']}")
+    elif INFERENCE_EXECUTION_MODE not in {"subprocess", "script"} and INFERENCE_PREWARM_ENABLED and INFERENCE_HEALTH_REQUIRES_WARMUP and not _runtime_warmup_completed:
         detail = "Inference runtime is still warming up"
         if _runtime_warmup_error:
             detail = f"Inference runtime warmup failed: {_runtime_warmup_error}"
@@ -573,6 +800,219 @@ async def health_check():
         cuda_device_count=cuda_device_count,
         cuda_device_name=cuda_device_name
     )
+
+
+@app.get("/readyz")
+async def readiness_check():
+    status = _runtime_status()
+    if status["runtime_state"] != "active":
+        raise HTTPException(status_code=503, detail={"code": "RUNTIME_NOT_READY", **status})
+    return {"inference_version": INFERENCE_VERSION, **status}
+
+
+def _trust_list_version() -> Optional[int]:
+    try:
+        payload = json.loads(Path("/opt/model-trust/keys.json").read_text(encoding="utf-8"))
+        version = payload.get("list_version")
+        return version if isinstance(version, int) else None
+    except Exception:
+        return None
+
+
+def _estimated_drain_seconds(status: Dict[str, Any]) -> Optional[int]:
+    """A drain reloads every profile, so cost scales with the profile count."""
+    profile_count = len(status.get("profiles") or [])
+    if not profile_count or not _LAST_PROFILE_WARMUP_SECONDS:
+        return None
+    return int(profile_count * _LAST_PROFILE_WARMUP_SECONDS)
+
+
+@app.get("/models")
+async def list_models():
+    status = _runtime_status()
+    return {
+        "inference_version": INFERENCE_VERSION,
+        "trust_list_version": _trust_list_version(),
+        "estimated_drain_seconds": _estimated_drain_seconds(status),
+        **status,
+    }
+
+
+@app.get("/models/history")
+async def list_model_history(_admin: None = Depends(_require_model_admin)):
+    """Every locally verified revision set, newest generation first."""
+    try:
+        state = json.loads(REVISION_SETS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"active_set_id": None, "sets": []}
+    sets = [item for item in state.get("sets", {}).values() if isinstance(item, dict)]
+    sets.sort(key=lambda item: int(item.get("generation", 0)), reverse=True)
+    return {"active_set_id": state.get("active_set_id"), "sets": sets}
+
+
+@app.get("/models/installed")
+async def list_installed_artifacts(_admin: None = Depends(_require_model_admin)):
+    """Every verified artifact in the content-addressed store.
+
+    Deployment tooling needs this to confirm an upload landed before it asks
+    the agent to activate a set that references it.
+    """
+    items = []
+    if MODEL_STORE_ROOT.is_dir():
+        for entry in sorted(MODEL_STORE_ROOT.iterdir()):
+            manifest_path = entry / "manifest.json"
+            if not (entry.is_dir() and manifest_path.is_file()):
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            compatibility = manifest.get("compatibility", {})
+            items.append({
+                "sha256": entry.name,
+                "slot": manifest.get("slot"),
+                "release_id": manifest.get("release_id"),
+                "deployment_target": manifest.get("deployment_target"),
+                "ordered_class_map": compatibility.get("ordered_class_map"),
+                "input_size": compatibility.get("input_size"),
+                "minimum_inference_version": compatibility.get("minimum_inference_version"),
+            })
+    return {"items": items}
+
+
+@app.get("/models/jobs/{job_id}")
+async def get_model_job(job_id: str, _admin: None = Depends(_require_model_admin)):
+    """Progress of a queued install or agent command."""
+    if not job_id.isalnum():
+        raise HTTPException(status_code=400, detail="invalid job id")
+    commands = MODEL_INBOX_ROOT / "commands"
+    for directory, suffixes in ((MODEL_INBOX_ROOT, {".zip": "QUEUED", ".installed": "SUCCEEDED", ".failed": "FAILED"}),
+                                (commands, {".json": "QUEUED", ".done": "SUCCEEDED", ".failed": "FAILED"})):
+        if not directory.is_dir():
+            continue
+        for path in directory.glob(f"{job_id}*"):
+            state = suffixes.get(path.suffix)
+            if state:
+                return {"job_id": job_id, "state": state, "artifact": path.name}
+    return {"job_id": job_id, "state": "UNKNOWN", "artifact": None}
+
+
+def _queue_agent_command(kind: str, payload: Dict[str, Any]) -> str:
+    """Hand work to the agent; the API never writes the store or active state."""
+    job_id = uuid_module.uuid4().hex
+    commands = MODEL_INBOX_ROOT / "commands"
+    try:
+        commands.mkdir(parents=True, exist_ok=True)
+        staged = commands / f".{job_id}.{kind}.tmp"
+        staged.write_text(json.dumps({"job_id": job_id, "kind": kind, **payload}), encoding="utf-8")
+        os.replace(staged, commands / f"{job_id}.{kind}.json")
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=f"model inbox is not writable: {exc}") from exc
+    return job_id
+
+
+@app.post("/models/install", status_code=202)
+async def install_model_bundle(
+    bundle: UploadFile = FastAPIFile(...),
+    _admin: None = Depends(_require_model_admin),
+):
+    """Accept a signed bundle into the agent inbox. Verification is the agent's job."""
+    if not (bundle.filename or "").endswith(".zip"):
+        raise HTTPException(status_code=400, detail="a signed .aivmodel/.zip bundle is required")
+    job_id = uuid_module.uuid4().hex
+    try:
+        MODEL_INBOX_ROOT.mkdir(parents=True, exist_ok=True)
+        staged = MODEL_INBOX_ROOT / f".{job_id}.tmp"
+        written = 0
+        with staged.open("wb") as target:
+            while chunk := await bundle.read(1024 * 1024):
+                written += len(chunk)
+                if written > MODEL_INSTALL_MAX_BYTES:
+                    target.close()
+                    staged.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="bundle exceeds MODEL_INSTALL_MAX_BYTES")
+                target.write(chunk)
+        os.replace(staged, MODEL_INBOX_ROOT / f"{job_id}.zip")
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=f"model inbox is not writable: {exc}") from exc
+    return {"install_job_id": job_id, "state": "QUEUED"}
+
+
+@app.post("/models/activate", status_code=202)
+async def activate_model_set(body: ModelActivateRequest, _admin: None = Depends(_require_model_admin)):
+    job_id = _queue_agent_command("activate", {"set_id": body.set_id, "profiles": body.profiles})
+    return {"job_id": job_id, "state": "QUEUED"}
+
+
+@app.post("/models/rollback", status_code=202)
+async def rollback_model_set(body: ModelRollbackRequest, _admin: None = Depends(_require_model_admin)):
+    job_id = _queue_agent_command("rollback", {"reason": body.reason})
+    return {"job_id": job_id, "state": "QUEUED"}
+
+
+def _runtime_error_response(exc: Exception) -> HTTPException:
+    """Map runtime failures to codes the agent can act on."""
+    code = getattr(exc, "code", None)
+    if code == "PROFILE_SET_UNSCHEDULABLE":
+        # Draining cannot help; the site must change its profile set or GPU.
+        return HTTPException(status_code=507, detail=f"PROFILE_SET_UNSCHEDULABLE: {exc}")
+    if code == "DRAIN_TIMEOUT":
+        return HTTPException(status_code=504, detail=f"DRAIN_TIMEOUT: {exc}")
+    if code == "OPERATION_TIMED_OUT":
+        return HTTPException(status_code=410, detail=f"OPERATION_TIMED_OUT: {exc}")
+    if code == "STALE_GENERATION":
+        return HTTPException(status_code=409, detail=f"STALE_GENERATION: {exc}")
+    return HTTPException(status_code=409, detail=f"{code or 'RUNTIME_UNAVAILABLE'}: {exc}")
+
+
+@app.post("/internal/runtime/prepare")
+async def prepare_runtime_set(body: RuntimePrepareRequest, _agent: None = Depends(_require_model_agent)):
+    if runtime_manager is None:
+        raise HTTPException(status_code=503, detail="runtime manager has not initialized")
+    try:
+        return await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: runtime_manager.prepare(
+                set_id=body.set_id,
+                generation=body.generation,
+                operation_id=body.operation_id,
+                profile_specs=body.revisions,
+                build_profile=_build_profile_bundle,
+                drain_timeout_seconds=body.drain_timeout_seconds,
+            ),
+        )
+    except Exception as exc:
+        raise _runtime_error_response(exc) from exc
+
+
+@app.post("/internal/runtime/begin-commit")
+async def begin_runtime_commit(body: RuntimeOperationRequest, _agent: None = Depends(_require_model_agent)):
+    if runtime_manager is None:
+        raise HTTPException(status_code=503, detail="runtime manager has not initialized")
+    try:
+        return runtime_manager.begin_commit(body.set_id, body.generation, body.operation_id)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/internal/runtime/commit")
+async def commit_runtime_set(body: RuntimeOperationRequest, _agent: None = Depends(_require_model_agent)):
+    if runtime_manager is None:
+        raise HTTPException(status_code=503, detail="runtime manager has not initialized")
+    try:
+        return runtime_manager.commit(body.set_id, body.generation, body.operation_id)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/internal/runtime/abort")
+async def abort_runtime_set(body: RuntimeOperationRequest, _agent: None = Depends(_require_model_agent)):
+    if runtime_manager is None:
+        raise HTTPException(status_code=503, detail="runtime manager has not initialized")
+    runtime_manager.abort(body.operation_id)
+    return _runtime_status()
 
 
 @app.get("/")
@@ -644,9 +1084,20 @@ async def submit_inference(request: InferenceRequest, background_tasks: Backgrou
     任务将在后台异步执行，可通过 /inference/{task_id}/status 查询进度
     """
     task_id = request.task_id
+    lease: RuntimeLease | None = None
+    try:
+        lease = _acquire_runtime_lease(request)
+    except RuntimeProfileNotProvisioned as exc:
+        raise HTTPException(status_code=400, detail=f"RUNTIME_PROFILE_NOT_PROVISIONED: {exc}") from exc
+    except RuntimeSwitchInProgress as exc:
+        raise HTTPException(status_code=409, detail=f"MODEL_SWITCH_IN_PROGRESS: {exc}") from exc
+    except RuntimeNotReady as exc:
+        raise HTTPException(status_code=503, detail=f"RUNTIME_NOT_READY: {exc}") from exc
     
     # 检查任务是否已存在
     if task_id in inference_tasks and inference_tasks[task_id]["status"] == "processing":
+        if lease is not None and runtime_manager is not None:
+            runtime_manager.release(lease)
         raise HTTPException(status_code=409, detail=f"Task {task_id} is already processing")
     
     # 初始化任务状态
@@ -683,12 +1134,16 @@ async def submit_inference(request: InferenceRequest, background_tasks: Backgrou
     print(f"[Task {task_id}] Progress initialized: 0/{len(request.file_paths)} stage=accepted")
 
     # 在后台执行推理
-    background_tasks.add_task(run_inference_task, request)
+    background_tasks.add_task(run_inference_task, request, lease)
     
     return InferenceResponse(
         task_id=task_id,
         status="accepted",
-        message=f"Inference task submitted with {len(request.file_paths)} files"
+        message=(
+            f"Inference task submitted with {len(request.file_paths)} files"
+            if lease is None
+            else f"Inference task submitted with {len(request.file_paths)} files using {lease.set_id}@{lease.generation}"
+        )
     )
 
 
@@ -1010,7 +1465,7 @@ async def compute_double_wire_endpoint(request: DoubleWireAnalysisRequest):
 # 推理执行逻辑 - 调用 run_inference_pipeline.py 脚本
 # ==============================================================================
 
-async def run_inference_task(request: InferenceRequest):
+async def run_inference_task(request: InferenceRequest, lease: RuntimeLease | None = None):
     """执行推理任务"""
     task_id = request.task_id
     
@@ -1024,7 +1479,10 @@ async def run_inference_task(request: InferenceRequest):
             if INFERENCE_EXECUTION_MODE in {"subprocess", "script"}
             else _sync_run_inference_direct
         )
-        await loop.run_in_executor(executor, runner_func, request)
+        if lease is not None:
+            await loop.run_in_executor(executor, _sync_run_inference_direct, request, lease)
+        else:
+            await loop.run_in_executor(executor, runner_func, request)
         
         inference_tasks[task_id]["status"] = "completed"
         inference_tasks[task_id]["progress"] = inference_tasks[task_id]["total"]
@@ -1035,9 +1493,12 @@ async def run_inference_task(request: InferenceRequest):
         print(f"Inference failed for task {task_id}: {error_msg}")
         inference_tasks[task_id]["status"] = "failed"
         inference_tasks[task_id]["error_message"] = str(e)
+    finally:
+        if lease is not None and runtime_manager is not None:
+            runtime_manager.release(lease)
 
 
-def _sync_run_inference_direct(request: InferenceRequest):
+def _sync_run_inference_direct(request: InferenceRequest, lease: RuntimeLease | None = None):
     """Execute inference in-process and reuse loaded models across tasks."""
     rip = _load_weld_pipeline_module()
 
@@ -1061,12 +1522,20 @@ def _sync_run_inference_direct(request: InferenceRequest):
     _write_progress_file(output_dir, 0, len(absolute_paths), None, "initializing")
     print(f"[Task {task_id}] Progress updated: 0/{len(absolute_paths)} stage=initializing")
 
-    args = _build_runtime_args(request, output_dir, file_list_path)
+    if lease is not None:
+        # Model-construction parameters come from the already-prewarmed
+        # profile. Only per-task output/input values are allowed to vary.
+        args = copy.deepcopy(lease.bundle["args"])
+        args.file_list = str(file_list_path)
+        args.output_dir = str(output_dir)
+        args.image_dir = None
+    else:
+        args = _build_runtime_args(request, output_dir, file_list_path)
     print(
         f"[Task {task_id}] Runtime config: mode={args.mode}, wide_slice={args.wide_slice}, "
         f"enable_location={args.enable_location}, enable_location2={args.enable_location2}, enable_iqi={args.enable_iqi}"
     )
-    bundle = _get_or_create_runtime_bundle(args)
+    bundle = lease.bundle if lease is not None else _get_or_create_runtime_bundle(args)
     runner = bundle["runner"]
 
     # Runner holds task-scoped mutable fields, so execution is serialized here.
@@ -1375,12 +1844,28 @@ def _prewarm_default_runtime() -> None:
     print("[runtime warmup] 默认推理模型预热完成")
 
 
+def _prewarm_runtime_from_revision_set() -> None:
+    global runtime_manager
+    try:
+        _bootstrap_runtime_manager_from_state()
+    except RevisionSetStateError:
+        # A first-ever activation can persist COMMITTING before an ACTIVE set
+        # exists. Build that candidate and keep admission closed until agent
+        # recovery commits it.
+        if load_pending_committing_set(REVISION_SETS_PATH) is None:
+            raise
+        runtime_manager = runtime_manager or ModelRuntimeManager(_close_runtime_bundle)
+    _recover_committing_runtime_from_state()
+    print("[runtime warmup] 活动 revision set 预热完成")
+
+
 async def _warmup_inference_runtime():
     global _runtime_warmup_error
     loop = asyncio.get_event_loop()
     try:
-        print("[runtime warmup] 开始预热默认推理模型...")
-        await loop.run_in_executor(None, _prewarm_default_runtime)
+        print("[runtime warmup] 开始预热推理模型...")
+        warmup = _prewarm_runtime_from_revision_set if BUILD_FLAVOR == "production" else _prewarm_default_runtime
+        await loop.run_in_executor(None, warmup)
     except Exception as e:
         _runtime_warmup_error = str(e)
         print(f"[runtime warmup] 默认推理模型预热失败（首次任务时将重试）: {e}")

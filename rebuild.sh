@@ -17,14 +17,16 @@ docker build -t aivision-ai-inference:latest -f model/weld/Dockerfile.ai model/
 
 echo "Restarting services..."
 
-# 释放 8000 端口（宿主机上可能有推理服务在运行）
-PORT_8000_PID=$(lsof -ti :8000 2>/dev/null || true)
-if [ -n "$PORT_8000_PID" ]; then
-  echo "Stopping process on port 8000 (PID: $PORT_8000_PID)..."
-  kill -9 "$PORT_8000_PID" 2>/dev/null || true
-  # 等端口真正释放
+# 释放推理服务端口（宿主机上可能有裸跑的推理进程）。
+# 注意：这里必须是推理端口而不是 8000 —— 训练平台后端占用宿主机 8000，
+# 误杀它会连带停掉训练平台。
+AI_PORT="${AI_INFERENCE_PORT:-8100}"
+PORT_PID=$(lsof -ti ":${AI_PORT}" 2>/dev/null || true)
+if [ -n "$PORT_PID" ]; then
+  echo "Stopping process on port ${AI_PORT} (PID: $PORT_PID)..."
+  kill -9 "$PORT_PID" 2>/dev/null || true
   for i in $(seq 1 10); do
-    ss -tlnp | grep -q ':8000 ' || break
+    ss -tlnp | grep -q ":${AI_PORT} " || break
     sleep 1
   done
 fi

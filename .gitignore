@@ -254,3 +254,15 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local 
+
+# 模型交付：含站点管理令牌，不得提交
+deploy/model-delivery.env.sh
+
+# 证书私钥不得提交
+deploy/model-mtls/*.key
+deploy/model-mtls/*.srl
+
+# 交付凭据备份与本机专属 mTLS 材料：各站点自行生成，不入库
+deploy/.env.bak-*
+deploy/model-mtls/*.crt
+deploy/model-mtls/*.srl
