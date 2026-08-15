@@ -13,11 +13,13 @@ echo "Tagging images..."
 docker tag aivision-ai-inference:latest ${REGISTRY}/aivision-ai-inference:${TAG}
 docker tag aivision-frontend:latest ${REGISTRY}/aivision-frontend:${TAG}
 docker tag aivision-backend:latest ${REGISTRY}/aivision-backend:${TAG}
+docker tag aivision-model-agent:latest ${REGISTRY}/aivision-model-agent:${TAG}
 
 # Pushing images
 echo "Pushing images..."
 docker push ${REGISTRY}/aivision-ai-inference:${TAG}
 docker push ${REGISTRY}/aivision-frontend:${TAG}
 docker push ${REGISTRY}/aivision-backend:${TAG}
+docker push ${REGISTRY}/aivision-model-agent:${TAG}
 
 echo "Done."

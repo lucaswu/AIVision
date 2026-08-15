@@ -15,6 +15,10 @@ echo "Building AI inference (weld)..."
 # 构建上下文为 model/ 目录，以便同时访问 weld/ 和 OCR/ 子目录
 docker build -t aivision-ai-inference:latest -f model/weld/Dockerfile.ai model/
 
+echo "Building model-agent..."
+# model-agent 与推理服务分离部署，独占模型库写权限；构建上下文同样是 model/ 目录
+docker build -t aivision-model-agent:latest -f model/weld/Dockerfile.model-agent model/
+
 echo "Restarting services..."
 
 # 释放推理服务端口（宿主机上可能有裸跑的推理进程）。

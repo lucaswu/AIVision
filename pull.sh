@@ -14,5 +14,6 @@ echo "Pulling images..."
 docker pull ${REGISTRY}/aivision-ai-inference:${TAG}
 docker pull ${REGISTRY}/aivision-frontend:${TAG}
 docker pull ${REGISTRY}/aivision-backend:${TAG}
+docker pull ${REGISTRY}/aivision-model-agent:${TAG}
 
 echo "Done."
