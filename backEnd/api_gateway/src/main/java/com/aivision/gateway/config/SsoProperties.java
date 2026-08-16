@@ -26,6 +26,14 @@ public class SsoProperties {
         private boolean autoCreateUsers = true;
         private String defaultRole = "INSPECTOR";
 
+        // 出站方向：用共享私钥签发 token，供已登录用户跳转到训练平台（AIVision-training）
+        private String privateKey;
+        private String privateKeyFile = "classpath:sso_private_key.pem";
+        private String issuerSelf = "external-system";
+        private String targetAudience = "aivision-training";
+        private String trainingBaseUrl;
+        private long issuedTokenTtlSeconds = 300;
+
         public boolean isEnabled() {
             return enabled;
         }
@@ -88,6 +96,54 @@ public class SsoProperties {
 
         public void setDefaultRole(String defaultRole) {
             this.defaultRole = defaultRole;
+        }
+
+        public String getPrivateKey() {
+            return privateKey;
+        }
+
+        public void setPrivateKey(String privateKey) {
+            this.privateKey = privateKey;
+        }
+
+        public String getPrivateKeyFile() {
+            return privateKeyFile;
+        }
+
+        public void setPrivateKeyFile(String privateKeyFile) {
+            this.privateKeyFile = privateKeyFile;
+        }
+
+        public String getIssuerSelf() {
+            return issuerSelf;
+        }
+
+        public void setIssuerSelf(String issuerSelf) {
+            this.issuerSelf = issuerSelf;
+        }
+
+        public String getTargetAudience() {
+            return targetAudience;
+        }
+
+        public void setTargetAudience(String targetAudience) {
+            this.targetAudience = targetAudience;
+        }
+
+        public String getTrainingBaseUrl() {
+            return trainingBaseUrl;
+        }
+
+        public void setTrainingBaseUrl(String trainingBaseUrl) {
+            this.trainingBaseUrl = trainingBaseUrl;
+        }
+
+        public long getIssuedTokenTtlSeconds() {
+            return issuedTokenTtlSeconds;
+        }
+
+        public void setIssuedTokenTtlSeconds(long issuedTokenTtlSeconds) {
+            this.issuedTokenTtlSeconds = issuedTokenTtlSeconds;
         }
     }
 }

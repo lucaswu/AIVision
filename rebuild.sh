@@ -38,7 +38,13 @@ fi
 cd deploy
 # 注意: docker compose down 不会删除 named volumes（数据库数据安全）
 # 只有 docker compose down -v 才会删除卷
-docker compose down 
+docker compose down
 docker compose up -d
 
 echo "Done!"
+echo
+echo "Frontend:        http://127.0.0.1:3000"
+echo "API Gateway:     http://127.0.0.1:9541"
+echo "Swagger:         http://127.0.0.1:9541/swagger-ui.html"
+echo "Health check:    http://127.0.0.1:9541/actuator/health"
+echo "AI Inference:    http://127.0.0.1:${AI_PORT}"

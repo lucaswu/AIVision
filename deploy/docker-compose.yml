@@ -9,7 +9,7 @@ services:
     container_name: ai-detection-postgres
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_DB: ai_detection
       POSTGRES_USER: aiuser
@@ -67,6 +67,11 @@ services:
 
       # SSO JWT
       - SSO_JWT_ENABLED=${SSO_JWT_ENABLED:-true}
+      # 出站方向：签发 token 跳转到训练平台（AIVision-training），共享同一对密钥
+      - SSO_JWT_PRIVATE_KEY=${SSO_JWT_PRIVATE_KEY:-}
+      - SSO_JWT_ISSUER_SELF=${SSO_JWT_ISSUER_SELF:-external-system}
+      - SSO_JWT_TARGET_AUDIENCE=${SSO_JWT_TARGET_AUDIENCE:-aivision-training}
+      - SSO_JWT_TRAINING_BASE_URL=${SSO_JWT_TRAINING_BASE_URL:-}
 
       # JVM优化参数
       - JAVA_OPTS=-Xmx1g -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport

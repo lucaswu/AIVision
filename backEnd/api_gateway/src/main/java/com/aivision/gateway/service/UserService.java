@@ -30,8 +30,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.KeyFactory;
+import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Date;
@@ -150,6 +153,38 @@ public class UserService implements CommandLineRunner {
                 UUID.randomUUID().toString(),
                 redirect
         );
+    }
+
+    /**
+     * 出站方向 SSO：已登录用户跳转到训练平台（AIVision-training）。
+     * 用共享私钥签发 JWT，与 ssoJwtLogin 入站验证使用的是同一对密钥。
+     */
+    public SsoJumpResponse createTrainingJump(String userId, String redirect) {
+        SsoProperties.Jwt jwtProperties = ssoProperties.getJwt();
+
+        String trimmedUserId = trimToNull(userId);
+        if (trimmedUserId == null) {
+            throw new IllegalArgumentException("用户ID不能为空");
+        }
+
+        User user = userRepository.findById(trimmedUserId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+        if (!User.Status.ACTIVE.equals(user.getStatus())) {
+            throw new IllegalArgumentException("账号已被禁用");
+        }
+
+        String trainingBaseUrl = trimToNull(jwtProperties.getTrainingBaseUrl());
+        if (trainingBaseUrl == null) {
+            throw new IllegalArgumentException("未配置训练平台跳转地址");
+        }
+
+        String token = createJumpToken(user, sanitizeRedirect(redirect), jwtProperties);
+        String base = trainingBaseUrl.endsWith("/")
+                ? trainingBaseUrl.substring(0, trainingBaseUrl.length() - 1)
+                : trainingBaseUrl;
+
+        return new SsoJumpResponse(base + "/sso-login?token=" + token);
     }
 
     /**
@@ -415,6 +450,70 @@ public class UserService implements CommandLineRunner {
 
     private String loadPublicKeyFile(String publicKeyFile) throws Exception {
         String path = trimToNull(publicKeyFile);
+        if (path == null) {
+            return null;
+        }
+
+        if (path.startsWith("classpath:")) {
+            String resourcePath = path.substring("classpath:".length());
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            return new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        }
+
+        return new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+    }
+
+    private String createJumpToken(User user, String redirect, SsoProperties.Jwt jwtProperties) {
+        try {
+            Algorithm algorithm = Algorithm.RSA256(null, loadPrivateKey(jwtProperties));
+
+            String issuer = trimToNull(jwtProperties.getIssuerSelf());
+            String audience = trimToNull(jwtProperties.getTargetAudience());
+            long ttlSeconds = jwtProperties.getIssuedTokenTtlSeconds() > 0
+                    ? jwtProperties.getIssuedTokenTtlSeconds() : 300;
+            Instant now = Instant.now();
+
+            return JWT.create()
+                    .withIssuer(issuer != null ? issuer : "external-system")
+                    .withAudience(audience != null ? audience : "aivision-training")
+                    .withSubject(user.getUsername())
+                    .withClaim("username", user.getUsername())
+                    .withClaim("role", user.getRole().name())
+                    .withClaim("redirect", redirect)
+                    .withIssuedAt(Date.from(now))
+                    .withExpiresAt(Date.from(now.plusSeconds(ttlSeconds)))
+                    .sign(algorithm);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("SSO 跳转 token 签发失败", e);
+            throw new IllegalArgumentException("跳转token签发失败");
+        }
+    }
+
+    private RSAPrivateKey loadPrivateKey(SsoProperties.Jwt jwtProperties) throws Exception {
+        String privateKey = trimToNull(jwtProperties.getPrivateKey());
+        if (privateKey == null) {
+            privateKey = loadPrivateKeyFile(jwtProperties.getPrivateKeyFile());
+        }
+        if (privateKey == null) {
+            throw new IllegalArgumentException("SSO JWT私钥未配置");
+        }
+
+        String normalized = privateKey
+                .replace("\\n", "\n")
+                .replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+
+        byte[] decoded = Base64.getDecoder().decode(normalized);
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decoded);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        return (RSAPrivateKey) keyFactory.generatePrivate(keySpec);
+    }
+
+    private String loadPrivateKeyFile(String privateKeyFile) throws Exception {
+        String path = trimToNull(privateKeyFile);
         if (path == null) {
             return null;
         }

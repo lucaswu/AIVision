@@ -86,6 +86,13 @@ sso:
     allowed-clock-skew-seconds: ${SSO_JWT_ALLOWED_CLOCK_SKEW_SECONDS:60}
     auto-create-users: ${SSO_JWT_AUTO_CREATE_USERS:true}
     default-role: ${SSO_JWT_DEFAULT_ROLE:INSPECTOR}
+    # 出站方向：签发 token 跳转到训练平台（AIVision-training），共享同一对密钥
+    private-key: ${SSO_JWT_PRIVATE_KEY:}
+    private-key-file: ${SSO_JWT_PRIVATE_KEY_FILE:classpath:sso_private_key.pem}
+    issuer-self: ${SSO_JWT_ISSUER_SELF:external-system}
+    target-audience: ${SSO_JWT_TARGET_AUDIENCE:aivision-training}
+    training-base-url: ${SSO_JWT_TRAINING_BASE_URL:}
+    issued-token-ttl-seconds: ${SSO_JWT_ISSUED_TOKEN_TTL_SECONDS:300}
 
 # File Upload Configuration
 file-upload:

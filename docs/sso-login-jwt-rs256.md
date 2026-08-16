@@ -380,3 +380,41 @@ redirect 为空或非法时，自动回退到 `/projects`。
 8. 已禁用用户拒绝登录。
 9. 非法 `redirect` 自动回退到 `/projects`。
 10. 如果启用 nonce 防重放，同一个 `nonce` 第二次使用时拒绝。
+
+## 10. 出站方向：跳转到训练平台（AIVision-training）
+
+AI Vision 与训练平台 AIVision-training 共享同一对密钥。除了本文档前面描述的"验证"能力外，AI Vision 也可以用同一把私钥签发 JWT，供已登录用户跳转登录到训练平台。
+
+```http
+POST /api/v1/users/sso/jump?redirect=/projects
+user-id: <当前登录用户ID>
+```
+
+返回：
+
+```json
+{
+  "Code": 200,
+  "Message": "获取跳转地址成功",
+  "Data": { "url": "https://<训练平台域名>/sso-login?token=<JWT>" }
+}
+```
+
+签发的 JWT `iss`/`aud` 默认对应训练平台的入站校验默认值（`external-system` / `aivision-training`），因此**默认配置下训练平台无需任何改动**即可验签通过。
+
+配置项（`application.yml` `sso.jwt.*` / 环境变量）：
+
+```yaml
+sso:
+  jwt:
+    private-key: ${SSO_JWT_PRIVATE_KEY:}
+    private-key-file: ${SSO_JWT_PRIVATE_KEY_FILE:classpath:sso_private_key.pem}
+    issuer-self: ${SSO_JWT_ISSUER_SELF:external-system}
+    target-audience: ${SSO_JWT_TARGET_AUDIENCE:aivision-training}
+    training-base-url: ${SSO_JWT_TRAINING_BASE_URL:}
+    issued-token-ttl-seconds: ${SSO_JWT_ISSUED_TOKEN_TTL_SECONDS:300}
+```
+
+`training-base-url` 未配置时，`/sso/jump` 返回 400（`未配置训练平台跳转地址`）。
+
+该接口沿用本项目现有的"信任 `user-id` 请求头"方式识别当前用户（本项目后端目前没有真正的会话/JWT 校验，所有受保护接口都是这个模式），不引入新的、与其他接口不一致的鉴权逻辑。

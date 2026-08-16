@@ -44,6 +44,19 @@ public class UserController {
         }
     }
 
+    @PostMapping("/sso/jump")
+    @Operation(summary = "跳转到训练平台（签发SSO token）")
+    public ResponseEntity<ApiResponse<SsoJumpResponse>> ssoJump(
+            @RequestHeader("user-id") String userId,
+            @RequestParam(defaultValue = "/projects") String redirect) {
+        try {
+            SsoJumpResponse response = userService.createTrainingJump(userId, redirect);
+            return ResponseEntity.ok(ApiResponse.success("获取跳转地址成功", response));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
+        }
+    }
+
     @PostMapping
     @Operation(summary = "创建用户")
     public ResponseEntity<ApiResponse<UserResponse>> createUser(@Valid @RequestBody CreateUserRequest request) {

@@ -370,6 +370,11 @@ export const userAPI = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  ssoJump: (redirect?: string) =>
+    request<{ url: string }>(
+      `/api/v1/users/sso/jump${redirect ? `?redirect=${encodeURIComponent(redirect)}` : ""}`,
+      { method: "POST" }
+    ),
 };
 
 // 缺陷类型相关API

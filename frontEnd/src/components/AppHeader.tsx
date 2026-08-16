@@ -1,7 +1,8 @@
 import { Layout, Typography, Avatar, Dropdown, Space, message, Tag, Button } from "antd";
-import { UserOutlined, LogoutOutlined } from "@ant-design/icons";
+import { UserOutlined, LogoutOutlined, ExportOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { userMenuItems } from "@/utils/constans";
+import { userAPI } from "@/utils/api";
 
 const { Header } = Layout;
 const { Title, Text } = Typography;
@@ -20,6 +21,15 @@ export default function AppHeader() {
     localStorage.removeItem("role");
     message.success("已退出登录");
     navigate("/login");
+  };
+
+  const handleSsoJump = async () => {
+    try {
+      const res = await userAPI.ssoJump();
+      window.open(res.Data.url, "_blank");
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "跳转失败");
+    }
   };
 
   return (
@@ -72,8 +82,16 @@ export default function AppHeader() {
           <Text strong style={{ color: "#1890ff", marginLeft: 8 }}>{username}</Text>
         </div>
         
-        <Button 
-          icon={<LogoutOutlined />} 
+        <Button
+          icon={<ExportOutlined />}
+          onClick={handleSsoJump}
+          style={{ borderRadius: "6px" }}
+        >
+          跳转到训练平台
+        </Button>
+
+        <Button
+          icon={<LogoutOutlined />}
           onClick={handleLogout}
           style={{ borderRadius: "6px" }}
         >
