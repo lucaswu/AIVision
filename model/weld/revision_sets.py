@@ -65,6 +65,51 @@ def _expand_set(payload: dict[str, Any], set_id: Any, *, require_active: bool) -
     return {**active, "profiles": profiles}
 
 
+def protected_sha256(payload: dict[str, Any]) -> set[str]:
+    """sha256 values the active set, its one-hop rollback target, or any
+    in-flight activation still needs. Everything else in the store is a
+    superseded artifact and safe to delete.
+
+    Only one hop of rollback is protected because that's all rollback()
+    ever uses (previous_set_id), matching the guarantee the runbook
+    documents: rollback returns to the immediate prior combination, not an
+    arbitrary point in history.
+    """
+    sets = payload.get("sets")
+    catalog = payload.get("revision_catalog")
+    if not isinstance(sets, dict) or not isinstance(catalog, dict):
+        return set()
+
+    candidates: list[dict[str, Any]] = []
+    active_id = payload.get("active_set_id")
+    active = sets.get(active_id) if isinstance(active_id, str) else None
+    if isinstance(active, dict):
+        candidates.append(active)
+        previous_id = active.get("previous_set_id")
+        previous = sets.get(previous_id) if isinstance(previous_id, str) else None
+        if isinstance(previous, dict):
+            candidates.append(previous)
+    candidates.extend(
+        item for item in sets.values() if isinstance(item, dict) and item.get("state") in {"PREPARED", "COMMITTING"}
+    )
+
+    protected: set[str] = set()
+    for item in candidates:
+        revisions = item.get("revisions")
+        if not isinstance(revisions, dict):
+            continue
+        for revision_id in revisions.values():
+            revision = catalog.get(revision_id)
+            slots = revision.get("slots") if isinstance(revision, dict) else None
+            if not isinstance(slots, dict):
+                continue
+            for slot in slots.values():
+                sha256 = slot.get("sha256") if isinstance(slot, dict) else None
+                if isinstance(sha256, str):
+                    protected.add(sha256)
+    return protected
+
+
 def artifact_path(store_root: Path, slot: dict[str, Any]) -> str:
     sha256 = slot.get("sha256")
     relative_path = slot.get("relative_path")

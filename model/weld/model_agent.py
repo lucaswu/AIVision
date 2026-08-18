@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import shutil
 import stat
 import ssl
 import tempfile
@@ -406,6 +407,60 @@ class ModelAgent:
         atomic_write_json(self.state_path, state)
         return result
 
+    @staticmethod
+    def _protected_sha256(state: dict[str, Any]) -> set[str]:
+        """sha256 values the active set or its one-hop rollback target still
+        need. Duplicated (not imported) from revision_sets.py: this agent is
+        deliberately built with no inference-code imports, so the small
+        amount of duplication buys independence from that module's Docker
+        image and dependency footprint.
+        """
+        sets = state.get("sets", {})
+        catalog = state.get("revision_catalog", {})
+        candidates: list[dict[str, Any]] = []
+        active_id = state.get("active_set_id")
+        active = sets.get(active_id) if isinstance(active_id, str) else None
+        if isinstance(active, dict):
+            candidates.append(active)
+            previous_id = active.get("previous_set_id")
+            previous = sets.get(previous_id) if isinstance(previous_id, str) else None
+            if isinstance(previous, dict):
+                candidates.append(previous)
+        candidates.extend(
+            item for item in sets.values() if isinstance(item, dict) and item.get("state") in {"PREPARED", "COMMITTING"}
+        )
+        protected: set[str] = set()
+        for item in candidates:
+            for revision_id in item.get("revisions", {}).values():
+                revision = catalog.get(revision_id)
+                slots = revision.get("slots") if isinstance(revision, dict) else None
+                if not isinstance(slots, dict):
+                    continue
+                for slot in slots.values():
+                    sha256 = slot.get("sha256") if isinstance(slot, dict) else None
+                    if isinstance(sha256, str):
+                        protected.add(sha256)
+        return protected
+
+    def delete_artifact(self, sha256: str) -> dict[str, Any]:
+        """Remove a verified artifact from the content-addressed store.
+
+        Refuses anything the active set or its immediate rollback target
+        still reference, so this can never break the one-hop rollback
+        guarantee rollback() depends on. Older, superseded artifacts (the
+        actual target of a cleanup) are unprotected and removed outright.
+        """
+        if not isinstance(sha256, str) or len(sha256) != 64 or any(char not in "0123456789abcdef" for char in sha256):
+            raise BundleError("INVALID_ARTIFACT_SHA256")
+        state = self.load_state()
+        if sha256 in self._protected_sha256(state):
+            raise BundleError(f"ARTIFACT_IN_USE: {sha256}")
+        target = self.store_root / sha256
+        if not target.is_dir():
+            raise BundleError(f"ARTIFACT_NOT_FOUND: {sha256}")
+        shutil.rmtree(target)
+        return {"sha256": sha256, "deleted": True}
+
     def process_commands(self, inbox: Path) -> int:
         """Run activate/rollback requests queued by the local management API."""
         commands = inbox / "commands"
@@ -420,6 +475,8 @@ class ModelAgent:
                     self.activate_set(payload["set_id"], self.build_revisions(payload["profiles"]))
                 elif kind == "rollback":
                     self.rollback(payload.get("reason", ""))
+                elif kind == "delete":
+                    self.delete_artifact(payload["sha256"])
                 else:
                     raise BundleError(f"UNKNOWN_COMMAND: {kind}")
                 path.rename(path.with_suffix(".done"))
@@ -540,6 +597,7 @@ def main() -> None:
     parser.add_argument("--trust", default="/opt/model-trust/keys.json")
     parser.add_argument("--activate-set", help="JSON file with {set_id, profiles}; performs one set activation")
     parser.add_argument("--rollback", action="store_true", help="re-activate the previous successful set and exit")
+    parser.add_argument("--delete", metavar="SHA256", help="remove one unreferenced artifact from the store and exit")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     agent = ModelAgent(
@@ -556,6 +614,10 @@ def main() -> None:
     if args.rollback:
         result = agent.rollback("operator requested rollback")
         print(f"rolled back to {result['set_id']}@{result['generation']}")
+        return
+    if args.delete:
+        agent.delete_artifact(args.delete)
+        print(f"deleted {args.delete}")
         return
     while True:
         try:

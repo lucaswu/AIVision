@@ -59,3 +59,45 @@ def test_unsigned_or_tampered_trust_list_is_rejected(tmp_path):
     agent = ModelAgent(store_root=tmp_path / "store", state_path=tmp_path / "state.json", trust_path=trust, inference_url="http://none", control_token="x")
     with pytest.raises(BundleError, match="INVALID_TRUST_LIST"):
         agent._trusted_key("release-1")
+
+
+def _agent_with_state(tmp_path: Path, state: dict) -> ModelAgent:
+    agent = ModelAgent(
+        store_root=tmp_path / "store", state_path=tmp_path / "state.json",
+        trust_path=tmp_path / "keys.json", inference_url="http://none", control_token="x",
+    )
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    return agent
+
+
+def test_delete_artifact_refuses_sha_referenced_by_active_set(tmp_path):
+    sha = "1" * 64
+    state = {
+        "active_set_id": "set-1",
+        "sets": {"set-1": {"set_id": "set-1", "state": "ACTIVE", "revisions": {"default": "rev-1"}}},
+        "revision_catalog": {"rev-1": {"revision_id": "rev-1", "slots": {"primary": {"sha256": sha}}}},
+    }
+    agent = _agent_with_state(tmp_path, state)
+    (agent.store_root / sha).mkdir(parents=True)
+    with pytest.raises(BundleError, match="ARTIFACT_IN_USE"):
+        agent.delete_artifact(sha)
+    assert (agent.store_root / sha).is_dir()
+
+
+def test_delete_artifact_removes_unreferenced_sha(tmp_path):
+    sha = "2" * 64
+    state = {"active_set_id": None, "sets": {}, "revision_catalog": {}}
+    agent = _agent_with_state(tmp_path, state)
+    (agent.store_root / sha).mkdir(parents=True)
+    (agent.store_root / sha / "manifest.json").write_text("{}")
+    result = agent.delete_artifact(sha)
+    assert result == {"sha256": sha, "deleted": True}
+    assert not (agent.store_root / sha).exists()
+
+
+def test_delete_artifact_rejects_bad_sha_or_missing_artifact(tmp_path):
+    agent = _agent_with_state(tmp_path, {"active_set_id": None, "sets": {}, "revision_catalog": {}})
+    with pytest.raises(BundleError, match="INVALID_ARTIFACT_SHA256"):
+        agent.delete_artifact("not-a-sha")
+    with pytest.raises(BundleError, match="ARTIFACT_NOT_FOUND"):
+        agent.delete_artifact("3" * 64)

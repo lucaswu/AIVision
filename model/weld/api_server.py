@@ -38,7 +38,13 @@ from model_runtime_manager import (
     RuntimeProfileNotProvisioned,
     RuntimeSwitchInProgress,
 )
-from revision_sets import RevisionSetStateError, artifact_path, load_active_set, load_pending_committing_set
+from revision_sets import (
+    RevisionSetStateError,
+    artifact_path,
+    load_active_set,
+    load_pending_committing_set,
+    protected_sha256,
+)
 
 # 确保能导入模型代码
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -727,6 +733,10 @@ class ModelRollbackRequest(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class ModelDeleteRequest(BaseModel):
+    sha256: str = Field(..., min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
+
+
 def _runtime_status() -> Dict[str, Any]:
     if runtime_manager is None:
         return {"runtime_state": "warming", "set_id": None, "generation": None, "profiles": [], "lease_count": 0}
@@ -855,8 +865,15 @@ async def list_installed_artifacts(_admin: None = Depends(_require_model_admin))
     """Every verified artifact in the content-addressed store.
 
     Deployment tooling needs this to confirm an upload landed before it asks
-    the agent to activate a set that references it.
+    the agent to activate a set that references it, and to decide what is
+    safe to hand to /models/delete.
     """
+    try:
+        state = json.loads(REVISION_SETS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    protected = protected_sha256(state)
+
     items = []
     if MODEL_STORE_ROOT.is_dir():
         for entry in sorted(MODEL_STORE_ROOT.iterdir()):
@@ -868,6 +885,7 @@ async def list_installed_artifacts(_admin: None = Depends(_require_model_admin))
             except (OSError, json.JSONDecodeError):
                 continue
             compatibility = manifest.get("compatibility", {})
+            size_bytes = sum(f.stat().st_size for f in entry.iterdir() if f.is_file())
             items.append({
                 "sha256": entry.name,
                 "slot": manifest.get("slot"),
@@ -876,6 +894,10 @@ async def list_installed_artifacts(_admin: None = Depends(_require_model_admin))
                 "ordered_class_map": compatibility.get("ordered_class_map"),
                 "input_size": compatibility.get("input_size"),
                 "minimum_inference_version": compatibility.get("minimum_inference_version"),
+                "size_bytes": size_bytes,
+                # Still reachable from the active set or its one-hop rollback
+                # target; /models/delete will refuse these.
+                "in_use": entry.name in protected,
             })
     return {"items": items}
 
@@ -949,6 +971,16 @@ async def activate_model_set(body: ModelActivateRequest, _admin: None = Depends(
 @app.post("/models/rollback", status_code=202)
 async def rollback_model_set(body: ModelRollbackRequest, _admin: None = Depends(_require_model_admin)):
     job_id = _queue_agent_command("rollback", {"reason": body.reason})
+    return {"job_id": job_id, "state": "QUEUED"}
+
+
+@app.post("/models/delete", status_code=202)
+async def delete_model_artifact(body: ModelDeleteRequest, _admin: None = Depends(_require_model_admin)):
+    """Remove one artifact from the store. The agent refuses anything still
+    reachable from the active set or its one-hop rollback target — see
+    ModelAgent.delete_artifact.
+    """
+    job_id = _queue_agent_command("delete", {"sha256": body.sha256.lower()})
     return {"job_id": job_id, "state": "QUEUED"}
 
 
