@@ -890,6 +890,7 @@ async def list_installed_artifacts(_admin: None = Depends(_require_model_admin))
                 "sha256": entry.name,
                 "slot": manifest.get("slot"),
                 "release_id": manifest.get("release_id"),
+                "model_name": manifest.get("artifact", {}).get("model_name"),
                 "deployment_target": manifest.get("deployment_target"),
                 "ordered_class_map": compatibility.get("ordered_class_map"),
                 "input_size": compatibility.get("input_size"),

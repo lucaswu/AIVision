@@ -579,3 +579,22 @@ export const doubleWireAPI = {
     return result.Data;
   },
 };
+
+// 模型状态相关API
+export const modelStatusAPI = {
+  // 用于常驻状态展示的轮询：推理服务不可达时返回 null，不弹出全局错误提示
+  getSilently: async (): Promise<any | null> => {
+    try {
+      const userId = getUserId();
+      const response = await fetch(`${API_BASE_URL}/api/v1/models/status`, {
+        headers: { "user-id": userId },
+      });
+      if (!response.ok) return null;
+      const result = await response.json();
+      if (result.Code !== 200) return null;
+      return result.Data;
+    } catch {
+      return null;
+    }
+  },
+};

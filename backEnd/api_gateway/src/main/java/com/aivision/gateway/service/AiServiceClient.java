@@ -470,6 +470,23 @@ public class AiServiceClient {
     }
 
     /**
+     * 查询视觉AI服务当前激活的模型信息（用于前端展示"当前运行的模型"）
+     */
+    public Map<String, Object> getModelsStatus() {
+        String url = inferenceServiceUrl + "/models";
+        try {
+            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("查询模型状态失败: " + response.getStatusCode());
+            }
+            return objectMapper.readValue(response.getBody(), Map.class);
+        } catch (Exception e) {
+            logger.warn("查询模型状态失败: {}", e.getMessage());
+            throw new RuntimeException("查询模型状态失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * 健康检查 - 视觉AI服务
      */
     public boolean checkVisionAiHealth() {

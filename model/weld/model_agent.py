@@ -360,6 +360,7 @@ class ModelAgent:
                     "sha256": sha256,
                     "release_id": manifest["release_id"],
                     "relative_path": artifact["relative_path"],
+                    "model_name": artifact.get("model_name"),
                 }
             runtime = spec.get("runtime", {})
             if not isinstance(runtime, dict):
