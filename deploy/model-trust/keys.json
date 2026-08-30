@@ -1,10 +1,11 @@
 {
-  "list_version": 1,
+  "list_version": 2,
   "root_key_id": "root-1",
   "expires_at": "2030-01-01T00:00:00+00:00",
   "keys": {
-    "delivery-ed25519-v1": "9ATXqNJ4AfHvJ8zNfU4pVFnXHo1LVmqS+BjnxR1RkQo="
+    "delivery-ed25519-v1": "9ATXqNJ4AfHvJ8zNfU4pVFnXHo1LVmqS+BjnxR1RkQo=",
+    "delivery-ed25519-v2": "f2C1sLX0NRc7vuUSJa4R6jLLdxyvJ3X7w9wsd5aooRU="
   },
   "revoked": [],
-  "signature": "dXZ59GO4vFIs3h59BYxi8gyg0lpZdtx8XKnbpRcKwyR+q9ikgLLDHMD6bb03aBtB95ezheCbzQN4GkmnX/8JCw=="
+  "signature": "bccR9mL6L5FIejQG41QWTNKBCmvqTr2fkxUgzFUUVtMBTndF0Sf6ZDuHvRgw3TwdLR7sDRRuClnNobqSC2iaBA=="
 }
