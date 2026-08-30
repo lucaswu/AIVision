@@ -7,5 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN groupadd --gid 10001 model && useradd --uid 10001 --gid 10001 --create-home model
 RUN pip install --no-cache-dir cryptography httpx
 COPY weld/model_agent.py /app/model-agent/model_agent.py
+# 不走训练平台发布的默认 slot（roi/location_0/location_1）的已签名交付包；zip 本身不进
+# git，由部署机器本地提供（跟 weld/weight/*.pt 一样，见 bootstrap-bundles/README.md），
+# 启动时自动装入 store，见 ModelAgent.install_bundled_defaults()。目录里保留了一份
+# README 占位，所以全新 checkout（zip 还没放上去）时这行 COPY 依然能成功。
+COPY weld/bootstrap-bundles/ /app/model-agent/default-bundles/
 USER 10001:10001
 ENTRYPOINT ["python", "/app/model-agent/model_agent.py"]

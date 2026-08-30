@@ -14,3 +14,10 @@
 /outputs
 /mlruns
 /train/outputs
+
+# 默认 slot（roi/location_0/location_1 等不走训练平台发布的模型）的已签名交付包：
+# 本质是打包过的权重文件，跟 weld/weight/*.pt 一样不进 git；每台部署机器手动放置一次，
+# model_agent.py 启动时会自动装入 store。签发方式见 weld/bootstrap-bundles/README.md。
+# 目录本身（连同占位的 README）保留在 git 里，这样全新 checkout 时 Dockerfile 的 COPY
+# 仍有源目录可复制，不会因为目录不存在而构建失败。
+/weld/bootstrap-bundles/*.zip

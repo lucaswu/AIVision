@@ -219,6 +219,30 @@ class ModelAgent:
         except zipfile.BadZipFile as exc:
             raise BundleError("INVALID_BUNDLE_ARCHIVE") from exc
 
+    def install_bundled_defaults(self, bundles_dir: Path) -> None:
+        """Install signed bundles baked into the image for slots that never
+        go through the training platform (e.g. roi/location_0/location_1,
+        which stay on one fixed weight file while only primary is retrained).
+
+        Idempotent by sha256: a bundle already present under store_root is
+        skipped without re-verifying its signature, so this is safe and cheap
+        to call on every start. This never activates anything -- it only
+        makes the artifacts available for the next activate_set call.
+        """
+        if not bundles_dir.is_dir():
+            return
+        for bundle_path in sorted(bundles_dir.glob("*.zip")):
+            try:
+                with zipfile.ZipFile(bundle_path) as archive:
+                    manifest = json.loads(archive.read("manifest.json"))
+                sha256 = manifest.get("artifact", {}).get("sha256")
+                if isinstance(sha256, str) and (self.store_root / sha256 / "manifest.json").exists():
+                    continue
+                installed = self.install_bundle(bundle_path)
+                print(f"seeded default bundle {bundle_path.name}: release {installed['release_id']}")
+            except Exception as exc:
+                print(f"failed to seed default bundle {bundle_path.name}: {exc}")
+
     def load_state(self) -> dict[str, Any]:
         if not self.state_path.exists():
             return {"generation": 0, "active_set_id": None, "sets": {}, "revision_catalog": {}}
@@ -596,6 +620,10 @@ def main() -> None:
     parser.add_argument("--store", default="/app/model/store")
     parser.add_argument("--state", default="/app/model/active/revision_sets.json")
     parser.add_argument("--trust", default="/opt/model-trust/keys.json")
+    parser.add_argument(
+        "--default-bundles", default="/app/model-agent/default-bundles",
+        help="dir of signed bundles for slots that never go through the training platform (roi/location_*)",
+    )
     parser.add_argument("--activate-set", help="JSON file with {set_id, profiles}; performs one set activation")
     parser.add_argument("--rollback", action="store_true", help="re-activate the previous successful set and exit")
     parser.add_argument("--delete", metavar="SHA256", help="remove one unreferenced artifact from the store and exit")
@@ -620,6 +648,7 @@ def main() -> None:
         agent.delete_artifact(args.delete)
         print(f"deleted {args.delete}")
         return
+    agent.install_bundled_defaults(Path(args.default_bundles))
     while True:
         try:
             agent.abort_prepared_sets()

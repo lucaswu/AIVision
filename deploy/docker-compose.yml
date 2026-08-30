@@ -226,7 +226,7 @@ services:
       - MODEL_AGENT_CA_FILE=/opt/model-mtls/ca.crt
       - MODEL_AGENT_CLIENT_CERT_FILE=/opt/model-mtls/agent.crt
       - MODEL_AGENT_CLIENT_KEY_FILE=/opt/model-mtls/agent.key
-    command: ["--inbox", "/app/model/inbox", "--store", "/app/model/store", "--state", "/app/model/active/revision_sets.json", "--trust", "/opt/model-trust/keys.json"]
+    command: ["--inbox", "/app/model/inbox", "--store", "/app/model/store", "--state", "/app/model/active/revision_sets.json", "--trust", "/opt/model-trust/keys.json", "--default-bundles", "/app/model-agent/default-bundles"]
     networks:
       - ai-services
     depends_on:
