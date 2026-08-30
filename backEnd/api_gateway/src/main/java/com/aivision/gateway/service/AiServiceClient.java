@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.file.Path;
@@ -65,7 +66,14 @@ public class AiServiceClient {
 
     // 轮询间隔（毫秒）
     private static final long POLL_INTERVAL_MS = 500;
-    
+
+    // model-agent 在模型发布切换时会短暂拒绝新推理请求（HTTP 409 MODEL_SWITCH_IN_PROGRESS）。
+    // 蓝绿部署这个窗口通常只有几秒到几十秒，值得退避重试；显存不足触发排空时窗口可长达
+    // 15 分钟，重试到上限仍失败就放弃，交由上层任务失败后重新提交。
+    private static final int MODEL_SWITCH_RETRY_MAX_ATTEMPTS = 5;
+    private static final long MODEL_SWITCH_RETRY_INITIAL_BACKOFF_MS = 2000;
+    private static final long MODEL_SWITCH_RETRY_MAX_BACKOFF_MS = 10000;
+
     // 缓存的类别名称
     private List<String> cachedClassNames = null;
 
@@ -87,6 +95,38 @@ public class AiServiceClient {
             }
         }
         return cachedClassNames;
+    }
+
+    private boolean isModelSwitchInProgress(HttpClientErrorException e) {
+        return e.getStatusCode() == HttpStatus.CONFLICT
+                && e.getResponseBodyAsString() != null
+                && e.getResponseBodyAsString().contains("MODEL_SWITCH_IN_PROGRESS");
+    }
+
+    /**
+     * 提交任务，遇到 MODEL_SWITCH_IN_PROGRESS（409）时按退避重试；其余错误原样抛出。
+     */
+    private ResponseEntity<String> submitWithModelSwitchRetry(
+            String url, HttpEntity<Map<String, Object>> entity, String taskId) {
+        long backoffMs = MODEL_SWITCH_RETRY_INITIAL_BACKOFF_MS;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return restTemplate.postForEntity(url, entity, String.class);
+            } catch (HttpClientErrorException e) {
+                if (!isModelSwitchInProgress(e) || attempt >= MODEL_SWITCH_RETRY_MAX_ATTEMPTS) {
+                    throw e;
+                }
+                logger.warn("模型正在切换（MODEL_SWITCH_IN_PROGRESS），{}ms 后重试提交任务: taskId={}, attempt={}/{}",
+                        backoffMs, taskId, attempt, MODEL_SWITCH_RETRY_MAX_ATTEMPTS);
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+                backoffMs = Math.min(backoffMs * 2, MODEL_SWITCH_RETRY_MAX_BACKOFF_MS);
+            }
+        }
     }
 
     /**
@@ -160,14 +200,14 @@ public class AiServiceClient {
                     url, taskId, filePaths.size(), getClassNames());
         
         try {
-            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
-            
+            ResponseEntity<String> response = submitWithModelSwitchRetry(url, entity, taskId);
+
             if (!response.getStatusCode().is2xxSuccessful()) {
                 throw new RuntimeException("提交推理任务失败: " + response.getStatusCode());
             }
-            
+
             logger.info("推理任务已提交: taskId={}", taskId);
-            
+
         } catch (Exception e) {
             logger.error("提交推理任务失败: taskId={}", taskId, e);
             throw new RuntimeException("提交推理任务失败: " + e.getMessage(), e);
@@ -579,14 +619,14 @@ public class AiServiceClient {
         logger.info("提交 OCR 任务: url={}, taskId={}, fileCount={}", url, taskId, filePaths.size());
         
         try {
-            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
-            
+            ResponseEntity<String> response = submitWithModelSwitchRetry(url, entity, taskId);
+
             if (!response.getStatusCode().is2xxSuccessful()) {
                 throw new RuntimeException("提交 OCR 任务失败: " + response.getStatusCode());
             }
-            
+
             logger.info("OCR 任务已提交: taskId={}", taskId);
-            
+
         } catch (Exception e) {
             logger.error("提交 OCR 任务失败: taskId={}", taskId, e);
             throw new RuntimeException("提交 OCR 任务失败: " + e.getMessage(), e);
