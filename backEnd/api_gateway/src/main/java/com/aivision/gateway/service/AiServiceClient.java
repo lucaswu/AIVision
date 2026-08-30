@@ -55,24 +55,6 @@ public class AiServiceClient {
     @Value("${ai-services.ocr-inference-url:http://ai-inference-ocr:8000}")
     private String ocrInferenceServiceUrl;
 
-    // 推理模式配置
-    @Value("${ai-services.vision-ai.inference-mode:det}")
-    private String inferenceMode;
-    
-    @Value("${ai-services.vision-ai.engine:rfdet}")
-    private String engineType;
-
-    @Value("${ai-services.vision-ai.device:cuda:0}")
-    private String device;
-    
-    // 检测置信度
-    @Value("${ai-services.vision-ai.det-confidence:0.25}")
-    private double detConfidence;
-    
-    // 是否启用横切纵拼
-    @Value("${ai-services.vision-ai.det-wide-slice:true}")
-    private boolean detWideSlice;
-    
     // 本地存储路径（用于读取结果）
     @Value("${storage.local.result-dir:/app/data/results}")
     private String localResultDir;
@@ -161,17 +143,15 @@ public class AiServiceClient {
     private void submitInferenceTask(String taskId, List<String> filePaths) {
         String url = inferenceServiceUrl + "/inference/submit";
         
+        // 生产构建的推理服务把 mode/device/engine/置信度/切片策略等都收口为“运行时 profile”
+        // （构建期设定，通过 model-agent 激活），/inference/submit 只认 task_id、file_paths、
+        // profile_id 三个字段——一旦请求里带上其他字段（哪怕值和 profile 默认值一样），
+        // 会被 RUNTIME_PROFILE_REQUIRED 直接拒绝。因此这里不再透传 mode/engine/device/
+        // primary_conf/wide_slice/class_names，交给推理服务当前激活的 profile 决定。
         Map<String, Object> request = new HashMap<>();
         request.put("task_id", taskId);
         request.put("file_paths", filePaths);
-        request.put("mode", inferenceMode);
-        request.put("engine", engineType);
-        request.put("device", device);
-        // 新增参数
-        request.put("class_names", getClassNames());
-        request.put("primary_conf", detConfidence);
-        request.put("wide_slice", detWideSlice);
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
