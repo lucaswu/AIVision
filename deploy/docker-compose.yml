@@ -226,7 +226,7 @@ services:
       - MODEL_AGENT_CA_FILE=/opt/model-mtls/ca.crt
       - MODEL_AGENT_CLIENT_CERT_FILE=/opt/model-mtls/agent.crt
       - MODEL_AGENT_CLIENT_KEY_FILE=/opt/model-mtls/agent.key
-    command: ["--inbox", "/app/model/inbox", "--store", "/app/model/store", "--state", "/app/model/active/revision_sets.json", "--trust", "/opt/model-trust/keys.json", "--default-bundles", "/app/model-agent/default-bundles"]
+    command: ["--inbox", "/app/model/inbox", "--store", "/app/model/store", "--state", "/app/model/active/revision_sets.json", "--trust", "/opt/model-trust/keys.json", "--default-bundles", "/app/model-agent/default-bundles", "--default-profile", "${DEFAULT_RUNTIME_PROFILE:-det-gpu-default}", "--default-gpu-budget-mb", "${MODEL_DEFAULT_GPU_BUDGET_MB:-6144}"]
     networks:
       - ai-services
     depends_on:

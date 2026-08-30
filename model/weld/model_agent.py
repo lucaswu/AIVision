@@ -243,6 +243,46 @@ class ModelAgent:
             except Exception as exc:
                 print(f"failed to seed default bundle {bundle_path.name}: {exc}")
 
+    def bootstrap_activate_defaults(self, bundles_dir: Path, profile_id: str, gpu_budget_mb: int) -> None:
+        """On a genuinely fresh site (no active set, nothing in flight), bring
+        the runtime up with whatever defaults install_bundled_defaults already
+        seeded, so a rebuild alone reaches a healthy state with zero manual
+        install/activate steps. Never touches a site that already has (or is
+        in the middle of building) a real activation -- this only ever runs
+        once, the very first time, and is cheap to keep calling afterwards
+        since the state check below then short-circuits immediately.
+
+        Called every loop iteration rather than once at start-up: right after
+        a fresh container start, ai-inference may not have finished booting
+        yet, so activate_set's calls to it can transiently fail -- retrying
+        on the same cadence as abort_prepared_sets/recover_committing_set
+        lets it succeed on a later tick instead of failing permanently.
+        """
+        state = self.load_state()
+        if state.get("active_set_id") or state.get("sets"):
+            return
+        if not bundles_dir.is_dir():
+            return
+        slots: dict[str, str] = {}
+        for bundle_path in sorted(bundles_dir.glob("*.zip")):
+            try:
+                with zipfile.ZipFile(bundle_path) as archive:
+                    manifest = json.loads(archive.read("manifest.json"))
+            except Exception:
+                continue
+            slot_name, sha256 = manifest.get("slot"), manifest.get("artifact", {}).get("sha256")
+            if isinstance(slot_name, str) and isinstance(sha256, str):
+                slots[slot_name] = sha256
+        if "primary" not in slots:
+            return  # no default primary bundled; nothing safe to activate yet
+        set_id = f"rds-bootstrap-defaults-{uuid.uuid4().hex[:8]}"
+        try:
+            spec = {profile_id: {"slots": slots, "runtime": {}, "gpu_budget_mb": gpu_budget_mb}}
+            self.activate_set(set_id, self.build_revisions(spec))
+            print(f"bootstrap-activated default combination {set_id}")
+        except Exception as exc:
+            print(f"failed to bootstrap-activate defaults (will retry): {exc}")
+
     def load_state(self) -> dict[str, Any]:
         if not self.state_path.exists():
             return {"generation": 0, "active_set_id": None, "sets": {}, "revision_catalog": {}}
@@ -624,6 +664,14 @@ def main() -> None:
         "--default-bundles", default="/app/model-agent/default-bundles",
         help="dir of signed bundles for slots that never go through the training platform (roi/location_*)",
     )
+    parser.add_argument(
+        "--default-profile", default=os.environ.get("DEFAULT_RUNTIME_PROFILE", "det-gpu-default"),
+        help="profile id to bootstrap-activate from --default-bundles on a site with no active set yet",
+    )
+    parser.add_argument(
+        "--default-gpu-budget-mb", type=int, default=6144,
+        help="gpu_budget_mb for the bootstrap activation of --default-bundles",
+    )
     parser.add_argument("--activate-set", help="JSON file with {set_id, profiles}; performs one set activation")
     parser.add_argument("--rollback", action="store_true", help="re-activate the previous successful set and exit")
     parser.add_argument("--delete", metavar="SHA256", help="remove one unreferenced artifact from the store and exit")
@@ -655,6 +703,12 @@ def main() -> None:
             agent.recover_committing_set()
         except Exception as exc:
             print(f"failed to recover committing set: {exc}")
+        # Retried every tick rather than once at start-up: right after a fresh
+        # container start ai-inference may not be reachable yet, so this needs
+        # to be able to succeed on a later iteration instead of only the first.
+        agent.bootstrap_activate_defaults(
+            Path(args.default_bundles), profile_id=args.default_profile, gpu_budget_mb=args.default_gpu_budget_mb
+        )
         for package in sorted(inbox.glob("*.zip")):
             try:
                 manifest = agent.install_bundle(package)
