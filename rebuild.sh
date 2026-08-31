@@ -37,18 +37,18 @@ diagnose_inference_not_ready() {
 # bash model/weld/scripts/download_ocr_models.sh
 
 echo "Building backend..."
-docker build -t aivision-backend:latest -f backEnd/api_gateway/Dockerfile .
+docker build --provenance=false --sbom=false -t aivision-backend:latest -f backEnd/api_gateway/Dockerfile .
 
 echo "Building frontend..."
-docker build  -t aivision-frontend:latest ./frontEnd
+docker build --provenance=false --sbom=false -t aivision-frontend:latest ./frontEnd
 
 echo "Building AI inference (weld)..."
 # 构建上下文为 model/ 目录，以便同时访问 weld/ 和 OCR/ 子目录
-docker build -t aivision-ai-inference:latest -f model/weld/Dockerfile.ai model/
+docker build --provenance=false --sbom=false -t aivision-ai-inference:latest -f model/weld/Dockerfile.ai model/
 
 echo "Building model-agent..."
 # model-agent 与推理服务分离部署，独占模型库写权限；构建上下文同样是 model/ 目录
-docker build -t aivision-model-agent:latest -f model/weld/Dockerfile.model-agent model/
+docker build --provenance=false --sbom=false -t aivision-model-agent:latest -f model/weld/Dockerfile.model-agent model/
 
 echo "Restarting services..."
 
@@ -69,7 +69,7 @@ fi
 cd deploy
 # 注意: docker compose down 不会删除 named volumes（数据库数据安全）
 # 只有 docker compose down -v 才会删除卷
-docker compose down
+docker compose down 
 # gateway/frontend 依赖 ai-inference healthy 才会启动；ai-inference 起不来时
 # compose 自己也会返回非零码，这里先不让 set -e 直接掐断脚本，改成走下面的诊断分支。
 set +e
