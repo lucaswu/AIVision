@@ -129,7 +129,7 @@ services:
     # results/files 是推理任务与预热的输出目录，同时被 api-gateway（uid 999/appuser）读写
     # 结果 JSON 与本地存储文件，两边 uid 不同又不共享 group，因此单独放宽为 0777，
     # 否则 api-gateway 写结果文件会以 AccessDeniedException 失败。
-    command: ["sh", "-c", "mkdir -p /store /active /inbox /paddleocr /results /files && chown -R 10001:10001 /store /active /inbox /paddleocr /results /files && chmod 0770 /store /active /inbox /paddleocr && chmod 0777 /results /files"]
+    command: ["sh", "-c", "mkdir -p /store /active /inbox /paddleocr /results /files && chown -R 10001:10001 /store /active /inbox /paddleocr /results /files && chmod 0770 /store /active /inbox /paddleocr && chmod -R 0777 /results /files"]
     volumes:
       - model_inbox:/inbox
       - model_store:/store
