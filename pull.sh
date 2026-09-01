@@ -43,10 +43,18 @@ AI_INFERENCE_PORT=${AI_INFERENCE_PORT:-8100}
 MODEL_ADMIN_TOKEN=$(grep -E '^MODEL_ADMIN_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
 ENV_INFERENCE_VERSION=$(grep -E '^INFERENCE_VERSION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
 
-if [ "$TAG" != "latest" ] && [ -n "$ENV_INFERENCE_VERSION" ] && [ "$TAG" != "$ENV_INFERENCE_VERSION" ]; then
-  echo "WARNING: pull.sh 传入的 TAG ($TAG) 和 deploy/.env 里的 INFERENCE_VERSION ($ENV_INFERENCE_VERSION) 不一致。"
-  echo "         这次镜像升级后如果要装新模型包，minimum_inference_version 的比较基准会是旧的 INFERENCE_VERSION，容易误判。"
-  echo "         记得同步把 deploy/.env 里的 INFERENCE_VERSION 改成这次的版本号。"
+# TAG 是镜像发布批次标识（可以是日期等任意格式），跟 INFERENCE_VERSION 是两回事：
+# 后者必须是严格 semver（X.Y.Z），是模型包 minimum_inference_version 比较的基准，
+# production 模式下推理服务启动时也会校验这一点，格式不对会直接拒绝启动。
+# 这里只保证 .env 里现有的 INFERENCE_VERSION 没有被手滑改成非法格式，不再要求它和 TAG 相同。
+if [ -n "$ENV_INFERENCE_VERSION" ]; then
+  core="${ENV_INFERENCE_VERSION%%[-+]*}"
+  IFS=. read -r major minor patch extra <<< "$core"
+  if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ] || [ -n "$extra" ] \
+     || ! [[ "$major$minor$patch" =~ ^[0-9]+$ ]]; then
+    echo "WARNING: deploy/.env 里的 INFERENCE_VERSION ($ENV_INFERENCE_VERSION) 不是合法 semver（X.Y.Z）。"
+    echo "         production 模式下推理服务会因此拒绝启动，模型包的 minimum_inference_version 比较也会失败。"
+  fi
 fi
 
 model_snapshot() {
