@@ -92,6 +92,7 @@ import {
   buildInitialFilmInfo,
   buildInitialImageTransform,
   buildInitialWeldJoints,
+  createWeldJointId,
   createEmptyHistorySnapshot,
   createIdleEllipseToolState,
   createIdleVerticalToolState,
@@ -3209,7 +3210,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
       const loadedWeldJoints = buildInitialWeldJoints(selectedFile);
       const initialWeldJoints = loadedWeldJoints.length > 0
         ? loadedWeldJoints
-        : [{ id: crypto.randomUUID(), weldNo: '' }];
+        : [{ id: createWeldJointId(), weldNo: '' }];
       setWeldJoints(initialWeldJoints);
       originalWeldJointsRef.current = initialWeldJoints;
 
@@ -3701,7 +3702,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
 
   // --- 焊口列表操作（一张底片可以维护多个焊口编号）---
   const handleAddWeldJoint = () => {
-    setWeldJoints(prev => [...prev, { id: crypto.randomUUID(), weldNo: '' }]);
+    setWeldJoints(prev => [...prev, { id: createWeldJointId(), weldNo: '' }]);
   };
 
   const handleUpdateWeldJointNo = (id: string, weldNo: string) => {
@@ -3712,7 +3713,7 @@ export const ImageEditorViewer: React.FC<ImageEditorViewerProps> = ({
     // 焊口编号栏始终保留至少一行输入框
     setWeldJoints(prev => {
       const next = prev.filter(joint => joint.id !== id);
-      return next.length > 0 ? next : [{ id: crypto.randomUUID(), weldNo: '' }];
+      return next.length > 0 ? next : [{ id: createWeldJointId(), weldNo: '' }];
     });
     // 解除该焊口下所有缺陷的归属，避免残留悬空引用
     setDefectRects(prev => prev.map(item => (item.weldJointId === id ? { ...item, weldJointId: undefined } : item)));

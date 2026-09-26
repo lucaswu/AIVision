@@ -78,6 +78,25 @@ export function buildInitialWeldJoints(file: TaskFile): WeldJointDraft[] {
     .map((joint) => ({ id: joint.WeldJointId, weldNo: joint.WeldNo || "" }));
 }
 
+// crypto.randomUUID() 只在安全上下文（HTTPS 或 http://localhost）里存在，
+// 客户现场常见通过局域网 IP + 明文 HTTP 访问，此时它是 undefined，直接调用会抛异常。
+// crypto.getRandomValues() 不受安全上下文限制，优先用它拼出标准 UUID v4；
+// 两者都不可用时（极旧浏览器）再退化到时间戳 + 随机数，仅要求前端本地唯一即可。
+export function createWeldJointId(): string {
+  const cryptoObj: Crypto | undefined = typeof crypto !== "undefined" ? crypto : undefined;
+  if (cryptoObj && typeof cryptoObj.randomUUID === "function") {
+    return cryptoObj.randomUUID();
+  }
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    const bytes = cryptoObj.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function createEmptyHistorySnapshot<
   TSavedRect = unknown,
   TSavedPolygon = unknown,
