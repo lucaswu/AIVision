@@ -121,7 +121,9 @@ services:
   # AI 推理服务 (CPU / GPU 通用)
   # ================================
   model-volume-init:
-    image: busybox:1.36
+    # 用 AI_INFERENCE_IMAGE 而不是 busybox，避免客户环境出网白名单里没有 docker.io
+    # （只放行私有 ACR 的场景下 busybox:1.36 会拉取超时）
+    image: ${AI_INFERENCE_IMAGE:-aivision-ai-inference:latest}
     restart: "no"
     user: "0:0"
     # ai-inference 以 uid 10001 运行，因此它要写的每一个卷都必须归属该用户。
