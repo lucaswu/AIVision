@@ -149,22 +149,24 @@ class WeldOrientationCorrector:
     def _load_model(self) -> nn.Module:
         """
         Load the trained model from disk.
-        
+
         Returns:
             Loaded model in evaluation mode
         """
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path}")
-        
+
         # Initialize model architecture
         model = self._get_model_architecture()
-        
+
         # Load trained weights
         model.load_state_dict(torch.load(self.model_path, map_location=self.device, weights_only=False))
         model.to(self.device)
         model.eval()
-        
-        return model
+
+        from utils.trt_backend import wrap_classifier_with_tensorrt
+
+        return wrap_classifier_with_tensorrt(model, self.model_path, str(self.device))
     
     def _restore_image(self, image: np.ndarray, label_idx: int) -> Tuple[np.ndarray, str]:
         """

@@ -67,7 +67,7 @@ class WeldSeamLocator:
             adaptive_processor_path: Explicit path to adaptive-image-processor.py.
                 If None, the module will search relative to the weld root and cwd.
         """
-        from ultralytics import YOLO  # lazy – avoids top-level 'ultralytics' dep
+        from utils.trt_backend import load_yolo_model  # lazy – avoids top-level 'ultralytics' dep
 
         self.model_path = Path(model_path)
         self.conf_threshold = conf_threshold
@@ -75,8 +75,8 @@ class WeldSeamLocator:
         # Load adaptive preprocessor (negative + windowing)
         self.processor = self._load_processor(adaptive_processor_path)
 
-        # Load YOLO pose model
-        self.model = YOLO(str(self.model_path))
+        # Load YOLO pose model (TensorRT engine when available, safe fallback to .pt)
+        self.model = load_yolo_model(str(self.model_path))
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -18,6 +18,7 @@ from utils.pipeline_utils import (
     restore_polygon_from_rotation,
     draw_detection_instance,
 )
+from utils.trt_backend import load_yolo_model
 
 
 class YoloDetectionModel:
@@ -35,7 +36,7 @@ class YoloDetectionModel:
             raise FileNotFoundError(f"未找到YOLO权重: {self.model_path}")
         self.confidence = confidence
         self.device = device
-        self.model = YOLO(str(self.model_path))
+        self.model = load_yolo_model(str(self.model_path))
         self.class_map = self._build_class_map(class_names)
 
     def _build_class_map(self, class_names: Optional[Sequence[str]]) -> Dict[int, str]:
@@ -90,7 +91,7 @@ class YoloSegmentationModel:
             raise FileNotFoundError(f"未找到YOLO分割权重: {self.model_path}")
         self.confidence = confidence
         self.device = device
-        self.model = YOLO(str(self.model_path))
+        self.model = load_yolo_model(str(self.model_path))
         self.class_map = self._build_class_map(class_names)
 
     def _build_class_map(self, class_names: Optional[Sequence[str]]) -> Dict[int, str]:

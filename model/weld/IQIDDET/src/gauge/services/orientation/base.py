@@ -83,7 +83,10 @@ class BaseOrientationCorrector(ABC):
         )
         model.to(self.device)
         model.eval()
-        return model
+
+        from utils.trt_backend import wrap_classifier_with_tensorrt
+
+        return wrap_classifier_with_tensorrt(model, self.model_path, str(self.device))
 
     def predict_orientation(self, image: np.ndarray) -> Tuple[int, float]:
         pil_img = self._prepare_pil_image(image)

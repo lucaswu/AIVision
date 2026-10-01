@@ -131,7 +131,7 @@ services:
     # results/files 是推理任务与预热的输出目录，同时被 api-gateway（uid 999/appuser）读写
     # 结果 JSON 与本地存储文件，两边 uid 不同又不共享 group，因此单独放宽为 0777，
     # 否则 api-gateway 写结果文件会以 AccessDeniedException 失败。
-    command: ["sh", "-c", "mkdir -p /store /active /inbox /paddleocr /results /files && chown -R 10001:10001 /store /active /inbox /paddleocr /results /files && chmod 0770 /store /active /inbox /paddleocr && chmod -R 0777 /results /files"]
+    command: ["sh", "-c", "mkdir -p /store /active /inbox /paddleocr /results /files /trt_cache && chown -R 10001:10001 /store /active /inbox /paddleocr /results /files /trt_cache && chmod 0770 /store /active /inbox /paddleocr /trt_cache && chmod -R 0777 /results /files"]
     volumes:
       - model_inbox:/inbox
       - model_store:/store
@@ -139,6 +139,7 @@ services:
       - paddleocr_cache:/paddleocr
       - results_data:/results
       - files_data:/files
+      - trt_engine_cache:/trt_cache
 
   ai-inference:
     # 镜像通过 .env 文件中的 AI_INFERENCE_IMAGE 变量切换
@@ -158,6 +159,11 @@ services:
       - MODEL_ADMIN_TOKEN=${MODEL_ADMIN_TOKEN:-}
       - MODEL_INBOX_ROOT=/app/model/inbox
       - MODEL_GPU_SAFETY_MARGIN_MB=${MODEL_GPU_SAFETY_MARGIN_MB:-1024}
+      # TensorRT 推理加速：engine和具体GPU型号+TensorRT版本绑定，不能在构建镜像的
+      # 机器上编译好分发，所以是容器首次启动时在当前GPU上懒构建，缓存到下面这个
+      # 持久卷，重启/重建容器只要硬件和权重没变就直接复用，不用重新构建。
+      - INFERENCE_USE_TENSORRT=${INFERENCE_USE_TENSORRT:-true}
+      - TRT_ENGINE_CACHE_DIR=/app/model/engine_cache
       - INFERENCE_TLS_CERT_FILE=/opt/model-mtls/inference.crt
       - INFERENCE_TLS_KEY_FILE=/opt/model-mtls/inference.key
       - INFERENCE_TLS_CA_FILE=/opt/model-mtls/ca.crt
@@ -196,6 +202,8 @@ services:
       - paddleocr_cache:/home/model/.paddleocr
       - model_store:/app/model/store:ro
       - model_active:/app/model/active:ro
+      # TensorRT engine 懒构建缓存：需要读写，首次启动会往这里写构建好的engine。
+      - trt_engine_cache:/app/model/engine_cache
       # The management API is only an upload/queue entry point: it may write the
       # inbox, never the store or the active state.
       - model_inbox:/app/model/inbox
@@ -210,7 +218,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 300s
+      # 首次启动要把8个模型的TensorRT engine全部现场构建一遍（RF-DETR这种大模型
+      # 单个就要2分多钟），比纯PyTorch冷启动慢得多；给足够的宽限期避免被误判为
+      # unhealthy。这个代价只在engine缓存卷是空的时候（第一次部署/换GPU型号）
+      # 才会发生，缓存命中后重启会和以前一样快。
+      start_period: 1200s
 
   model-agent:
     image: ${MODEL_AGENT_IMAGE:-aivision-model-agent:latest}
@@ -282,6 +294,9 @@ volumes:
   model_active:
     driver: local
     name: ai-detection-model-active
+  trt_engine_cache:
+    driver: local
+    name: ai-detection-trt-engine-cache
   minio_data:
     driver: local
     name: ai-detection-minio-data

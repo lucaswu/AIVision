@@ -89,9 +89,17 @@ echo "重启应用服务: ${APP_SERVICES[*]}..."
 docker compose up -d --no-deps "${APP_SERVICES[@]}"
 
 # --- 5. 等待容器变健康 ---
+# 等待时长不能写死：ai-inference 的健康检查 start_period 由 docker-compose.yml
+# 决定（TensorRT engine 缓存卷是空的时候——比如第一次部署，或者换了GPU型号——
+# 首次启动要把所有模型的engine现场编译一遍，耗时比start_period本身还长很多，
+# 这里从容器实际的健康检查配置里读start_period，再加一点余量，而不是硬编码
+# 一个可能跟compose配置脱节的秒数。
+INFERENCE_START_PERIOD_NS=$(docker inspect -f '{{if .Config.Healthcheck}}{{.Config.Healthcheck.StartPeriod}}{{else}}0{{end}}' ai-detection-inference 2>/dev/null || echo 0)
+INFERENCE_START_PERIOD_S=$((INFERENCE_START_PERIOD_NS / 1000000000))
+WAIT_SECONDS=$((INFERENCE_START_PERIOD_S > 300 ? INFERENCE_START_PERIOD_S + 60 : 300))
 echo
-echo "等待容器变健康..."
-DEADLINE=$((SECONDS + 300))
+echo "等待容器变健康（最长 ${WAIT_SECONDS}s，ai-inference 健康检查 start_period=${INFERENCE_START_PERIOD_S}s）..."
+DEADLINE=$((SECONDS + WAIT_SECONDS))
 while true; do
   ALL_OK=1
   for name in "${CONTAINERS[@]}"; do

@@ -28,6 +28,7 @@ from utils import (
     read_dataset_yaml,
     update_dataset_yaml
 )
+from utils.trt_backend import load_yolo_model
 
 
 ImageSource = Union[str, Path, np.ndarray]
@@ -47,7 +48,7 @@ class WeldROIDetector:
         self.padding_ratio = padding_ratio
 
         print(f"加载ROI模型: {model_path}")
-        self.model = YOLO(model_path)
+        self.model = load_yolo_model(model_path)
 
     def detect_boxes(self, image_source: ImageSource) -> List[Tuple[int, int, int, int]]:
         """

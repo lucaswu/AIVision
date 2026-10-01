@@ -174,9 +174,9 @@ class IQIInferencer:
                 device=self.config.ocr.orientation_device,
             )
 
-        from ultralytics import YOLO
+        from utils.trt_backend import load_yolo_model
 
-        self.gauge_model = YOLO(self.gauge_weights)
+        self.gauge_model = load_yolo_model(self.gauge_weights)
         self.ocr_backend = PaddleOCRSubprocessClient(
             device=self.config.ocr.device,
             det_model_name=self.config.ocr.det_model_name,

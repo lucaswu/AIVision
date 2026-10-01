@@ -87,7 +87,7 @@ class WeldDefectPositionDetector:
         """
         Initialize the weld defect position detector.
         """
-        from ultralytics import YOLO  # lazy import
+        from utils.trt_backend import load_yolo_model  # lazy import
 
         self.model_path = Path(model_path)
         self.conf_threshold = conf_threshold
@@ -95,8 +95,8 @@ class WeldDefectPositionDetector:
         # Load adaptive preprocessor
         self.processor = self._load_processor(adaptive_processor_path)
 
-        # Load YOLO detection model
-        self.model = YOLO(str(self.model_path))
+        # Load YOLO detection model (TensorRT engine when available, safe fallback to .pt)
+        self.model = load_yolo_model(str(self.model_path))
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -160,6 +160,21 @@ SPRING_PROFILES_ACTIVE=docker
 JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC
 ```
 
+### ⚡ TensorRT 推理加速
+
+`ai-inference` 默认会用 TensorRT 加速推理（YOLO系列、方向分类器、FClip、RF-DETR
+主检测模型都支持）。TensorRT engine 是和具体GPU型号+驱动+TensorRT版本绑定的，
+不能像权重文件一样在别处编译好直接分发，所以采用**容器首次启动时懒构建**的策略：
+第一次启动会现场把每个模型的engine编译一遍（缓存到 `trt_engine_cache` 这个
+named volume里），**可能需要10-20分钟**才能通过健康检查，这是正常现象，只在
+第一次部署或者更换GPU型号后发生；之后重启/更新镜像，只要GPU和权重没变，会直接
+复用缓存的engine，启动速度和纯PyTorch一样快。
+
+- `INFERENCE_USE_TENSORRT=false`：关闭TensorRT，全部退回PyTorch推理（调试用，
+  或者纯CPU环境——CPU环境不需要手动关，代码会自动检测没有GPU然后跳过）。
+- `TRT_ENGINE_CACHE_DIR`：engine缓存目录，默认 `/app/model/engine_cache`，
+  已挂载为持久卷，一般不用改。
+
 ### 🏗️ 构建配置
 
 **自动构建:**

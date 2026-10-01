@@ -102,9 +102,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --trusted-host pypi.tuna.tsinghua.edu.cn
 
 # 创建必要目录
+# engine_cache: TensorRT engine 的懒构建缓存（见 utils/trt_backend.py）。engine是
+# 和具体GPU型号+驱动+TensorRT版本绑定的二进制产物，不能在构建镜像的机器上编译好
+# 直接分发——docker build 本身也没有GPU可用。所以这里只建目录，真正的engine由
+# 容器第一次启动、在目标GPU上跑起来时懒构建，写到这个目录（compose里挂载为
+# 持久卷，重启/重建容器只要硬件和权重没变就不用重新构建）。
 RUN groupadd --gid 10001 model && useradd --uid 10001 --gid 10001 --create-home model && \
-    mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights /app/model/store /app/model/active && \
-    chown -R model:model /app/data /app/cache /app/model/store /app/model/active /home/model
+    mkdir -p /app/data/files /app/data/results /app/cache /app/model/weights /app/model/store /app/model/active /app/model/engine_cache && \
+    chown -R model:model /app/data /app/cache /app/model/store /app/model/active /app/model/engine_cache /home/model
 
 # 复制焊缝模型代码
 COPY weld/ /app/model/

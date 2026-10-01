@@ -8,14 +8,43 @@ torch==2.5.1
 torchvision==0.20.1
 
 # YOLO & Object Detection
-ultralytics==8.4.19
+# 8.4.19 导出TensorRT engine时会用到已经在TensorRT 10+里删掉的
+# NetworkDefinitionCreationFlag.EXPLICIT_BATCH，直接报错；8.4.167是实测在生产
+# 容器里（TensorRT 11.3）能正常导出engine的最早可用版本，升级前在容器里验证过。
+ultralytics==8.4.167
+
+# TensorRT 推理加速（懒构建：容器首次启动时按当前GPU现场编译engine并缓存，
+# 见 utils/trt_backend.py）。预装这些包，避免运行时再临时pip install
+# （生产环境通常没有出网权限，且不该在运行中的容器里做包变更）。
+# polygraphy 版本用下面RF-DETR区块里已经固定的那个（避免同一个包pin两个版本
+# 冲突）。
+tensorrt==11.3.0.99
+# onnx>=1.19.0 删掉了 onnx.reference.custom_element_types 这个模块，而
+# nvidia-modelopt（AutoCast做FP16转换要用）的量化相关代码还在import它，新版
+# modelopt也一样——1.18.0是能同时满足"modelopt要求onnx>=1.18.0"和"还没删掉
+# 这个模块"的唯一交集，生产容器里实测验证过。
+onnx==1.18.0
+onnxslim==0.1.97
+onnxsim==0.7.3
+# onnxruntime-gpu 版本被 nvidia-modelopt[onnx] 的 onnxruntime-gpu~=1.22.0
+# 约束死，改modelopt版本前要重新核对这个范围。
+onnxruntime-gpu==1.22.0
+# nvidia-modelopt 0.35.0+ 的 torch 要求升到了 torch>=2.6（无条件依赖），跟本
+# 文件锁定的 torch==2.5.1 冲突；0.33.0 是torch>=2.4（满足2.5.1）且[onnx] extra
+# 在onnx==1.18.0下AutoCast能正常跑通的版本，生产容器里端到端验证过（FP16转换+
+# TensorRT engine构建都成功）。
+nvidia-modelopt[onnx]==0.33.0
 
 # RF-DETR
 transformers==4.46.2
 peft==0.19.1
 supervision==0.27.0
 pycocotools==2.0.11
-polygraphy==0.49.26
+# 0.49.26 自己的 CreateConfig() 默认实现会无条件读 TensorRT 11.3里已经删掉的
+# ILayer.precision_is_set属性，构建engine必报AttributeError；0.53.6是生产容器
+# 里实测验证过、同时兼容TensorRT 11.3的版本。也被 utils/trt_backend.py 的
+# TensorRT engine构建复用，改这个版本前两边都要过一遍。
+polygraphy==0.53.6
 # rfdetr/rf100vl/roboflow are installed separately with --no-deps in Docker.
 # roboflow==1.2.13 hard-pins opencv-python-headless==4.10.0.84 in metadata,
 # while the py10 runtime intentionally ends on opencv-python-headless==4.13.0.92.

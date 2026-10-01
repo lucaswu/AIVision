@@ -121,6 +121,71 @@ def _normalize_rfdetr_device(device: Optional[str]) -> Optional[str]:
     return str(device)
 
 
+def _force_legacy_onnx_exporter() -> None:
+    """torch>=2.9 默认走新的 torch.export/dynamo ONNX 导出器，它在RF-DETR这种带
+    windowed-attention DINOv2 backbone的模型上会报"tensor ... data is not
+    allocated yet"而失败。rfdetr内部直接调用torch.onnx.export(...)且不暴露
+    dynamo参数，这里把torch.onnx.export换成强制dynamo=False（旧的
+    TorchScript-based导出器）的包装版本，对rfdetr的调用方式透明。"""
+    import torch
+
+    if getattr(torch.onnx.export, "_forced_legacy", False):
+        return
+    original_export = torch.onnx.export
+
+    def _legacy_export(*args, **kwargs):
+        kwargs.setdefault("dynamo", False)
+        return original_export(*args, **kwargs)
+
+    _legacy_export._forced_legacy = True
+    torch.onnx.export = _legacy_export
+
+
+def _maybe_wrap_rfdetr_network_with_tensorrt(rf_model, weight_path: Path, device: Optional[str]):
+    """把RF-DETR内部真正做前向计算的nn.Module（rf_model.model.model）换成
+    TensorRT engine。predict()自己的预处理（resize+归一化）和后处理
+    （sigmoid+topk解码为检测框）完全不用动——它们只是调用
+    `self.model.model(batch_tensor)` 拿到 {"pred_boxes":..., "pred_logits":...}，
+    只要替身返回同样结构的dict，上层代码不用感知这里换了引擎。
+    任何一步失败都保留原始PyTorch网络，不影响正常推理。"""
+    from utils.trt_backend import TrtRunnerModule, build_generic_engine_if_needed, is_tensorrt_enabled
+
+    if not is_tensorrt_enabled():
+        return rf_model
+    try:
+        _ = rf_model.model.model
+    except AttributeError:
+        return rf_model
+
+    def _export(onnx_path: Path) -> None:
+        _force_legacy_onnx_exporter()
+        output_dir = onnx_path.parent
+        rf_model.export(
+            output_dir=str(output_dir), simplify=False, opset_version=17,
+            batch_size=1, verbose=False,
+        )
+        exported = output_dir / "inference_model.onnx"
+        if not exported.exists():
+            raise FileNotFoundError(f"RF-DETR导出未生成预期的ONNX文件: {exported}")
+        if onnx_path.exists():
+            onnx_path.unlink()
+        exported.replace(onnx_path)
+
+    engine_path = build_generic_engine_if_needed(
+        "rfdetr_primary", weight_path, _export, prefer_fp16=True,
+    )
+    if engine_path is None:
+        return rf_model
+    try:
+        rf_model.model.model = TrtRunnerModule(
+            engine_path, input_name="input", output_names=["pred_boxes", "pred_logits"],
+        )
+        print("[RF-DETR] 已切换到 TensorRT engine 推理")
+    except Exception as exc:
+        print(f"[RF-DETR] 加载TensorRT engine失败，回退到PyTorch: {exc}")
+    return rf_model
+
+
 def _ensure_single_prediction(detections: Any):
     if detections is None:
         return None
@@ -162,12 +227,13 @@ class RFDetrDetectionModel:
             model_kwargs["device"] = normalized_device
         model_cls = RFDETRMedium if self.model_variant == "medium" else RFDETR2XLarge
         try:
-            return model_cls(**model_kwargs)
+            rf_model = model_cls(**model_kwargs)
         except Exception as exc:
             compat_kwargs = _drop_unknown_rfdet_kwargs(model_kwargs, exc)
             if compat_kwargs is None:
                 raise
-            return model_cls(**compat_kwargs)
+            rf_model = model_cls(**compat_kwargs)
+        return _maybe_wrap_rfdetr_network_with_tensorrt(rf_model, self.model_path, normalized_device)
 
     def _build_class_map(self) -> Dict[int, str]:
         raw_names = getattr(self.model, "class_names", None)

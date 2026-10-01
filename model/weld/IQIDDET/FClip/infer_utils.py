@@ -35,7 +35,106 @@ def build_infer_model(device):
         del checkpoint
 
     model.eval()
+
+    if C.io.model_initialize_file:
+        model = _maybe_wrap_fclip_with_tensorrt(model, C.io.model_initialize_file, device)
     return model
+
+
+class _FClipBackboneOnly(torch.nn.Module):
+    """test_forward() 里"纯张量计算"的那部分：backbone前向 + 头部切片/激活，
+    不含逐样本、按.item()做同步的线段解析循环（那部分本来就是Python侧后处理，
+    保持不变，只是喂给它的heatmap来源换成TensorRT）。"""
+
+    def __init__(self, fclip_model):
+        super().__init__()
+        self.backbone = fclip_model.backbone
+        self.head_off = fclip_model.head_off
+        self.M_dic = fclip_model.M_dic
+        self.head_names = ["lcmap", "lcoff", "lleng", "angle"]
+        if "count" in self.M_dic.get("head", {}):
+            self.head_names.append("count")
+
+    def _pool_height(self, output):
+        import torch.nn.functional as F
+
+        if self.M_dic.get("heatmap_1d", False):
+            target_w = self.M_dic.get("resolution", output.shape[-1])
+            return F.adaptive_avg_pool2d(output, (1, target_w))
+        return output
+
+    def forward(self, image):
+        outputs, _feature, _t = self.backbone(image)
+        output = self._pool_height(outputs[0])
+        lcmap = output[:, 0:self.head_off[0]].softmax(1)[:, 1]
+        lcoff = output[:, self.head_off[0]:self.head_off[1]].sigmoid() - 0.5
+        lleng = output[:, self.head_off[1]:self.head_off[2]].sigmoid()
+        angle = output[:, self.head_off[2]:self.head_off[3]].sigmoid()
+        result = [lcmap, lcoff, lleng, angle]
+        if "count" in self.M_dic.get("head", {}):
+            order = self.M_dic["head"]["order"]
+            offidx = order.index("count")
+            s = 0 if offidx == 0 else self.head_off[offidx - 1]
+            e = self.head_off[offidx]
+            count = output[:, s:e].mean(dim=(2, 3)).softmax(1)
+            result.append(count)
+        return tuple(result)
+
+
+class _FClipTensorRTAdapter:
+    """把 backbone+head 的TensorRT engine包成和原始 FClip.forward(...,isTest=True)
+    一样的调用形态，这样 infer_heatmaps() 完全不用改。"""
+
+    def __init__(self, trt_module, head_names):
+        self._trt = trt_module
+        self._head_names = head_names
+
+    def __call__(self, input_dict, isTest=True):
+        image = input_dict["image"]
+        outputs = self._trt(image)
+        if isinstance(outputs, dict):
+            heatmap = {name: outputs[name] for name in self._head_names if name in outputs}
+        else:
+            heatmap = {self._head_names[0]: outputs}
+        return {"heatmaps": heatmap, "extra_info": {}}
+
+    def eval(self):
+        return self
+
+
+def _maybe_wrap_fclip_with_tensorrt(model, ckpt_path, device):
+    from pathlib import Path
+
+    from utils.trt_backend import TrtRunnerModule, build_generic_engine_if_needed, is_tensorrt_enabled
+
+    if not is_tensorrt_enabled():
+        return model
+
+    backbone_only = _FClipBackboneOnly(model).to(device).eval()
+    head_names = backbone_only.head_names
+    input_h = int(getattr(M, "input_resolution_h", 256))
+    input_w = int(getattr(M, "input_resolution_w", 256))
+
+    def _export(onnx_path):
+        dummy = torch.randn(1, 1, input_h, input_w, device=device)
+        torch.onnx.export(
+            backbone_only, dummy, str(onnx_path),
+            input_names=["image"], output_names=head_names,
+            opset_version=17, dynamo=False,
+        )
+
+    engine_path = build_generic_engine_if_needed(
+        "fclip_backbone", Path(ckpt_path), _export, prefer_fp16=True,
+    )
+    if engine_path is None:
+        return model
+    try:
+        trt_module = TrtRunnerModule(engine_path, input_name="image", output_names=head_names)
+        print("[FClip] 已切换到 TensorRT engine 推理")
+        return _FClipTensorRTAdapter(trt_module, head_names)
+    except Exception as exc:
+        print(f"[FClip] 加载TensorRT engine失败，回退到PyTorch: {exc}")
+        return model
 
 
 def preprocess_gray_image(img, input_resolution, mean, std, device):

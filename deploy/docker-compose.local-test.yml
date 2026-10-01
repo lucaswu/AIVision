@@ -60,6 +60,8 @@ services:
       - LOCATION_MODEL=/app/model/weights/location_0.pt
       - LOCATION2_MODEL=/app/model/weights/location_1.pt
       - CUDA_VISIBLE_DEVICES=
+      # 本地CPU测试没有GPU，TensorRT engine根本构建不了，关掉避免每次启动都白试一遍。
+      - INFERENCE_USE_TENSORRT=false
     ports:
       - "8000:8000"
     networks:
