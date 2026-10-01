@@ -218,11 +218,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      # 首次启动要把8个模型的TensorRT engine全部现场构建一遍（RF-DETR这种大模型
-      # 单个就要2分多钟），比纯PyTorch冷启动慢得多；给足够的宽限期避免被误判为
-      # unhealthy。这个代价只在engine缓存卷是空的时候（第一次部署/换GPU型号）
-      # 才会发生，缓存命中后重启会和以前一样快。
-      start_period: 1200s
+      # TensorRT engine 缺缓存时不会同步阻塞启动——会先用PyTorch权重让服务尽快
+      # ready，构建丢到后台异步完成，好了自动热替换（见 utils/trt_backend.py）。
+      # 所以这里不用再为"等engine编译完"留出大窗口，跟纯PyTorch冷启动一样快。
+      start_period: 300s
 
   model-agent:
     image: ${MODEL_AGENT_IMAGE:-aivision-model-agent:latest}

@@ -105,7 +105,7 @@ class _FClipTensorRTAdapter:
 def _maybe_wrap_fclip_with_tensorrt(model, ckpt_path, device):
     from pathlib import Path
 
-    from utils.trt_backend import TrtRunnerModule, build_generic_engine_if_needed, is_tensorrt_enabled
+    from utils.trt_backend import SwappableBackend, TrtRunnerModule, ensure_engine_async, is_tensorrt_enabled
 
     if not is_tensorrt_enabled():
         return model
@@ -123,18 +123,31 @@ def _maybe_wrap_fclip_with_tensorrt(model, ckpt_path, device):
             opset_version=17, dynamo=False,
         )
 
-    engine_path = build_generic_engine_if_needed(
-        "fclip_backbone", Path(ckpt_path), _export, prefer_fp16=True,
-    )
+    def _load_engine(engine_path: str):
+        try:
+            trt_module = TrtRunnerModule(engine_path, input_name="image", output_names=head_names)
+            return _FClipTensorRTAdapter(trt_module, head_names)
+        except Exception as exc:
+            print(f"[FClip] 加载TensorRT engine失败，继续用PyTorch: {exc}")
+            return None
+
+    proxy = SwappableBackend(model)
+
+    def _on_ready(engine_path: str) -> None:
+        loaded = _load_engine(engine_path)
+        if loaded is not None:
+            proxy._swap(loaded)
+            print("[FClip] 后台构建完成，已热替换为 TensorRT engine 推理")
+
+    engine_path = ensure_engine_async("fclip_backbone", Path(ckpt_path), _export, _on_ready, prefer_fp16=True)
     if engine_path is None:
-        return model
-    try:
-        trt_module = TrtRunnerModule(engine_path, input_name="image", output_names=head_names)
+        # 缓存未命中：已经提交后台构建，这次先用PyTorch（走proxy）。
+        return proxy
+    loaded = _load_engine(engine_path)
+    if loaded is not None:
         print("[FClip] 已切换到 TensorRT engine 推理")
-        return _FClipTensorRTAdapter(trt_module, head_names)
-    except Exception as exc:
-        print(f"[FClip] 加载TensorRT engine失败，回退到PyTorch: {exc}")
-        return model
+        return loaded
+    return model
 
 
 def preprocess_gray_image(img, input_resolution, mean, std, device):

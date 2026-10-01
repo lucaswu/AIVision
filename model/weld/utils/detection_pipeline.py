@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -141,14 +141,24 @@ def _force_legacy_onnx_exporter() -> None:
     torch.onnx.export = _legacy_export
 
 
-def _maybe_wrap_rfdetr_network_with_tensorrt(rf_model, weight_path: Path, device: Optional[str]):
+def _maybe_wrap_rfdetr_network_with_tensorrt(
+    rf_model, weight_path: Path, device: Optional[str], rebuild_rf_model: Callable[[], Any],
+):
     """把RF-DETR内部真正做前向计算的nn.Module（rf_model.model.model）换成
     TensorRT engine。predict()自己的预处理（resize+归一化）和后处理
     （sigmoid+topk解码为检测框）完全不用动——它们只是调用
     `self.model.model(batch_tensor)` 拿到 {"pred_boxes":..., "pred_logits":...}，
     只要替身返回同样结构的dict，上层代码不用感知这里换了引擎。
+
+    缓存命中：直接同步替换，返回传入的rf_model（和原来一样快）。
+    缓存未命中：立刻原样返回rf_model（继续用PyTorch），把构建丢进后台队列——
+    构建时导出ONNX需要用 rf_model.export()，而rfdetr的export()会把模型本身
+    来回搬到CPU再搬回GPU，这和"正在被其他请求使用rf_model.model.model做推理"
+    会产生设备竞态；所以后台构建时用 rebuild_rf_model() 单独加载一份独立实例
+    专门用来导出，不碰正在服务的 rf_model，构建完成后只对 rf_model.model.model
+    做一次属性赋值（原子操作，不涉及设备搬动，安全）。
     任何一步失败都保留原始PyTorch网络，不影响正常推理。"""
-    from utils.trt_backend import TrtRunnerModule, build_generic_engine_if_needed, is_tensorrt_enabled
+    from utils.trt_backend import TrtRunnerModule, ensure_engine_async, is_tensorrt_enabled
 
     if not is_tensorrt_enabled():
         return rf_model
@@ -159,8 +169,9 @@ def _maybe_wrap_rfdetr_network_with_tensorrt(rf_model, weight_path: Path, device
 
     def _export(onnx_path: Path) -> None:
         _force_legacy_onnx_exporter()
+        export_source = rebuild_rf_model()
         output_dir = onnx_path.parent
-        rf_model.export(
+        export_source.export(
             output_dir=str(output_dir), simplify=False, opset_version=17,
             batch_size=1, verbose=False,
         )
@@ -171,10 +182,18 @@ def _maybe_wrap_rfdetr_network_with_tensorrt(rf_model, weight_path: Path, device
             onnx_path.unlink()
         exported.replace(onnx_path)
 
-    engine_path = build_generic_engine_if_needed(
-        "rfdetr_primary", weight_path, _export, prefer_fp16=True,
-    )
+    def _swap_in(engine_path: str) -> None:
+        try:
+            rf_model.model.model = TrtRunnerModule(
+                engine_path, input_name="input", output_names=["pred_boxes", "pred_logits"],
+            )
+            print("[RF-DETR] 后台构建完成，已热替换为 TensorRT engine 推理")
+        except Exception as exc:
+            print(f"[RF-DETR] 加载TensorRT engine失败，继续用PyTorch: {exc}")
+
+    engine_path = ensure_engine_async("rfdetr_primary", weight_path, _export, _swap_in, prefer_fp16=True)
     if engine_path is None:
+        # 缓存未命中：已经提交后台构建，这次先用PyTorch。
         return rf_model
     try:
         rf_model.model.model = TrtRunnerModule(
@@ -226,14 +245,27 @@ class RFDetrDetectionModel:
         if normalized_device:
             model_kwargs["device"] = normalized_device
         model_cls = RFDETRMedium if self.model_variant == "medium" else RFDETR2XLarge
-        try:
-            rf_model = model_cls(**model_kwargs)
-        except Exception as exc:
-            compat_kwargs = _drop_unknown_rfdet_kwargs(model_kwargs, exc)
-            if compat_kwargs is None:
-                raise
-            rf_model = model_cls(**compat_kwargs)
-        return _maybe_wrap_rfdetr_network_with_tensorrt(rf_model, self.model_path, normalized_device)
+
+        def _construct(kwargs: Dict[str, Any]):
+            try:
+                return model_cls(**kwargs)
+            except Exception as exc:
+                compat_kwargs = _drop_unknown_rfdet_kwargs(kwargs, exc)
+                if compat_kwargs is None:
+                    raise
+                return model_cls(**compat_kwargs)
+
+        rf_model = _construct(model_kwargs)
+
+        def rebuild_rf_model():
+            # 后台构建TensorRT engine要导出ONNX，rfdetr的export()会把模型来回
+            # 搬到CPU/GPU之间，不能用正在被其他请求使用的 rf_model；这里用一样
+            # 的构造参数单独加载一份独立实例，只给导出用。
+            return _construct(dict(model_kwargs))
+
+        return _maybe_wrap_rfdetr_network_with_tensorrt(
+            rf_model, self.model_path, normalized_device, rebuild_rf_model,
+        )
 
     def _build_class_map(self) -> Dict[int, str]:
         raw_names = getattr(self.model, "class_names", None)
