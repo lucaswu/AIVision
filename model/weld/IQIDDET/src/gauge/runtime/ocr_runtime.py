@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -74,9 +75,16 @@ class PaddleOCRSubprocessClient:
         if self.det_limit_type:
             cmd.extend(["--det-limit-type", str(self.det_limit_type)])
 
+        # worker 需要能 import gauge.*；不依赖调用方是否设置了 PYTHONPATH
+        env = os.environ.copy()
+        src_root = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = os.pathsep.join(
+            [src_root] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+        )
         self.process = subprocess.Popen(
             cmd,
             cwd=str(self.repo_root),
+            env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=None,
