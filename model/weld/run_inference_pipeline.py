@@ -63,6 +63,7 @@ if str(PROJECT_ROOT) not in sys.path:
 DEBUG_STEP = False
 
 from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
+from utils import cv_io  # noqa: E402
 from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
@@ -173,7 +174,7 @@ def _read_image_for_preprocessing(path: Path) -> Tuple[np.ndarray, bool]:
     if ext in DICOM_EXTS:
         return _read_dicom_for_conversion(path)
 
-    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    image = cv_io.imread(path, cv2.IMREAD_UNCHANGED)
     if image is None:
         raise RuntimeError(f"无法读取图像: {path}")
 
@@ -202,7 +203,7 @@ def _prepare_image_input(image_path: Path, prepared_root: Path) -> PreparedImage
     suffix_hash = hashlib.md5(str(image_path).encode("utf-8")).hexdigest()[:8]
     prepared_path = prepared_root / f"{image_path.stem}__src8__{suffix_hash}.png"
 
-    ok = cv2.imwrite(str(prepared_path), image_8)
+    ok = cv_io.imwrite(prepared_path, image_8)
     if not ok:
         raise RuntimeError(f"写入预处理 8bit 图像失败: {prepared_path}")
 

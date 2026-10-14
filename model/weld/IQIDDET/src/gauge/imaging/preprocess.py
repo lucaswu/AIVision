@@ -9,6 +9,8 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+from gauge.imaging import cv_io
+
 SUPPORTED_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
 
@@ -50,7 +52,7 @@ def collect_images(
 
 
 def load_image(path: Path) -> np.ndarray:
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    image = cv_io.imread(path, cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Failed to read image: {path}")
     return image

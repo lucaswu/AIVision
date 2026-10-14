@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+from utils import cv_io
+
 try:
     import matplotlib
     from matplotlib import font_manager
@@ -41,7 +43,7 @@ COLOR_PALETTE = [
 
 def load_image(image_path: Path) -> np.ndarray:
     """读取图像并标准化通道数"""
-    image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    image = cv_io.imread(image_path, cv2.IMREAD_UNCHANGED)
     if image is None:
         raise ValueError(f"无法读取图像: {image_path}")
     image = normalize_input_image(image)

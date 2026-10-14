@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import cv2
 import numpy as np
 
+from gauge.imaging import cv_io
 from gauge.imaging.geometry import box_points_to_bbox, is_usable_ocr_item
 from gauge.imaging.preprocess import ensure_dir
 from gauge.services.ocr.debug import build_ocr_item_debug_images, draw_ocr_on_roi
@@ -150,7 +151,7 @@ def save_debug_visualizations(
     ensure_dir(sample_dir)
 
     input_path = sample_dir / "input.png"
-    cv2.imwrite(str(input_path), image)
+    cv_io.imwrite(str(input_path), image)
 
     payload: Dict[str, Any] = {
         "status_vis_dir": str(sample_dir.relative_to(output_dir)),
@@ -159,10 +160,10 @@ def save_debug_visualizations(
 
     full_base = full_ocr_image if full_ocr_image is not None else image
     full_input_path = sample_dir / "full_ocr_input.png"
-    cv2.imwrite(str(full_input_path), full_base)
+    cv_io.imwrite(str(full_input_path), full_base)
     full_ocr_vis = draw_ocr_on_roi(full_base, full_ocr_result)
     full_ocr_vis_path = sample_dir / "full_ocr_result.png"
-    cv2.imwrite(str(full_ocr_vis_path), full_ocr_vis)
+    cv_io.imwrite(str(full_ocr_vis_path), full_ocr_vis)
 
     full_item_vis_rows: List[Dict[str, Any]] = []
     full_debug_rows = build_ocr_item_debug_images(full_base, full_ocr_result)
@@ -174,9 +175,9 @@ def save_debug_visualizations(
             crop_path = item_dir / f"crop_{crop_index:03d}.png"
             rec_input_path = item_dir / f"rec_input_{crop_index:03d}.png"
             rec_result_path = item_dir / f"rec_result_{crop_index:03d}.png"
-            cv2.imwrite(str(crop_path), row["crop_image"])
-            cv2.imwrite(str(rec_input_path), row["rec_input_image"])
-            cv2.imwrite(str(rec_result_path), row["rec_result_image"])
+            cv_io.imwrite(str(crop_path), row["crop_image"])
+            cv_io.imwrite(str(rec_input_path), row["rec_input_image"])
+            cv_io.imwrite(str(rec_result_path), row["rec_result_image"])
             full_item_vis_rows.append(
                 {
                     "crop_index": crop_index,
@@ -201,23 +202,23 @@ def save_debug_visualizations(
     if roi_info:
         roi_vis = build_roi_vis_image(image, roi_info)
         roi_vis_path = sample_dir / "ROI.png"
-        cv2.imwrite(str(roi_vis_path), roi_vis)
+        cv_io.imwrite(str(roi_vis_path), roi_vis)
         payload["roi_vis_path"] = str(roi_vis_path.relative_to(output_dir))
 
     if roi_image is not None:
         roi_image_path = sample_dir / "roi_image.png"
-        cv2.imwrite(str(roi_image_path), roi_image)
+        cv_io.imwrite(str(roi_image_path), roi_image)
         payload["roi_image_path"] = str(roi_image_path.relative_to(output_dir))
 
     if roi_gray is not None:
         roi_gray_path = sample_dir / "roi_gray.png"
-        cv2.imwrite(str(roi_gray_path), roi_gray)
+        cv_io.imwrite(str(roi_gray_path), roi_gray)
         payload["roi_gray_path"] = str(roi_gray_path.relative_to(output_dir))
 
     if roi_ocr_result is not None and roi_gray is not None:
         roi_ocr_vis = draw_ocr_on_roi(roi_gray, roi_ocr_result)
         roi_ocr_vis_path = sample_dir / "roi_ocr_result.png"
-        cv2.imwrite(str(roi_ocr_vis_path), roi_ocr_vis)
+        cv_io.imwrite(str(roi_ocr_vis_path), roi_ocr_vis)
         payload["roi_ocr_vis_path"] = str(roi_ocr_vis_path.relative_to(output_dir))
 
         roi_item_vis_rows: List[Dict[str, Any]] = []
@@ -230,9 +231,9 @@ def save_debug_visualizations(
                 crop_path = item_dir / f"crop_{crop_index:03d}.png"
                 rec_input_path = item_dir / f"rec_input_{crop_index:03d}.png"
                 rec_result_path = item_dir / f"rec_result_{crop_index:03d}.png"
-                cv2.imwrite(str(crop_path), row["crop_image"])
-                cv2.imwrite(str(rec_input_path), row["rec_input_image"])
-                cv2.imwrite(str(rec_result_path), row["rec_result_image"])
+                cv_io.imwrite(str(crop_path), row["crop_image"])
+                cv_io.imwrite(str(rec_input_path), row["rec_input_image"])
+                cv_io.imwrite(str(rec_result_path), row["rec_result_image"])
                 roi_item_vis_rows.append(
                     {
                         "crop_index": crop_index,
@@ -248,7 +249,7 @@ def save_debug_visualizations(
     if wire_result is not None and roi_image is not None:
         wire_vis = build_wire_vis_image(roi_image, wire_result)
         wire_vis_path = sample_dir / "wire_result.png"
-        cv2.imwrite(str(wire_vis_path), wire_vis)
+        cv_io.imwrite(str(wire_vis_path), wire_vis)
         payload["wire_vis_path"] = str(wire_vis_path.relative_to(output_dir))
 
     if visualization:
@@ -260,7 +261,7 @@ def save_debug_visualizations(
             wire_count=wire_count,
         )
         final_result_path = sample_dir / "finalresult.png"
-        cv2.imwrite(str(final_result_path), final_result_vis)
+        cv_io.imwrite(str(final_result_path), final_result_vis)
         payload["final_result_vis_path"] = str(final_result_path.relative_to(output_dir))
 
     return payload
