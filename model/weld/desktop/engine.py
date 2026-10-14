@@ -138,6 +138,9 @@ class InferenceEngine:
     def gpu(self) -> GpuInfo:
         return self._gpu
 
+    def set_log(self, log: LogFn) -> None:
+        self._log = log
+
     def log(self, msg: str) -> None:
         self._log(msg)
 

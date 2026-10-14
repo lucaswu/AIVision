@@ -1,0 +1,50 @@
+# AIVision 桌面版（Windows / Linux 直接运行 Python）
+# 在 requirements.txt 的基础上：不需要 fastapi/uvicorn/httpx/cryptography 等服务端依赖，增加 PyQt6。
+#
+# 安装顺序（Windows，Python 3.10）：
+#   1) pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#   2) pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+#   3) pip install -r requirements-desktop.txt
+#   4) pip install --no-deps -r requirements-rfdetr-nodeps.txt
+# 注意：torch 与 paddle 在 Windows 同环境共存需先验证（见 docs/pyqt-desktop-inference-plan.md 阶段 0）。
+
+PyQt6>=6.6
+
+ultralytics==8.4.167
+transformers==4.46.2
+peft==0.19.1
+supervision==0.27.0
+pycocotools==2.0.11
+polygraphy==0.53.6
+pillow-avif-plugin==1.5.5
+pi-heif==1.2.0
+filetype==1.2.0
+python-dotenv==1.2.1
+requests-toolbelt==1.0.0
+matplotlib==3.8.4
+
+opencv-python==4.13.0.92
+opencv-contrib-python==4.10.0.84
+Pillow==12.1.1
+scikit-image==0.25.2
+pydicom==3.0.2
+
+numpy==2.2.6
+scipy==1.15.3
+pandas==2.3.3
+scikit-learn==1.7.2
+tqdm==4.65.2
+PyYAML==6.0.2
+numba==0.63.1
+
+pydantic==2.12.5
+
+paddleocr==3.4.0
+paddlex==3.4.2
+dill==0.4.1
+
+# 可选：TensorRT 加速（桌面版默认关闭，设置环境变量 INFERENCE_USE_TENSORRT=true 启用）
+# tensorrt==11.3.0.99
+# onnx==1.18.0
+# onnxruntime-gpu==1.22.0
+# nvidia-modelopt[onnx]==0.33.0
