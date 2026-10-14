@@ -6,7 +6,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-import selectors
+import queue
 import subprocess
 import sys
 import threading
@@ -27,6 +27,7 @@ class PaddleOCRSubprocessClient:
         rec_model_name: str = "en_PP-OCRv5_mobile_rec",
         rec_model_dir: Optional[str] = None,
         python_bin: Optional[str] = None,
+        worker_script: Optional[str] = None,
         det_limit_side_len: Optional[int] = None,
         det_limit_type: Optional[str] = None,
         startup_timeout_s: float = 120.0,
@@ -43,8 +44,13 @@ class PaddleOCRSubprocessClient:
         self.startup_timeout_s = float(startup_timeout_s)
         self.request_timeout_s = float(request_timeout_s)
         self.repo_root = Path(__file__).resolve().parents[3]
-        self.worker_script = Path(__file__).resolve().parent / "ocr_paddle_worker.py"
+        self.worker_script = (
+            Path(worker_script) if worker_script else Path(__file__).resolve().parent / "ocr_paddle_worker.py"
+        )
         self.process: Optional[subprocess.Popen[str]] = None
+        # stdout lines are pumped into a queue by a reader thread so that the
+        # timeout works on every platform (selectors cannot watch pipes on Windows).
+        self._stdout_queue: Optional["queue.Queue[str]"] = None
         self._lock = threading.Lock()
         self._start()
 
@@ -77,22 +83,35 @@ class PaddleOCRSubprocessClient:
             text=True,
             bufsize=1,
         )
+        self._stdout_queue = queue.Queue()
+        threading.Thread(
+            target=self._pump_stdout,
+            args=(self.process.stdout, self._stdout_queue),
+            name="ocr-worker-stdout",
+            daemon=True,
+        ).start()
         ready = self._read_response(timeout_s=self.startup_timeout_s)
         if not ready.get("ok"):
             raise RuntimeError(f"OCR worker failed to start: {ready.get('error', 'unknown error')}")
 
-    def _readline_with_timeout(self, timeout_s: float) -> str:
-        if self.process is None or self.process.stdout is None:
-            raise RuntimeError("OCR worker stdout is not available.")
-        selector = selectors.DefaultSelector()
-        selector.register(self.process.stdout, selectors.EVENT_READ)
+    @staticmethod
+    def _pump_stdout(stream, out_queue: "queue.Queue[str]") -> None:
+        """Forward worker stdout lines to the queue; an empty string signals EOF."""
         try:
-            events = selector.select(timeout=float(timeout_s))
-            if not events:
-                raise TimeoutError("OCR worker response timed out")
-            return self.process.stdout.readline()
+            for line in iter(stream.readline, ""):
+                out_queue.put(line)
+        except Exception:
+            pass
         finally:
-            selector.close()
+            out_queue.put("")
+
+    def _readline_with_timeout(self, timeout_s: float) -> str:
+        if self.process is None or self._stdout_queue is None:
+            raise RuntimeError("OCR worker stdout is not available.")
+        try:
+            return self._stdout_queue.get(timeout=float(timeout_s))
+        except queue.Empty:
+            raise TimeoutError("OCR worker response timed out") from None
 
     def _read_response(self, timeout_s: Optional[float] = None) -> Dict[str, Any]:
         timeout = self.request_timeout_s if timeout_s is None else float(timeout_s)
