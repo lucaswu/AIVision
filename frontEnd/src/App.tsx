@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import AppHeader from "./components/AppHeader";
 import ProjectList from "./pages/ProjectList";
 import UserManagement from "./pages/UserManagement";
+import ModelManagement from "./pages/ModelManagement";
 import UserAddEdit from "./pages/UserAddEdit";
 import ProjectDetail from "./pages/ProjectDetail";
 import CreateProject from "./pages/CreateProject";
@@ -199,6 +200,10 @@ function AppContent() {
                               <Route
                                 path="/users"
                                 element={<UserManagement />}
+                              />
+                              <Route
+                                path="/models"
+                                element={<ModelManagement />}
                               />
                               <Route
                                 path="/users/add"
