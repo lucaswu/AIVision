@@ -51,3 +51,4 @@ class InferenceWorker(QThread):
             self.done.emit(summary)
         except Exception as exc:
             self.failed.emit(f"{type(exc).__name__}: {exc}")
+

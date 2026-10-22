@@ -247,3 +247,12 @@ model/weld/
 - 1.5GB 主模型加载时间 + 多模型显存占用 → 功能开关、启动时显示加载进度。
 - 容器内长期验证过的版本组合（TensorRT 11.3 / modelopt 等）在 Windows 上未验证 → 首期不启用 TensorRT。
 - 现有测试大多针对 Linux/Docker，Windows 无回归保障 → 阶段 2 用"同批图与 Docker 结果逐字段对比"作为验收基线。
+
+---
+
+## 8. 竞赛专项适配（2026年无损检测射线AI大赛）
+
+针对《2026年全国无损检测射线AI智能评片技能大赛》的专项技术方案、评定规则引擎设计及待办工作清单，详见：
+👉 **[`competition-implementation-plan.md`](competition-implementation-plan.md)**
+（包含 NB/T 47013.2-2015 评定引擎、0.042mm 像素折算、影像查重、最左 X 定位与标准 Excel 导出的完整实施分解）
+

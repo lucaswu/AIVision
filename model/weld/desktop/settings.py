@@ -25,6 +25,16 @@ class UiSettings:
     location2_conf: float = 0.25
     enable_iqi: bool = True
     save_annotated: bool = True
+    enable_competition: bool = False
+    competition_default_spec: str = ""
+    competition_info_table: str = ""  # 《影像信息表》.xlsx/.xls/.csv，或逐图规格 JSON
+    competition_fast: bool = True
+    competition_strict_pipe_table26: bool = False
+    competition_split_pores: bool = False
+    competition_merge_gap_mm: float = 2.0
+    competition_intermittent_length: str = "envelope"
+    competition_report_plate_root: bool = False  # 默认不填报板上的根部内凹/咬边
+    competition_deadline_min: float = 37.0
     models: Dict[str, str] = field(default_factory=dict)  # 仅保存与默认值不同的项
 
     @classmethod

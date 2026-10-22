@@ -49,6 +49,18 @@ class RunConfig:
     save_annotated: bool = True
     task_name: str = ""                     # 为空则用时间戳
     models: Dict[str, str] = field(default_factory=dict)  # ModelPaths 覆盖项
+    # 竞赛评定（缺陷定位/定性/定量/NB/T 47013.2 评级），结果写 competition_results.json
+    enable_competition: bool = False
+    competition_default_spec: str = ""      # 所有影像共用的规格，如 "20" / "Φ89×6"
+    competition_specs: Dict[str, str] = field(default_factory=dict)  # 文件名或编号 → 规格，优先于影像信息表
+    competition_info_table: str = ""        # 《影像信息表》.xlsx/.xls/.csv/.json
+    competition_fast: bool = True           # 竞赛提速：关闭 IQI/OCR、焊缝位置检测、灰度值，8bit 图不落盘
+    competition_strict_pipe_table26: bool = False  # 大中径管根部缺陷严格按表 26 分 Ⅱ/Ⅲ/Ⅳ（默认按规则（9））
+    competition_split_pores: bool = False   # 圆形缺陷框内精细拆分（需保留原始高位图，实验功能）
+    competition_merge_gap_mm: float = 2.0   # 断续未熔合/未焊透/纵向裂纹：间隔 ≤ 该值合并为一个缺陷
+    competition_intermittent_length: str = "envelope"  # envelope（含间隔）| sum（各段之和）
+    competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
+    competition_deadline_min: float = 0.0   # >0：从开始计时到该分钟数仍未处理的影像按无缺陷兜底并导出
 
 
 @dataclass
@@ -61,6 +73,8 @@ class ImageOutcome:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     annotated_path: Optional[str] = None
+    competition: Optional[Dict[str, Any]] = None  # ImageEvaluation.to_dict()
+    timed_out: bool = False                       # 竞赛截止时间已到，未推理
 
 
 @dataclass
@@ -71,6 +85,8 @@ class RunSummary:
     failed: int
     cancelled: bool
     elapsed_s: float
+    answers_path: Optional[str] = None  # 竞赛答案 xlsx（或 csv）
+    timed_out: int = 0
 
 
 @dataclass
@@ -176,6 +192,7 @@ class InferenceEngine:
             self.log(f"[引擎] 设备 {cfg.device} 不可用，改用 {device}")
         gauge_device = device
         exists = lambda p: bool(p) and os.path.exists(p)  # noqa: E731
+        fast = cfg.enable_competition and cfg.competition_fast
 
         return argparse.Namespace(
             image_dir=None, file_list=str(file_list), output_dir=str(output_dir),
@@ -186,13 +203,13 @@ class InferenceEngine:
             device=device, det_device=device, wide_slice=bool(cfg.wide_slice),
             enable_correction=bool(cfg.enable_correction and exists(models.correction_model)),
             correction_model=models.correction_model, correction_verbose=False, save_corrected_dir=None,
-            enable_location=bool(cfg.enable_location and exists(models.location_model)),
+            enable_location=bool(cfg.enable_location and not fast and exists(models.location_model)),
             location_model=models.location_model, location_conf=cfg.location_conf,
             location_verbose=False, save_location_dir=None,
-            enable_location2=bool(cfg.enable_location2 and exists(models.location2_model)),
+            enable_location2=bool(cfg.enable_location2 and not fast and exists(models.location2_model)),
             location2_model=models.location2_model, location2_conf=cfg.location2_conf,
             location2_verbose=False, save_location2_dir=None,
-            enable_iqi=bool(cfg.enable_iqi), iqi_results_json="iqi_grade_results.json",
+            enable_iqi=bool(cfg.enable_iqi and not fast), enable_density=not fast, iqi_results_json="iqi_grade_results.json",
             gauge_weights=models.gauge_weights, gauge_conf=0.25, gauge_iou=0.45, gauge_imgsz=640,
             gauge_device=gauge_device, gauge_select="conf",
             fclip_ckpt=models.fclip_ckpt, fclip_config=models.fclip_config,
@@ -311,6 +328,10 @@ class InferenceEngine:
         file_list = out_dir / "input_files.txt"
         file_list.write_text("\n".join(str(p) for p, _ in items), encoding="utf-8")
         args = self._build_args(cfg, out_dir, file_list)
+        if cfg.enable_competition:
+            self._prepare_competition(cfg)
+            if cfg.competition_fast:
+                self.log("[竞赛] 提速模式：已关闭 IQI/OCR、焊缝位置检测与灰度值计算")
 
         progress(0, total, "", "initializing")
         sink = _LineSink(self.log)
@@ -338,16 +359,32 @@ class InferenceEngine:
 
         results: List[Dict[str, Any]] = []
         errors: List[Dict[str, str]] = []
+        evaluations: Optional[List[Dict[str, Any]]] = [] if cfg.enable_competition else None
+        failures: Dict[str, str] = {}
         used_names: Dict[str, int] = {}
         was_cancelled = False
+        deadline = started + cfg.competition_deadline_min * 60 if (
+            cfg.enable_competition and cfg.competition_deadline_min > 0) else None
+        in_memory = runner.iqi_inferencer is None
+        self._keep_raw = cfg.enable_competition and cfg.competition_split_pores
+        timed_out = 0
 
         try:
             for idx, (src, rel) in enumerate(items):
                 if cancelled():
                     was_cancelled = True
                     break
+                if deadline is not None and time.time() >= deadline:
+                    timed_out = total - idx
+                    self.log(f"[竞赛] 已到截止时间 {cfg.competition_deadline_min:g} 分钟，剩余 {timed_out} 幅按无缺陷兜底")
+                    for j, (s2, r2) in enumerate(items[idx:], start=idx):
+                        failures[s2.name] = "超时未推理，兜底"
+                        if on_result:
+                            on_result(ImageOutcome(j, total, str(s2), str(r2), False, error="超时未推理",
+                                                   timed_out=True))
+                    break
                 progress(idx, total, src.name, "running")
-                outcome = self._run_one(rip, runner, src, rel, idx, total, prepared_root)
+                outcome = self._run_one(rip, runner, src, rel, idx, total, prepared_root, in_memory)
                 if outcome.ok and cfg.save_annotated:
                     try:
                         from . import render
@@ -357,24 +394,39 @@ class InferenceEngine:
                         )
                     except Exception as exc:
                         self.log(f"[警告] 标注图生成失败 ({src.name}): {exc}")
+                raw_image = outcome.result.pop("_raw_corrected", None) if outcome.ok else None
+                if outcome.ok and evaluations is not None:
+                    outcome.competition = self._evaluate_competition(cfg, outcome.result, src, rel, raw_image)
+                    if outcome.competition is not None:
+                        evaluations.append(outcome.competition)
+                del raw_image
                 if outcome.ok:
                     results.append(outcome.result)
                 else:
                     errors.append({"image": str(src), "error": outcome.error or "unknown"})
+                    failures[src.name] = "推理失败，兜底"
                 if on_result:
                     on_result(outcome)
                 progress(idx + 1, total, src.name, "running")
         finally:
             self._write_outputs(rip, args, runner, out_dir, results, errors)
+            elapsed = time.time() - started
+            answers = None
+            if evaluations is not None:
+                self._write_competition(out_dir, evaluations)
+                answers = self._export_answers(cfg, out_dir, evaluations, items, failures, elapsed)
             shutil.rmtree(prepared_root, ignore_errors=True)
 
         progress(total if not was_cancelled else len(results) + len(errors), total, "",
                  "cancelled" if was_cancelled else "completed")
-        return RunSummary(str(out_dir), total, len(results), len(errors), was_cancelled, time.time() - started)
+        return RunSummary(str(out_dir), total, len(results), len(errors), was_cancelled, elapsed,
+                          answers_path=answers, timed_out=timed_out)
 
-    def _run_one(self, rip, runner, src: Path, rel: Path, idx: int, total: int, prepared_root: Path) -> ImageOutcome:
+    def _run_one(self, rip, runner, src: Path, rel: Path, idx: int, total: int, prepared_root: Path,
+                 in_memory: bool = False) -> ImageOutcome:
         try:
-            image_input = rip._prepare_image_input(src, prepared_root)
+            image_input = rip._prepare_image_input(src, prepared_root, in_memory=in_memory,
+                                                   keep_raw=getattr(self, "_keep_raw", False))
         except Exception as exc:
             return ImageOutcome(idx, total, str(src), str(rel), False, error=f"读取/预处理失败: {exc}")
 
@@ -392,6 +444,85 @@ class InferenceEngine:
             warn = [s for s in captured if "[警告]" in s] or captured[-3:]
             return ImageOutcome(idx, total, str(src), str(rel), False, error=" | ".join(warn)[:500] or "推理失败")
         return ImageOutcome(idx, total, str(src), str(rel), True, result=out[0])
+
+    def _prepare_competition(self, cfg: RunConfig) -> None:
+        """读取《影像信息表》；逐图规格（competition_specs）优先于信息表。"""
+        from competition import info_table
+
+        self._info_rows = []
+        self._spec_lookup = dict(cfg.competition_specs or {})
+        if cfg.competition_info_table:
+            rows = info_table.load_info_table(cfg.competition_info_table)
+            bad = info_table.validate(rows)
+            if bad:
+                self.log("[警告] 影像信息表中以下规格无法解析：" + "；".join(bad[:20]))
+            self._info_rows = rows
+            self._spec_lookup = {**info_table.spec_map(rows), **self._spec_lookup}
+            self.log(f"[竞赛] 影像信息表：{len(rows)} 行")
+
+    def _export_answers(self, cfg: RunConfig, out_dir: Path, evaluations, items, failures,
+                        elapsed: float) -> Optional[str]:
+        from competition.exporter import export_answers, time_score
+
+        try:
+            res = export_answers(out_dir, evaluations, [src.name for src, _ in items],
+                                 getattr(self, "_info_rows", []), failures)
+        except Exception as exc:
+            self.log(f"[错误] 竞赛答案导出失败: {exc}")
+            return None
+        for msg in res.issues[:50]:
+            self.log(f"[答案检查] {msg}")
+        path = str(res.xlsx_path or res.csv_path)
+        self.log(f"[竞赛] 答案已导出：{path}（{res.images} 幅 / {res.rows} 行）；用时 {elapsed / 60:.1f} 分钟，"
+                 f"按 40 分钟估计时间分 B={time_score(elapsed):.2f}")
+        return path
+
+    def _spec_for(self, cfg: RunConfig, src: Path, rel: Path) -> str:
+        specs = getattr(self, "_spec_lookup", None) or cfg.competition_specs or {}
+        for key in (str(rel), rel.as_posix(), src.name, src.stem):
+            if key in specs and str(specs[key]).strip():
+                return str(specs[key])
+        return cfg.competition_default_spec
+
+    @staticmethod
+    def competition_eval_config(cfg: RunConfig):
+        from competition import EvalConfig
+
+        return EvalConfig(
+            pipe_root_strict_table26=cfg.competition_strict_pipe_table26,
+            split_round_clusters=cfg.competition_split_pores,
+            intermittent_merge_gap_mm=cfg.competition_merge_gap_mm,
+            intermittent_length_mode=cfg.competition_intermittent_length,
+            plate_root_defects=cfg.competition_plate_root,
+        )
+
+    def _evaluate_competition(self, cfg: RunConfig, result: Dict[str, Any], src: Path,
+                              rel: Path, image=None) -> Optional[Dict[str, Any]]:
+        """单张评定失败只记日志，不影响推理结果。"""
+        from competition import evaluate_image
+
+        spec = self._spec_for(cfg, src, rel)
+        if not str(spec).strip():
+            self.log(f"[警告] 竞赛评定跳过 ({src.name}): 未提供规格")
+            return None
+        try:
+            evaluation = evaluate_image(result, spec, self.competition_eval_config(cfg), image=image)
+        except Exception as exc:
+            self.log(f"[警告] 竞赛评定失败 ({src.name}): {exc}")
+            return None
+        data = evaluation.to_dict()
+        data["rel_path"] = str(rel)
+        for msg in evaluation.warnings:
+            self.log(f"[评定] {src.name}: {msg}")
+        return data
+
+    @staticmethod
+    def _write_competition(out_dir: Path, evaluations: List[Dict[str, Any]]) -> None:
+        from competition.evaluator import PIXEL_SIZE_MM
+
+        payload = {"schema": "competition_eval_v1", "pixel_size_mm": PIXEL_SIZE_MM, "results": evaluations}
+        (out_dir / "competition_results.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @staticmethod
     def _annotated_path(out_dir: Path, rel: Path, used: Dict[str, int]) -> Path:
@@ -460,6 +591,9 @@ class InferenceEngine:
             "effective": {k: getattr(args, k) for k in (
                 "mode", "device", "primary_conf", "wide_slice", "enable_correction", "enable_location",
                 "location_conf", "enable_location2", "location2_conf", "enable_iqi")},
+            "competition": {"enabled": cfg.enable_competition, "default_spec": cfg.competition_default_spec,
+                            "eval_config": asdict(self.competition_eval_config(cfg)),
+                            "per_image_specs": len(cfg.competition_specs or {})},
             "models": {k: {"path": v, "file": fingerprint(v)} for k, v in models.items()},
             "gpu": asdict(self._gpu),
             "env": {"python": sys.version.split()[0], "torch": torch_ver, "platform": sys.platform},

@@ -17,7 +17,7 @@ import json
 import sys
 import os
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -64,7 +64,7 @@ DEBUG_STEP = False
 
 from convert.pj.yolo_roi_extractor import WeldROIDetector  # noqa: E402
 from utils import cv_io  # noqa: E402
-from utils.pipeline_utils import FontRenderer, load_image  # noqa: E402
+from utils.pipeline_utils import FontRenderer, ensure_color, load_image, normalize_input_image  # noqa: E402
 from utils import detection_pipeline as rfdet_pipeline  # noqa: E402
 from utils.weld_correction import WeldOrientationCorrector  # noqa: E402
 from utils.weld_locaiont_0 import WeldSeamLocator, DEFAULT_LOCATION_MODEL_PATH, compute_grayscale_density_with_regions as compute_grayscale_loc0  # noqa: E402
@@ -116,6 +116,10 @@ class PreparedImageInput:
     original_path: Path
     processing_path: Path
     converted_to_8bit: bool = False
+    # in_memory 预处理时的 8bit BGR 图（不写盘）；为 None 时从 processing_path 读取
+    image: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
+    # keep_raw 时保留的原始高位灰度图（float32，极性与 8bit 图一致），供框内精细测量
+    raw: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
 
 
 def _normalize_to_uint8(image: np.ndarray,
@@ -193,12 +197,27 @@ def _needs_8bit_conversion(path: Path, image: np.ndarray) -> bool:
     return image.dtype != np.uint8
 
 
-def _prepare_image_input(image_path: Path, prepared_root: Path) -> PreparedImageInput:
+def _raw_gray(image: np.ndarray, invert: bool) -> np.ndarray:
+    gray = image.astype(np.float32)
+    if gray.ndim == 3:
+        gray = gray[:, :, :3].mean(axis=2)
+    return _invert_density_image(gray) if invert else gray
+
+
+def _prepare_image_input(image_path: Path, prepared_root: Path, in_memory: bool = False,
+                         keep_raw: bool = False) -> PreparedImageInput:
+    """in_memory=True 时 8bit 图直接随结果返回、不写 PNG（下游不需要文件路径时使用，如未启用 IQI）。
+    keep_raw=True 时附带原始高位灰度图（见 PreparedImageInput.raw）。"""
     image, invert = _read_image_for_preprocessing(image_path)
+    raw = _raw_gray(image, invert) if keep_raw else None
     if not _needs_8bit_conversion(image_path, image):
-        return PreparedImageInput(original_path=image_path, processing_path=image_path, converted_to_8bit=False)
+        return PreparedImageInput(original_path=image_path, processing_path=image_path, converted_to_8bit=False,
+                                  raw=raw)
 
     image_8 = _normalize_to_uint8(image, invert=invert)
+    if in_memory:
+        return PreparedImageInput(original_path=image_path, processing_path=image_path, converted_to_8bit=True,
+                                  image=ensure_color(normalize_input_image(image_8)), raw=raw)
     prepared_root.mkdir(parents=True, exist_ok=True)
     suffix_hash = hashlib.md5(str(image_path).encode("utf-8")).hexdigest()[:8]
     prepared_path = prepared_root / f"{image_path.stem}__src8__{suffix_hash}.png"
@@ -213,6 +232,7 @@ def _prepare_image_input(image_path: Path, prepared_root: Path) -> PreparedImage
         original_path=image_path,
         processing_path=prepared_path,
         converted_to_8bit=True,
+        raw=raw,
     )
 
 
@@ -527,7 +547,7 @@ class InferencePipelineRunner:
             try:
                 # 输入预处理：16bit / DICOM 先转换为 8bit，再进入后续既有流程
                 rois, weld_location, defect_position, width, height, correction_info, corrected_img = \
-                    self._process_image(processing_path)
+                    self._process_image(processing_path, preloaded=image_input.image)
                 label = correction_info.get('label', 0)
                 transform = LABEL_TO_FRONTEND_TRANSFORM.get(label, {"rotation": 0, "flip": False})
 
@@ -580,11 +600,12 @@ class InferencePipelineRunner:
                 grayscale_density: Optional[str] = None
                 grayscale_density_regions: List[Dict[str, Any]] = []
                 density_image = None
-                try:
-                    density_image = _load_density_image(image_path, label)
-                except Exception as density_exc:
-                    print(f"[警告] 原始灰度图加载失败，回退使用推理图 ({image_path.name}): {density_exc}")
-                    density_image = corrected_img
+                if getattr(self.args, "enable_density", True):
+                    try:
+                        density_image = _load_density_image(image_path, label)
+                    except Exception as density_exc:
+                        print(f"[警告] 原始灰度图加载失败，回退使用推理图 ({image_path.name}): {density_exc}")
+                        density_image = corrected_img
 
                 if density_image is not None:
                     try:
@@ -607,11 +628,14 @@ class InferencePipelineRunner:
                     "width": width,
                     "height": height,
                     "num_rois": len(rois),
-                    "preprocessed_path": str(processing_path) if image_input.converted_to_8bit else "",
+                    "preprocessed_path": (str(processing_path) if image_input.converted_to_8bit
+                                          and image_input.image is None else ""),
                     "correction": {
                         "label": label,
                         "rotation": transform["rotation"],
                         "flip": transform["flip"],
+                        "confidence": (float(correction_info["confidence"])
+                                       if correction_info.get("confidence") is not None else None),
                     },
                     "rois": rois,
                     "weld_location": weld_location,
@@ -620,6 +644,9 @@ class InferencePipelineRunner:
                     "grayscale_density": grayscale_density,
                     "grayscale_density_regions": grayscale_density_regions,
                 })
+                if image_input.raw is not None:
+                    # 与检测坐标系一致的高位灰度图；以 "_" 开头，调用方须在写 JSON 前取走
+                    results[-1]["_raw_corrected"] = _apply_correction_label(image_input.raw, label)
             except Exception as exc:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
 
@@ -661,8 +688,8 @@ class InferencePipelineRunner:
             return None
         return self.debug_root / image_path.stem
 
-    def _process_image(self, image_path: Path) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]], int, int, dict, Any]:
-        image = load_image(image_path)
+    def _process_image(self, image_path: Path, preloaded: Optional[np.ndarray] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]], int, int, dict, Any]:
+        image = preloaded if preloaded is not None else load_image(image_path)
         
         # 默认矫正信息（未进行矫正时使用）
         correction_info: dict = {'label': 0, 'corrected': False}
