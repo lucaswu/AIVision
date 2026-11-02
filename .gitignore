@@ -25,6 +25,7 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
+AIVision_Portable/
 
 # Installer logs
 pip-log.txt

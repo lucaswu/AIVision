@@ -30,19 +30,21 @@ namespace AIVisionLauncher
                 if (string.IsNullOrEmpty(weldDir) || !Directory.Exists(weldDir))
                 {
                     MessageBox.Show(
-                        "未能找到 AIVision 核心模块目录 (model/weld)。\n请确保程序放置在项目根目录或 model/weld 目录下。",
+                        "未能找到 AIVision 核心程序目录 (model/weld)。\n\n请确保解压或复制了完整的程序包。",
                         "AIVision 启动错误",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
                     return;
                 }
 
-                string pythonPath = FindPythonExecutable(weldDir);
+                string pythonPath = FindPythonExecutable(exeDir, weldDir);
                 if (string.IsNullOrEmpty(pythonPath))
                 {
                     MessageBox.Show(
-                        "未找到合适的 Python 环境 (需要包含 PyTorch/PyQt6 的环境，如 py11)。\n\n请确认已安装 Conda 环境并命名为 py11，或在系统环境变量中配置 Python。",
-                        "AIVision 环境缺失",
+                        "未检测到运行依赖环境。\n\n" +
+                        "1. 如果是便携发布包，请确保 runtime/ 目录已随程序一同复制。\n" +
+                        "2. 如果是开发调试，请确认系统已安装 py11 环境。",
+                        "AIVision 依赖缺失",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                     return;
@@ -62,19 +64,19 @@ namespace AIVisionLauncher
 
         static string FindWeldDirectory(string startDir)
         {
-            // 候选 1: 当前目录即 weld 目录
+            // 1. 同级目录即 weld 目录
             if (File.Exists(Path.Combine(startDir, "desktop", "app.py")))
                 return startDir;
 
-            // 候选 2: 当前目录是根目录，model/weld 在子目录
+            // 2. 子目录 model/weld
             string subWeld = Path.Combine(startDir, "model", "weld");
             if (File.Exists(Path.Combine(subWeld, "desktop", "app.py")))
                 return subWeld;
 
-            // 候选 3: 上级目录中的 model/weld
+            // 3. 上级目录或项目根目录查找
             try
             {
-                string parent = Path.GetDirectoryName(Path.GetDirectoryName(startDir.TrimEnd(Path.DirectorySeparatorChar)));
+                string parent = Path.GetDirectoryName(startDir.TrimEnd(Path.DirectorySeparatorChar));
                 if (!string.IsNullOrEmpty(parent))
                 {
                     string parentWeld = Path.Combine(parent, "model", "weld");
@@ -84,42 +86,52 @@ namespace AIVisionLauncher
             }
             catch { }
 
-            // 备选固定绝对路径
-            if (Directory.Exists(@"I:\项目\AIVision\model\weld"))
+            // 4. 开发机绝对路径备用
+            if (Directory.Exists(@"I:\项目\AIVision\model\weld") && File.Exists(@"I:\项目\AIVision\model\weld\desktop\app.py"))
                 return @"I:\项目\AIVision\model\weld";
 
             return null;
         }
 
-        static string FindPythonExecutable(string weldDir)
+        static string FindPythonExecutable(string exeDir, string weldDir)
         {
-            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var candidates = new List<string>
+            // 最高优先级：便携包自包含独立环境 (无论拷到哪台电脑都自成一体)
+            var portableCandidates = new List<string>
             {
-                // 1. 本机专门配置的 py11 环境（包含完整 PyTorch GPU/CUDA/Paddle）
-                @"C:\Users\lucas\.conda\envs\py11\python.exe",
-                Path.Combine(userProfile, @".conda\envs\py11\python.exe"),
-                Path.Combine(userProfile, @"miniconda3\envs\py11\python.exe"),
-                Path.Combine(userProfile, @"anaconda3\envs\py11\python.exe"),
-
-                // 2. 项目内嵌的独立运行包（如有）
-                Path.Combine(weldDir, @"python\python.exe"),
+                Path.Combine(exeDir, @"runtime\python.exe"),
+                Path.Combine(exeDir, @"env\python.exe"),
+                Path.Combine(exeDir, @"python\python.exe"),
+                Path.Combine(weldDir, @"runtime\python.exe"),
                 Path.Combine(weldDir, @"env\python.exe"),
-                Path.Combine(weldDir, @"py11\python.exe"),
-
-                // 3. 环境变量中的 CONDA_PREFIX
-                Environment.GetEnvironmentVariable("CONDA_PREFIX") != null
-                    ? Path.Combine(Environment.GetEnvironmentVariable("CONDA_PREFIX"), "python.exe")
-                    : null
+                Path.Combine(weldDir, @"python\python.exe"),
             };
 
-            foreach (var path in candidates)
+            foreach (var path in portableCandidates)
             {
                 if (!string.IsNullOrEmpty(path) && File.Exists(path))
                     return path;
             }
 
-            // 4. 扫描注册表或 where python
+            // 次优先级：原开发机上的 Conda py11 环境
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var condaCandidates = new List<string>
+            {
+                @"C:\Users\lucas\.conda\envs\py11\python.exe",
+                Path.Combine(userProfile, @".conda\envs\py11\python.exe"),
+                Path.Combine(userProfile, @"miniconda3\envs\py11\python.exe"),
+                Path.Combine(userProfile, @"anaconda3\envs\py11\python.exe"),
+                Environment.GetEnvironmentVariable("CONDA_PREFIX") != null
+                    ? Path.Combine(Environment.GetEnvironmentVariable("CONDA_PREFIX"), "python.exe")
+                    : null
+            };
+
+            foreach (var path in condaCandidates)
+            {
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                    return path;
+            }
+
+            // 最低优先级：系统 PATH 中的 python
             string wherePath = GetCommandOutput("where python");
             if (!string.IsNullOrEmpty(wherePath))
             {
@@ -161,14 +173,24 @@ namespace AIVisionLauncher
 
         static void LaunchApplication(string pythonPath, string weldDir, string[] args)
         {
+            string pythonDir = Path.GetDirectoryName(pythonPath);
             string iqidDetSrc = Path.Combine(weldDir, "IQIDDET", "src");
             string iqidDet = Path.Combine(weldDir, "IQIDDET");
-            string extraPath = string.Format("{0};{1};{2}", iqidDetSrc, iqidDet, weldDir);
+            string extraPythonPath = string.Format("{0};{1};{2}", iqidDetSrc, iqidDet, weldDir);
 
             string currentPythonPath = Environment.GetEnvironmentVariable("PYTHONPATH") ?? "";
             string newPythonPath = string.IsNullOrEmpty(currentPythonPath)
-                ? extraPath
-                : extraPath + ";" + currentPythonPath;
+                ? extraPythonPath
+                : extraPythonPath + ";" + currentPythonPath;
+
+            // 确保自包含环境的 DLL 和 Scripts 处于系统 PATH 最前端，确保 CUDA / Qt 加载无误
+            string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            string runtimePaths = string.Format("{0};{1};{2};{3}",
+                pythonDir,
+                Path.Combine(pythonDir, "Scripts"),
+                Path.Combine(pythonDir, "Library", "bin"),
+                Path.Combine(pythonDir, "Lib", "site-packages", "torch", "lib"));
+            string newPath = runtimePaths + ";" + currentPath;
 
             StringBuilder argBuilder = new StringBuilder();
             argBuilder.Append("-m desktop.app");
@@ -193,6 +215,7 @@ namespace AIVisionLauncher
             psi.EnvironmentVariables["PYTHONUTF8"] = "1";
             psi.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
             psi.EnvironmentVariables["PYTHONPATH"] = newPythonPath;
+            psi.EnvironmentVariables["PATH"] = newPath;
 
             DateTime startTime = DateTime.Now;
             StringBuilder errorOutput = new StringBuilder();
@@ -214,13 +237,11 @@ namespace AIVisionLauncher
                 process.Start();
                 process.BeginErrorReadLine();
 
-                // 等待进程结束
                 process.WaitForExit();
 
                 TimeSpan runDuration = DateTime.Now - startTime;
                 int exitCode = process.ExitCode;
 
-                // 如果退出码非 0，且在短时间内崩溃，弹出错误提示
                 if (exitCode != 0 && runDuration.TotalSeconds < 30)
                 {
                     string errors = errorOutput.ToString().Trim();

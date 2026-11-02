@@ -7,3 +7,4 @@ oLink.IconLocation = "I:\项目\AIVision\model\weld\launcher\app.ico, 0"
 oLink.Description = "AIVision Weld Defect Inspection System"
 oLink.Save
 WScript.Echo "Shortcut created at: " & sLinkFile
+
