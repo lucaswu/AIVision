@@ -61,6 +61,12 @@ class RunConfig:
     competition_intermittent_length: str = "envelope"  # envelope（含间隔）| sum（各段之和）
     competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
     competition_deadline_min: float = 0.0   # >0：从开始计时到该分钟数仍未处理的影像按无缺陷兜底并导出
+    # 远洋在线评分系统 (http://www.farain.com:3030/testing/ai/ray/submit)
+    student_name: str = ""                  # 学员姓名
+    student_password: str = ""              # 考核号
+    changci: str = ""                       # 场次号
+    submit_farain_online: bool = False      # 是否在导出后自动提交至远洋评分服务器
+    submit_farain_url: str = "http://www.farain.com:3030/testing/ai/ray/submit"
 
 
 @dataclass
@@ -86,6 +92,8 @@ class RunSummary:
     cancelled: bool
     elapsed_s: float
     answers_path: Optional[str] = None  # 竞赛答案 xlsx（或 csv）
+    submission_json_path: Optional[str] = None  # 远洋评分系统标准 JSON 提交文件 (U盘离线交付备用)
+    submit_response: Optional[Dict[str, Any]] = None  # 在线提交响应
     timed_out: int = 0
 
 
@@ -411,16 +419,17 @@ class InferenceEngine:
         finally:
             self._write_outputs(rip, args, runner, out_dir, results, errors)
             elapsed = time.time() - started
-            answers = None
+            answers, json_path, submit_resp = None, None, None
             if evaluations is not None:
                 self._write_competition(out_dir, evaluations)
-                answers = self._export_answers(cfg, out_dir, evaluations, items, failures, elapsed)
+                answers, json_path, submit_resp = self._export_answers(cfg, out_dir, evaluations, items, failures, elapsed)
             shutil.rmtree(prepared_root, ignore_errors=True)
 
         progress(total if not was_cancelled else len(results) + len(errors), total, "",
                  "cancelled" if was_cancelled else "completed")
         return RunSummary(str(out_dir), total, len(results), len(errors), was_cancelled, elapsed,
-                          answers_path=answers, timed_out=timed_out)
+                          answers_path=answers, submission_json_path=json_path,
+                          submit_response=submit_resp, timed_out=timed_out)
 
     def _run_one(self, rip, runner, src: Path, rel: Path, idx: int, total: int, prepared_root: Path,
                  in_memory: bool = False) -> ImageOutcome:
@@ -461,21 +470,44 @@ class InferenceEngine:
             self.log(f"[竞赛] 影像信息表：{len(rows)} 行")
 
     def _export_answers(self, cfg: RunConfig, out_dir: Path, evaluations, items, failures,
-                        elapsed: float) -> Optional[str]:
+                        elapsed: float) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
         from competition.exporter import export_answers, time_score
 
         try:
             res = export_answers(out_dir, evaluations, [src.name for src, _ in items],
-                                 getattr(self, "_info_rows", []), failures)
+                                 getattr(self, "_info_rows", []), failures,
+                                 student_name=cfg.student_name,
+                                 student_password=cfg.student_password,
+                                 changci=cfg.changci)
         except Exception as exc:
             self.log(f"[错误] 竞赛答案导出失败: {exc}")
-            return None
+            return None, None, None
         for msg in res.issues[:50]:
             self.log(f"[答案检查] {msg}")
         path = str(res.xlsx_path or res.csv_path)
+        json_path_str = str(res.json_path) if res.json_path else None
         self.log(f"[竞赛] 答案已导出：{path}（{res.images} 幅 / {res.rows} 行）；用时 {elapsed / 60:.1f} 分钟，"
                  f"按 40 分钟估计时间分 B={time_score(elapsed):.2f}")
-        return path
+        if json_path_str:
+            self.log(f"[竞赛] 远洋在线评分系统标准 JSON 提交文件已生成：{json_path_str}（断网时可直接拷入 U 盘备用）")
+
+        submit_resp_data = None
+        if cfg.submit_farain_online and res.json_path:
+            from competition.client import submit_to_server
+            self.log(f"[远洋评分系统] 正在向 {cfg.submit_farain_url} 提交答案 ...")
+            try:
+                payload = json.loads(res.json_path.read_text(encoding="utf-8"))
+                resp = submit_to_server(payload, url=cfg.submit_farain_url)
+                submit_resp_data = {"success": resp.success, "code": resp.code, "error_msg": resp.error_msg}
+                if resp.success:
+                    self.log("[远洋评分系统] 提交成功！(code: 0)")
+                else:
+                    self.log(f"[远洋评分系统] 提交失败: code={resp.code}, 原因: {resp.error_msg}")
+            except Exception as e:
+                self.log(f"[远洋评分系统] 提交异常: {e}")
+                submit_resp_data = {"success": False, "code": -1, "error_msg": str(e)}
+
+        return path, json_path_str, submit_resp_data
 
     def _spec_for(self, cfg: RunConfig, src: Path, rel: Path) -> str:
         specs = getattr(self, "_spec_lookup", None) or cfg.competition_specs or {}

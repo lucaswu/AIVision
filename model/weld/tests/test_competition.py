@@ -511,5 +511,142 @@ class StandardClauseTest(unittest.TestCase):
         self.assertEqual(ev.grade, 1)
 
 
+class FarainClientAndCraftTest(unittest.TestCase):
+    def test_craft_inference(self):
+        from competition.process_infer import infer_craft_attributes
+
+        # 管道：单面焊 (2), 全位置 (5), 小径管氩弧焊 (3)
+        c_pipe = infer_craft_attributes("Φ89×6")
+        self.assertEqual((c_pipe.weld_form_idx, c_pipe.welding_position_idx, c_pipe.welding_method_idx), (2, 5, 3))
+        self.assertEqual(c_pipe.weld_form_name, "单面焊")
+        self.assertEqual(c_pipe.welding_position_name, "全位置")
+
+        # 垫板单面焊：垫板单面焊 (3), 平焊 (1), 中厚板手工焊+埋弧焊 (9)
+        c_extra = infer_craft_attributes("20+4")
+        self.assertEqual((c_extra.weld_form_idx, c_extra.welding_position_idx, c_extra.welding_method_idx), (3, 1, 9))
+        self.assertEqual(c_extra.weld_form_name, "垫板单面焊")
+        self.assertEqual(c_extra.welding_method_name, "手工焊+埋弧焊")
+
+        # 大厚板：双面焊 (1), 平焊 (1), 埋弧焊 (2)
+        c_thick = infer_craft_attributes("28")
+        self.assertEqual((c_thick.weld_form_idx, c_thick.welding_position_idx, c_thick.welding_method_idx), (1, 1, 2))
+
+        # 薄板：双面焊 (1), 平焊 (1), 手工焊 (1)
+        c_thin = infer_craft_attributes("10")
+        self.assertEqual((c_thin.weld_form_idx, c_thin.welding_position_idx, c_thin.welding_method_idx), (1, 1, 1))
+
+    def test_build_submit_item_and_defect_formatting(self):
+        from competition.client import build_submit_item
+
+        # 1. 包含圆形缺陷与裂纹
+        ev = evaluate_image(result([
+            det("裂纹", 12.5, 20, 27.5, 21),  # length 15mm
+            det("圆形缺陷", 50, 25, 51.5, 26.5),  # 2 points
+        ]), "20")
+        item = build_submit_item(ev)
+        self.assertEqual(item["TiMuXuHao"], "7")  # 7.dcm -> "7"
+        self.assertEqual(item["Type"], 0)
+        self.assertEqual(item["PingJiIdx"], 4)  # 裂纹直接 Ⅳ 级
+        self.assertEqual(len(item["ListDefect"]), 2)
+
+        d_crack = [d for d in item["ListDefect"] if d["Idx"] == 1][0]
+        self.assertEqual(d_crack["XZuoBiao"], "12.50")
+        self.assertEqual(d_crack["CanShu"], "15.00")
+
+        d_round = [d for d in item["ListDefect"] if d["Idx"] == 5][0]
+        self.assertEqual(d_round["XZuoBiao"], "50.00")
+        self.assertEqual(d_round["CanShu"], "2")
+
+        # 2. 综合评级
+        ev_comp = evaluate_image(result([
+            det("圆形缺陷", 50, 25, 51.5, 26.5),
+            det("条形缺陷", 47, 28, 51, 29),  # 4mm
+        ]), "20")
+        item_comp = build_submit_item(ev_comp)
+        self.assertEqual(len(item_comp["ListDefect"]), 1)
+        d_comp = item_comp["ListDefect"][0]
+        self.assertEqual(d_comp["Idx"], 9)  # 综合评级
+        self.assertEqual(d_comp["XZuoBiao"], "47.00")
+        self.assertEqual(d_comp["CanShu"], "4.00,2")
+
+        # 3. 无缺陷图像：ListDefect 必须为空数组 []
+        ev_clean = evaluate_image(result([]), "20")
+        item_clean = build_submit_item(ev_clean)
+        self.assertEqual(item_clean["PingJiIdx"], 1)
+        self.assertEqual(item_clean["ListDefect"], [])
+
+    def test_validate_and_save_payload(self):
+        import json
+        import tempfile
+        from competition.client import (
+            build_submission_payload,
+            build_submit_item,
+            save_submission_json,
+            validate_submission_payload,
+        )
+
+        ev = evaluate_image(result([det("未焊透", 10.25, 20, 25.25, 21)]), "Φ89×6")
+        item = build_submit_item(ev)
+        payload = build_submission_payload("张三", "12345678901", "场次1", [item])
+
+        # 合法性校验应通过
+        issues = validate_submission_payload(payload)
+        self.assertEqual(issues, [])
+
+        # 校验必填项缺失
+        bad_payload = dict(payload)
+        bad_payload["name"] = ""
+        self.assertTrue(any("name" in s for s in validate_submission_payload(bad_payload)))
+
+        # 校验文件落盘与读取
+        with tempfile.TemporaryDirectory() as tmp:
+            json_file = Path(tmp) / "submission_farain.json"
+            save_submission_json(payload, json_file)
+            self.assertTrue(json_file.exists())
+            loaded = json.loads(json_file.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["name"], "张三")
+            self.assertEqual(loaded["type"], 4)
+            self.assertEqual(loaded["submitList"][0]["TiMuXuHao"], "7")
+            self.assertEqual(loaded["submitList"][0]["ListDefect"][0]["Idx"], 3)  # 未焊透
+
+    def test_export_answers_generates_farain_json(self):
+        import json
+        import tempfile
+        from competition.exporter import export_answers
+
+        ev = evaluate_image(result([det("条形缺陷", 30, 20, 42, 21)]), "28").to_dict()
+        ev["image_name"] = "30447.dcm"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            res = export_answers(
+                Path(tmp), [ev], ["30447.dcm"],
+                student_name="李四", student_password="EXAM888", changci="场次2",
+            )
+            self.assertIsNotNone(res.json_path)
+            self.assertTrue(res.json_path.exists())
+            data = json.loads(res.json_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["name"], "李四")
+            self.assertEqual(data["password"], "EXAM888")
+            self.assertEqual(data["changci"], "场次2")
+            self.assertEqual(len(data["submitList"]), 1)
+            item = data["submitList"][0]
+            self.assertEqual(item["TiMuXuHao"], "30447")
+            self.assertEqual(item["ListDefect"][0]["Idx"], 4)  # 条形缺陷
+
+    def test_submit_to_server_mocked(self):
+        from unittest.mock import MagicMock, patch
+        from competition.client import submit_to_server
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.read.return_value = b'{"code": 0, "data": {}}'
+        mock_resp.status = 200
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            res = submit_to_server({"type": 4})
+            self.assertTrue(res.success)
+            self.assertEqual(res.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

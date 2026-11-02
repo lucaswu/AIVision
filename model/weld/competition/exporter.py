@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .client import build_submission_payload, build_submit_item, save_submission_json, validate_submission_payload
 from .info_table import InfoRow
+from .process_infer import infer_craft_attributes
 from .standards import grade_label
 from .xlsx import write_xlsx
 
@@ -20,7 +22,7 @@ NO_DEFECT = "无缺陷"
 
 
 def answer_columns() -> List[str]:
-    return (["影像序号", "影像名称", "规格", "材质"]
+    return (["影像序号", "影像名称", "规格", "材质", "焊缝形式", "焊接方法", "施焊位置"]
             + ["缺陷序号", "缺陷定位X(像素)", "缺陷定位X(mm)", "缺陷定性", "缺陷定量", "评定等级", "备注"])
 
 
@@ -31,6 +33,7 @@ class ExportResult:
     rows: int
     images: int
     issues: List[str] = field(default_factory=list)  # 合法性检查发现的问题（不阻止导出）
+    json_path: Optional[Path] = None                 # 远洋评分系统标准 JSON 提交文件 (U 盘离线备份与在线提交)
 
 
 def _num_key(name: str) -> Tuple[int, Any]:
@@ -50,6 +53,7 @@ def _quantity_ok(dtype: str, quantity: str, sep: str) -> bool:
 def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], image_names: Sequence[str],
                    info_rows: Sequence[InfoRow] = (), failures: Optional[Mapping[str, str]] = None,
                    default_grade: int = 1, quantity_separator: str = ", ",
+                   student_name: str = "", student_password: str = "", changci: str = "",
                    basename: str = "competition_answers") -> ExportResult:
     """evaluations 为 ImageEvaluation.to_dict()；image_names 为本次全部输入影像文件名；
     failures 为 {文件名: 原因}（推理失败/超时），这些影像按 default_grade 无缺陷兜底。"""
@@ -80,6 +84,8 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
 
     columns = answer_columns()
     rows: List[List[Any]] = []
+    farain_items: List[Dict[str, Any]] = []
+
     for name in names:
         info = lookup(name)
         ev = ev_by_name.get(name.lower())
@@ -92,7 +98,25 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
             note = "未评定（缺少规格）"
             issues.append(f"{name}: {note}")
 
-        head = [index, name, spec_text, material]
+        # 工艺属性推断 (焊缝形式, 焊接方法, 施焊位置)
+        craft = infer_craft_attributes(spec_text) if spec_text else infer_craft_attributes(20.0)
+        head = [index, name, spec_text, material, craft.weld_form_name, craft.welding_method_name, craft.welding_position_name]
+
+        # 远洋接口每题数据
+        if ev is not None:
+            submit_item = build_submit_item(ev, spec=spec_text, craft=craft)
+        else:
+            submit_item = {
+                "TiMuXuHao": Path(name).stem,
+                "PingJiIdx": default_grade,
+                "HanFengXingShiIdx": craft.weld_form_idx,
+                "HanJieFangFaIdx": craft.welding_method_idx,
+                "ShiHanWeiZhiIdx": craft.welding_position_idx,
+                "Type": 0,
+                "ListDefect": [],
+            }
+        farain_items.append(submit_item)
+
         grade_text = (ev or {}).get("grade_label") or grade_label(default_grade)
         records = (ev or {}).get("records") or []
         if not records:
@@ -116,7 +140,20 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
     except OSError as exc:
         issues.append(f"xlsx 写入失败: {exc}")
         xlsx_path = None
-    return ExportResult(xlsx_path, csv_path, len(rows), len(names), issues)
+
+    # 生成远洋评分系统标准 JSON 文件 (U 盘离线备份与在线提交)
+    farain_payload = build_submission_payload(student_name, student_password, changci, farain_items)
+    v_issues = validate_submission_payload(farain_payload)
+    for vi in v_issues:
+        issues.append(f"[远洋接口规范自检] {vi}")
+    farain_json_path = out_dir / f"{basename}_farain.json"
+    try:
+        save_submission_json(farain_payload, farain_json_path)
+    except OSError as exc:
+        issues.append(f"远洋 JSON 文件写入失败: {exc}")
+        farain_json_path = None
+
+    return ExportResult(xlsx_path, csv_path, len(rows), len(names), issues, json_path=farain_json_path)
 
 
 def time_score(elapsed_s: float, limit_min: float = 40.0) -> float:

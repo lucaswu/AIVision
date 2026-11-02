@@ -4,15 +4,36 @@
 与《影像信息表》中的规格，输出可直接用于填报的缺陷记录与整图评定等级。
 """
 
+from .client import (
+    DEFECT_IDX_TO_NAME,
+    DEFECT_TYPE_TO_IDX,
+    SubmitResponse,
+    build_submission_payload,
+    build_submit_item,
+    save_submission_json,
+    submit_to_server,
+    validate_submission_payload,
+)
 from .evaluator import DefectRecord, EvalConfig, ImageEvaluation, evaluate_image, evaluate_results
+from .process_infer import CraftAttributes, infer_craft_attributes
 from .standards import WeldSpec, parse_spec
 
 __all__ = [
+    "CraftAttributes",
+    "DEFECT_IDX_TO_NAME",
+    "DEFECT_TYPE_TO_IDX",
     "DefectRecord",
     "EvalConfig",
     "ImageEvaluation",
+    "SubmitResponse",
     "WeldSpec",
+    "build_submission_payload",
+    "build_submit_item",
     "evaluate_image",
     "evaluate_results",
+    "infer_craft_attributes",
     "parse_spec",
+    "save_submission_json",
+    "submit_to_server",
+    "validate_submission_payload",
 ]

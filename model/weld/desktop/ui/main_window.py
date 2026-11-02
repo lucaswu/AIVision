@@ -214,19 +214,43 @@ class MainWindow(QMainWindow):
         for w in (self.merge_gap_spin, self.merge_len_combo):
             w.setToolTip("断续未熔合/未焊透/纵向裂纹：间隔 ≤ 该值合并为一个缺陷；\n"
                          "合并后长度取包络（含间隔）或各段之和")
+
+        # 远洋在线评分系统设置
+        self.student_name_edit = QLineEdit()
+        self.student_name_edit.setPlaceholderText("学员姓名")
+        self.student_pwd_edit = QLineEdit()
+        self.student_pwd_edit.setPlaceholderText("考核号/密码")
+        self.changci_edit = QLineEdit()
+        self.changci_edit.setPlaceholderText("场次号")
+        row_student = QHBoxLayout()
+        row_student.addWidget(self.student_name_edit, 1)
+        row_student.addWidget(self.student_pwd_edit, 1)
+
+        self.submit_online_cb = QCheckBox("推理后自动在线提交")
+        self.submit_online_cb.setToolTip("推理与导出完成后，自动 POST 提交至远洋评分服务器 (http://www.farain.com:3030/testing/ai/ray/submit)")
+        btn_manual_submit = QPushButton("远洋系统在线提交…")
+        btn_manual_submit.setToolTip("选择已有的 submission_farain.json 提交至远洋评分系统")
+        btn_manual_submit.clicked.connect(self._manual_submit_farain)
+
         self._comp_widgets = (self.spec_edit, self.info_table_edit, btn_info, btn_info_clear, self.fast_cb,
                               self.deadline_spin, self.table26_cb, self.split_cb, self.plate_root_cb,
-                              self.merge_gap_spin, self.merge_len_combo)
+                              self.merge_gap_spin, self.merge_len_combo,
+                              self.student_name_edit, self.student_pwd_edit, self.changci_edit,
+                              self.submit_online_cb, btn_manual_submit)
         self.comp_cb.toggled.connect(self._on_competition_toggled)
         pf.addRow(self.comp_cb)
         pf.addRow("影像信息表", row_info)
         pf.addRow("默认规格", self.spec_edit)
+        pf.addRow("学员/考核号", row_student)
+        pf.addRow("场次号", self.changci_edit)
         pf.addRow("截止时间", self.deadline_spin)
         pf.addRow(self.fast_cb)
         pf.addRow(self.table26_cb)
         pf.addRow(self.plate_root_cb)
         pf.addRow(self.split_cb)
         pf.addRow("断续合并", row_merge)
+        pf.addRow(self.submit_online_cb)
+        pf.addRow(btn_manual_submit)
         param_box.setFixedWidth(300)
 
         # 结果表 + 预览
@@ -315,6 +339,10 @@ class MainWindow(QMainWindow):
         self.merge_gap_spin.setValue(s.competition_merge_gap_mm)
         self.merge_len_combo.setCurrentIndex(max(0, self.merge_len_combo.findData(s.competition_intermittent_length)))
         self.deadline_spin.setValue(s.competition_deadline_min)
+        self.student_name_edit.setText(s.student_name)
+        self.student_pwd_edit.setText(s.student_password)
+        self.changci_edit.setText(s.changci)
+        self.submit_online_cb.setChecked(s.submit_farain_online)
         self.comp_cb.setChecked(s.enable_competition)
         self._on_competition_toggled(s.enable_competition)
         self._refresh_input_label()
@@ -336,7 +364,12 @@ class MainWindow(QMainWindow):
             competition_strict_pipe_table26=self.table26_cb.isChecked(),
             competition_split_pores=self.split_cb.isChecked(), competition_report_plate_root=self.plate_root_cb.isChecked(),
             competition_merge_gap_mm=self.merge_gap_spin.value(),
-            competition_intermittent_length=self.merge_len_combo.currentData(), models=overrides,
+            competition_intermittent_length=self.merge_len_combo.currentData(),
+            student_name=self.student_name_edit.text().strip(),
+            student_password=self.student_pwd_edit.text().strip(),
+            changci=self.changci_edit.text().strip(),
+            submit_farain_online=self.submit_online_cb.isChecked(),
+            models=overrides,
         )
 
     # ------------------------------------------------------------- GPU/引擎 ----
@@ -467,6 +500,8 @@ class MainWindow(QMainWindow):
             competition_split_pores=s.competition_split_pores, competition_merge_gap_mm=s.competition_merge_gap_mm,
             competition_intermittent_length=s.competition_intermittent_length,
             competition_plate_root="report" if s.competition_report_plate_root else "drop",
+            student_name=s.student_name, student_password=s.student_password, changci=s.changci,
+            submit_farain_online=s.submit_farain_online, submit_farain_url=s.submit_farain_url,
         )
         missing = [k for k in ("roi_weights", "primary_weights") if not Path(self._models.to_dict()[k]).exists()]
         if missing:
@@ -613,9 +648,44 @@ class MainWindow(QMainWindow):
             self.timing_label.setStyleSheet("color:#c00;font-weight:bold;" if score == 0 else "")
             extra = f"，其中 {s.timed_out} 幅超时兜底" if s.timed_out else ""
             self._append_log(f"竞赛答案: {s.answers_path}{extra}；{timing}")
-            QMessageBox.information(self, "竞赛答案", f"答案已导出：\n{s.answers_path}{extra}\n\n{timing}")
+            if s.submission_json_path:
+                self._append_log(f"远洋系统 JSON: {s.submission_json_path}")
+            msg = f"答案已导出：\n{s.answers_path}{extra}\n\n{timing}"
+            if s.submission_json_path:
+                msg += f"\n\n远洋评分系统标准 JSON：\n{s.submission_json_path}\n（可直接拷贝至 U 盘交付）"
+            if s.submit_response:
+                if s.submit_response.get("success"):
+                    msg += "\n\n【远洋评分系统】在线提交成功 (code: 0)！"
+                else:
+                    msg += f"\n\n【远洋评分系统】在线提交失败：{s.submit_response.get('error_msg')}"
+            QMessageBox.information(self, "竞赛答案", msg)
         else:
             self.timing_label.setText(f"用时 {fmt_duration(s.elapsed_s)}")
+
+    def _manual_submit_farain(self) -> None:
+        """手动选择一个 submission_farain.json 并提交到远洋评分服务器。"""
+        import json
+        from competition.client import submit_to_server
+
+        start = self._last_output or ""
+        path, _ = QFileDialog.getOpenFileName(self, "选择要提交的远洋 JSON 文件", start, "JSON (*.json);;所有文件 (*)")
+        if not path:
+            return
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as exc:
+            QMessageBox.warning(self, "读取失败", f"无法解析 JSON: {exc}")
+            return
+        s = self._collect_settings()
+        url = s.submit_farain_url or "http://www.farain.com:3030/testing/ai/ray/submit"
+        self._append_log(f"[手动提交] 正在提交 {path} 至 {url} ...")
+        resp = submit_to_server(payload, url=url)
+        if resp.success:
+            self._append_log("[手动提交] 提交成功 (code: 0)！")
+            QMessageBox.information(self, "提交成功", f"远洋评分系统提交成功！\n文件: {path}")
+        else:
+            self._append_log(f"[手动提交失败] code: {resp.code}, 原因: {resp.error_msg}")
+            QMessageBox.warning(self, "提交失败", f"远洋评分系统返回错误：\n{resp.error_msg}\n\n请检查姓名、考核号或场次号是否匹配。")
 
     def _on_failed(self, msg: str) -> None:
         self._timing_timer.stop()

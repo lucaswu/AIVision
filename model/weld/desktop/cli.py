@@ -55,6 +55,12 @@ def main(argv=None) -> int:
     p.add_argument("--report-plate-root", action="store_true",
                    help="板焊缝（第 6 章）上检出的根部内凹/咬边也填报（默认不填报）")
     p.add_argument("--no-fast", action="store_true", help="竞赛评定时不关闭 IQI/位置检测/灰度值")
+    p.add_argument("--student-name", default="", help="远洋评分系统：学员姓名")
+    p.add_argument("--exam-id", "--password", dest="exam_id", default="", help="远洋评分系统：考核号")
+    p.add_argument("--changci", default="", help="远洋评分系统：场次号")
+    p.add_argument("--submit-online", action="store_true", help="竞赛答案导出后自动 POST 提交至远洋评分服务器")
+    p.add_argument("--submit-url", default="http://www.farain.com:3030/testing/ai/ray/submit",
+                   help="远洋评分服务器接口地址")
     a = p.parse_args(argv)
     spec_map = _load_spec_map(a.spec_map) if a.spec_map else {}
 
@@ -69,6 +75,8 @@ def main(argv=None) -> int:
         competition_split_pores=a.split_pores, competition_merge_gap_mm=a.merge_gap,
         competition_intermittent_length=a.intermittent_length,
         competition_plate_root="report" if a.report_plate_root else "drop",
+        student_name=a.student_name, student_password=a.exam_id, changci=a.changci,
+        submit_farain_online=a.submit_online, submit_farain_url=a.submit_url,
     )
     engine = InferenceEngine()
     if not engine.gpu.available:

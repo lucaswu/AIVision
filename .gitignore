@@ -266,3 +266,7 @@ deploy/model-mtls/*.srl
 deploy/.env.bak-*
 deploy/model-mtls/*.crt
 deploy/model-mtls/*.srl
+
+# 本地临时与工具文件
+.antigravitycli/
+.tmp-*

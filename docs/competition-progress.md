@@ -96,7 +96,21 @@
 
 - [ ] 影像信息表：用组委会样表回归一次（列名、是否有合并单元格/标题行、.xls 还是 .xlsx）。
 
-### 2.6.1 ⚠️ 未完成：人机大战工艺属性（焊缝型式 / 焊接方法 / 焊接位置）
+### 2.6.1 ✅ 已完成：远洋 AI 人机大赛评分系统接口对接与工艺三属性推断
+
+- [x] **工艺三属性自动推断**（`competition/process_infer.py`）：
+  - 自动从规格文本（管径 Φ、板厚 T、带垫板 `20+4`）推断焊缝型式 `HanFengXingShiIdx`、焊接方法 `HanJieFangFaIdx`（厚度与工件分级推断）、施焊位置 `ShiHanWeiZhiIdx`。
+  - 支持中文标准名称与枚举整数的自由双向覆盖。
+- [x] **远洋评分系统客户端与规范构建器**（`competition/client.py`）：
+  - 接口规范：`POST http://www.farain.com:3030/testing/ai/ray/submit`。
+  - 字段格式化：X 坐标强制保留两位小数（如 `"12.50"`）；圆形缺陷传点数字符串（`"3"`）；综合评级规范传 `"12.50,3"`；无缺陷底片传 `ListDefect: []`；题号自动剔除文件扩展名。
+  - 频控与自检：内置 `validate_submission_payload` 本地自检；内置离线备份 `save_submission_json` 生成 `submission_farain.json` 用于 U 盘容灾。
+  - 提交逻辑：基于 Python 原生库 `urllib.request` 实现免三方依赖 HTTP POST 提交，精准解析 `code == 0` 与中文错误提示。
+- [x] **全流程打通与交互支持**：
+  - `competition/exporter.py`：导出答案时同步生成远洋标准提交 JSON 文件，表头加入工艺三属性列。
+  - `desktop/engine.py` / `desktop/cli.py`：支持 `--student-name`、`--exam-id`、`--changci`、`--submit-online`、`--submit-url`。
+  - `desktop/ui/main_window.py` / `desktop/settings.py`：界面提供学员姓名、考核号、场次号输入区、自动提交复选框以及「远洋系统在线提交...」手动选择 JSON 文件上报的独立弹窗。
+- [x] **单元测试全覆盖**（`test_competition.py`）：44 项测试全部通过（含工艺推断、格式化、Mock 提交验证、离线 JSON 校验等）。
 
 **状态：未实现。** 原系统没有这部分能力；曾试写过一版纯经验规则（按规格、材质、是否检出根部缺陷推断），因为没有数据和标准依据、准确率未知，已撤销。当前答案导出**不含**这三列。
 
