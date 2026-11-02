@@ -41,11 +41,33 @@ COLOR_PALETTE = [
 ]
 
 
+def get_pixel_spacing(image_path: Path) -> Optional[float]:
+    """从 DICOM 文件中提取像素物理尺寸 (PixelSpacing / ImagerPixelSpacing，单位 mm/像素)。"""
+    p = Path(image_path)
+    if p.suffix.lower() not in ('.dcm', '.dicom', '.dic', '.diconde'):
+        return None
+    try:
+        import pydicom
+        ds = pydicom.dcmread(str(p), force=True, stop_before_pixels=True)
+        ps = getattr(ds, "PixelSpacing", None) or getattr(ds, "ImagerPixelSpacing", None)
+        if ps:
+            return float(ps[1] if len(ps) > 1 else ps[0])
+    except Exception:
+        pass
+    return None
+
+
 def load_image(image_path: Path) -> np.ndarray:
     """读取图像并标准化通道数"""
     image = cv_io.imread(image_path, cv2.IMREAD_UNCHANGED)
     if image is None:
         raise ValueError(f"无法读取图像: {image_path}")
+    if image.dtype != np.uint8:
+        arr = image.astype(np.float32)
+        low, high = float(np.min(arr)), float(np.max(arr))
+        if high > low:
+            arr = (np.clip(arr, low, high) - low) / (high - low) * 255.0
+        image = arr.astype(np.uint8)
     image = normalize_input_image(image)
     return ensure_color(image)
 
