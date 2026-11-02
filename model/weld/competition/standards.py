@@ -40,22 +40,27 @@ class WeldSpec:
 
     @property
     def chapter(self) -> int:
-        """带 Φ 的按第 7 章（管），否则按第 6 章（承压设备本体）。"""
+        """带 Φ 或 D*t 的按第 7 章（管），否则按第 6 章（承压设备本体）。"""
         return 7 if self.is_pipe else 6
 
 
 _NUM = r"(\d+(?:\.\d+)?)"
-_PIPE_RE = re.compile(r"[ΦφØøϕ⌀]\s*" + _NUM + r"\s*[×xX*＊]\s*" + _NUM)
-_PLATE_RE = re.compile(r"^" + _NUM + r"(?:\s*\+\s*" + _NUM + r")?$")
+# 管规格：带或不带 Φ/φ/Ø/D/DN 前缀，乘号支持 × / x / X / * / ＊，如 "Φ89×6"、"219*7"、"356*5"
+_PIPE_RE = re.compile(r"(?:[ΦφØøϕ⌀Dd]|(?:DN|dn))?\s*" + _NUM + r"\s*[×xX*＊]\s*" + _NUM)
+# 板规格：如 "16"、"20"、"20+4"、"T=16"
+_PLATE_RE = re.compile(r"^(?:[TtδHh]\s*[:=]?\s*)?" + _NUM + r"(?:\s*\+\s*" + _NUM + r")?$")
 
 
 def parse_spec(value: Union[str, int, float]) -> WeldSpec:
-    """解析 “28” / “20+4” / “Φ89×6” 等规格。“20+4” 取 T=20（垫板/复合层不计入母材厚度）。"""
+    """解析 “28” / “20+4” / “Φ89×6” / “219*7” 等规格。“20+4” 取 T=20（垫板/复合层不计入母材厚度）。"""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return WeldSpec(thickness=float(value), raw=str(value))
     text = str(value or "").strip()
     norm = text.replace("（", "(").replace("）", ")").replace("ｍｍ", "").replace("mm", "").replace("MM", "")
     norm = norm.replace("＋", "+").replace(" ", "")
+    multipliers = sum(norm.count(op) for op in ("*", "×", "x", "X", "＊"))
+    if multipliers > 1:
+        raise ValueError(f"无法解析规格: {text!r}")
     m = _PIPE_RE.search(norm)
     if m:
         return WeldSpec(thickness=float(m.group(2)), is_pipe=True, outer_diameter=float(m.group(1)), raw=text)

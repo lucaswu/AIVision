@@ -19,7 +19,7 @@ from .xlsx import read_xlsx
 _HEADER_KEYS = {
     "index": ("影像序号", "序号", "编号"),
     "name": ("影像名称", "名称", "文件名", "影像"),
-    "spec": ("规格",),
+    "spec": ("板厚或规格", "规格", "板厚", "公称厚度", "厚度"),
     "material": ("材质", "材料"),
 }
 
@@ -71,9 +71,9 @@ def _find_header(rows: Sequence[Sequence[str]]):
     for r_idx, row in enumerate(rows[:20]):
         cols: Dict[str, int] = {}
         for c_idx, cell in enumerate(row):
-            text = re.sub(r"\s+", "", str(cell))
+            text = re.sub(r"\s+", "", str(cell or ""))
             for key, names in _HEADER_KEYS.items():
-                if key not in cols and any(text == n or text.startswith(n) for n in names):
+                if key not in cols and any(text == n or text.startswith(n) or n in text for n in names):
                     cols[key] = c_idx
                     break
         if "spec" in cols and ("name" in cols or "index" in cols):
@@ -100,10 +100,16 @@ def load_info_table(path: Union[str, Path]) -> List[InfoRow]:
     header_row, cols = _find_header(rows)
     out: List[InfoRow] = []
     for row in rows[header_row + 1:]:
-        get = lambda key: str(row[cols[key]]).strip() if key in cols and cols[key] < len(row) else ""  # noqa: E731
+        get = lambda key: str(row[cols[key]]).strip() if key in cols and cols[key] < len(row) and row[cols[key]] is not None else ""  # noqa: E731
         spec, name, index = get("spec"), get("name"), _to_int(get("index"))
         if not spec or (not name and index is None):
             continue
+        # 过滤多级表头的子表头行或说明行（如既无数字序号，又无图像文件后缀，且规格无法解析）
+        if index is None and not any(name.lower().endswith(ext) for ext in (".dcm", ".png", ".jpg", ".jpeg", ".tif")):
+            try:
+                parse_spec(spec)
+            except ValueError:
+                continue
         if not name:
             name = str(index)
         out.append(InfoRow(index, name, spec, get("material")))
@@ -130,5 +136,8 @@ def validate(rows: Sequence[InfoRow]) -> List[str]:
         try:
             parse_spec(r.spec)
         except ValueError:
-            bad.append(f"{r.name}: {r.spec}")
+            label = str(r.index) if r.index is not None else r.name
+            if r.name and r.name != label:
+                label = f"{label} ({r.name})"
+            bad.append(f"{label}: {r.spec}")
     return bad

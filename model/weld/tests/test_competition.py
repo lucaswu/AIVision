@@ -55,6 +55,13 @@ class SpecTest(unittest.TestCase):
         s = parse_spec("Φ89×6")
         self.assertEqual((s.thickness, s.outer_diameter, s.is_small_pipe, s.chapter), (6.0, 89.0, True, 7))
         self.assertFalse(parse_spec("φ219x12").is_small_pipe)
+        # 测试不带 Φ 的管规格 (如 "219*7"、"356*5")
+        s = parse_spec("219*7")
+        self.assertEqual((s.thickness, s.outer_diameter, s.is_pipe, s.is_small_pipe, s.chapter), (7.0, 219.0, True, False, 7))
+        s = parse_spec("356*5")
+        self.assertEqual((s.thickness, s.outer_diameter, s.is_pipe), (5.0, 356.0, True))
+        s = parse_spec("89*4")
+        self.assertEqual((s.thickness, s.outer_diameter, s.is_small_pipe), (4.0, 89.0, True))
         self.assertEqual(parse_spec(16).thickness, 16.0)
         with self.assertRaises(ValueError):
             parse_spec("abc")

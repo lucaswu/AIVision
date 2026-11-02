@@ -68,9 +68,15 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
 
     names = list(dict.fromkeys(image_names))
     seen = {n.lower() for n in names}
+    stems = {Path(n).stem.lower() for n in names}
     issues: List[str] = []
     for r in info_rows:
-        if r.name.lower() not in seen and r.stem.lower() not in {Path(n).stem.lower() for n in names}:
+        matched = (
+            r.name.lower() in seen
+            or r.stem.lower() in stems
+            or (r.index is not None and str(r.index).lower() in stems)
+        )
+        if not matched:
             issues.append(f"影像信息表中的 {r.name} 不在输入影像中")
 
     def lookup(name: str) -> Optional[InfoRow]:
