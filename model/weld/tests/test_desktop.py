@@ -50,5 +50,34 @@ class RenderTest(unittest.TestCase):
         self.assertGreater(int(out.sum()), 0)
 
 
+class CompetitionCellsTest(unittest.TestCase):
+    def test_competition_cells_format_mm(self):
+        from desktop.ui.main_window import competition_cells
+
+        ev = {
+            "grade_label": "Ⅳ级",
+            "records": [
+                {"defect_type": "裂纹", "x_px": 5002, "x_mm": 211.75, "quantity": "37.5"},
+                {"defect_type": "未焊透", "x_px": 288, "x_mm": 12.1, "quantity": "359.0"},
+            ],
+        }
+        cells = competition_cells(ev)
+        self.assertEqual(cells[0], "Ⅳ级")
+        self.assertEqual(cells[1], "裂纹 X=211.75mm 37.5；未焊透 X=12.1mm 359.0")
+
+    def test_competition_cells_fallback_px(self):
+        from desktop.ui.main_window import competition_cells
+
+        ev = {
+            "grade_label": "Ⅱ级",
+            "records": [
+                {"defect_type": "圆形缺陷", "x_px": 100, "quantity": "3"},
+            ],
+        }
+        cells = competition_cells(ev)
+        self.assertEqual(cells[0], "Ⅱ级")
+        self.assertEqual(cells[1], "圆形缺陷 X=100px 3")
+
+
 if __name__ == "__main__":
     unittest.main()

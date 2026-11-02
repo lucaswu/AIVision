@@ -532,18 +532,24 @@ class InferenceEngine:
                               rel: Path, image=None) -> Optional[Dict[str, Any]]:
         """单张评定失败只记日志，不影响推理结果。"""
         from competition import evaluate_image
+        from utils.pipeline_utils import get_pixel_spacing
 
         spec = self._spec_for(cfg, src, rel)
         if not str(spec).strip():
             self.log(f"[警告] 竞赛评定跳过 ({src.name}): 未提供规格")
             return None
+        eval_cfg = self.competition_eval_config(cfg)
+        ps = result.get("pixel_size_mm") or get_pixel_spacing(src)
+        if ps and ps > 0:
+            eval_cfg.pixel_size_mm = float(ps)
         try:
-            evaluation = evaluate_image(result, spec, self.competition_eval_config(cfg), image=image)
+            evaluation = evaluate_image(result, spec, eval_cfg, image=image)
         except Exception as exc:
             self.log(f"[警告] 竞赛评定失败 ({src.name}): {exc}")
             return None
         data = evaluation.to_dict()
         data["rel_path"] = str(rel)
+        data["pixel_size_mm"] = eval_cfg.pixel_size_mm
         for msg in evaluation.warnings:
             self.log(f"[评定] {src.name}: {msg}")
         return data

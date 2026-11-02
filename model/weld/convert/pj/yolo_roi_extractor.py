@@ -46,8 +46,6 @@ class WeldROIDetector:
         self.roi_conf_threshold = roi_conf_threshold
         self.roi_iou_threshold = roi_iou_threshold
         self.padding_ratio = padding_ratio
-
-        print(f"加载ROI模型: {model_path}")
         self.model = load_yolo_model(model_path)
 
     def detect_boxes(self, image_source: ImageSource) -> List[Tuple[int, int, int, int]]:

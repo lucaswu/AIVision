@@ -670,6 +670,7 @@ class InferencePipelineRunner:
             pass  # Ignore write errors to avoid crashing inference
 
     def _build_primary_model(self):
+        print(f"加载主模型: {self.primary_weights}")
         if self.mode == "det":
             return self.det_model_cls(
                 model_path=self.primary_weights,

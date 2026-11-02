@@ -21,7 +21,25 @@ def _load_spec_map(path: str) -> dict:
 def _competition_brief(ev) -> str:
     if not ev:
         return ""
-    items = "; ".join(f"{r['defect_type']} X={r['x_px']} {r['quantity']}" for r in ev["records"])
+
+    def _fmt_item(r: dict) -> str:
+        dtype = r.get("defect_type", "")
+        qty = r.get("quantity", "")
+        x_val = r.get("x_mm")
+        if x_val is not None:
+            try:
+                val = float(x_val)
+                x_str = str(int(val)) if val.is_integer() else f"{val:.2f}".rstrip("0").rstrip(".")
+                x_part = f" X={x_str}mm"
+            except (ValueError, TypeError):
+                x_part = f" X={x_val}mm"
+        elif r.get("x_px") is not None:
+            x_part = f" X={r['x_px']}px"
+        else:
+            x_part = ""
+        return f"{dtype}{x_part} {qty}".strip()
+
+    items = "; ".join(_fmt_item(r) for r in ev.get("records") or [])
     return f"  [{ev['grade_label']}] {items}"
 
 
