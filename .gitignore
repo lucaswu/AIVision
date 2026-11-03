@@ -26,6 +26,7 @@ MANIFEST
 *.manifest
 *.spec
 AIVision_Portable/
+AIVision_Portable.zip
 
 # Installer logs
 pip-log.txt

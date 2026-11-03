@@ -19,6 +19,30 @@ def run_cmd(cmd, check=True):
         print(f"警告/错误: 退出码 {res.returncode}")
     return res.returncode
 
+def ensure_launcher_compiled(weld_dir: Path):
+    """确保启动器 AIVision_Launcher.exe 已由 C# 源码编译为最新版本"""
+    launcher_dir = weld_dir / "launcher"
+    cs_file = launcher_dir / "Launcher.cs"
+    ico_file = launcher_dir / "app.ico"
+    exe_file = launcher_dir / "AIVision_Launcher.exe"
+
+    csc_path = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if not Path(csc_path).exists():
+        print(f"提示: 未检测到 {csc_path}，跳过启动器重新编译。")
+        return
+
+    print("\n[0/5] 编译最新原生无黑框启动器 AIVision_Launcher.exe...")
+    compile_cmd = (
+        f'"{csc_path}" /target:winexe /optimize+ /platform:x64 '
+        f'/win32icon:"{ico_file}" /r:System.Windows.Forms.dll,System.Drawing.dll '
+        f'/out:"{exe_file}" "{cs_file}"'
+    )
+    ret = run_cmd(compile_cmd, check=False)
+    if ret == 0:
+        print("启动器编译完成。")
+    else:
+        print("启动器编译跳过或使用已有二进制。")
+
 def main():
     root_dir = Path(r"I:\项目\AIVision").resolve()
     weld_dir = root_dir / "model" / "weld"
@@ -30,7 +54,7 @@ def main():
         target_dir = Path(sys.argv[1]).resolve()
 
     print("=" * 60)
-    print(" 开始构建 AIVision 绿色便携独立运行包")
+    print(" 开始构建 AIVision 绿色便携独立运行包 (全依赖自包含)")
     print(f" 源环境: {conda_env_dir}")
     print(f" 目标目录: {target_dir}")
     print("=" * 60)
@@ -38,6 +62,9 @@ def main():
     target_dir.mkdir(parents=True, exist_ok=True)
     runtime_target = target_dir / "runtime"
     model_target = target_dir / "model" / "weld"
+
+    # 0. 自动编译启动器
+    ensure_launcher_compiled(weld_dir)
 
     # 1. 复制 runtime 环境 (使用 robocopy 快速多线程复制，排除 pycache 与临时缓存)
     print("\n[1/5] 同步运行环境 (Python 3.11 + CUDA + PyTorch + Paddle)...")
@@ -121,4 +148,3 @@ if errorlevel 1 (
 
 if __name__ == "__main__":
     main()
-
