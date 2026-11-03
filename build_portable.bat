@@ -24,3 +24,4 @@ if not exist "%PYTHON_EXE%" (
 echo.
 echo 打包执行完成。
 pause
+

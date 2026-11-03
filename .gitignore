@@ -27,6 +27,9 @@ MANIFEST
 *.spec
 AIVision_Portable/
 AIVision_Portable.zip
+*.exe
+!model/weld/launcher/AIVision_Launcher.exe
+model/weld/verify_out/
 
 # Installer logs
 pip-log.txt
