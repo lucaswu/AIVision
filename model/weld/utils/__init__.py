@@ -5,6 +5,9 @@
 
 from .image_processing import *
 from .label_processing import *
-from .dataset_management import *
+try:
+    from .dataset_management import *
+except ImportError:
+    pass
 from .constants import *
 from .wide_slice_utils import *

@@ -233,13 +233,16 @@ class MainWindow(QMainWindow):
             w.setToolTip("断续未熔合/未焊透/纵向裂纹：间隔 ≤ 该值合并为一个缺陷；\n"
                          "合并后长度取包络（含间隔）或各段之和")
 
-        # 远洋在线评分系统设置
-        self.student_name_edit = QLineEdit()
-        self.student_name_edit.setPlaceholderText("学员姓名")
-        self.student_pwd_edit = QLineEdit()
-        self.student_pwd_edit.setPlaceholderText("考核号/密码")
-        self.changci_edit = QLineEdit()
-        self.changci_edit.setPlaceholderText("场次号")
+        # 远洋在线评分系统设置（固定姓名、考核号、场次号，界面显示但不可编辑）
+        self.student_name_edit = QLineEdit("13858120789")
+        self.student_name_edit.setReadOnly(True)
+        self.student_name_edit.setToolTip("学员姓名（已固定：13858120789，不可编辑）")
+        self.student_pwd_edit = QLineEdit("13858120789")
+        self.student_pwd_edit.setReadOnly(True)
+        self.student_pwd_edit.setToolTip("考核号（已固定：13858120789，不可编辑）")
+        self.changci_edit = QLineEdit("122")
+        self.changci_edit.setReadOnly(True)
+        self.changci_edit.setToolTip("场次号（已固定：122，不可编辑）")
         row_student = QHBoxLayout()
         row_student.addWidget(self.student_name_edit, 1)
         row_student.addWidget(self.student_pwd_edit, 1)
@@ -357,9 +360,13 @@ class MainWindow(QMainWindow):
         self.merge_gap_spin.setValue(s.competition_merge_gap_mm)
         self.merge_len_combo.setCurrentIndex(max(0, self.merge_len_combo.findData(s.competition_intermittent_length)))
         self.deadline_spin.setValue(s.competition_deadline_min)
-        self.student_name_edit.setText(s.student_name)
-        self.student_pwd_edit.setText(s.student_password)
-        self.changci_edit.setText(s.changci)
+        # 固定显示姓名、考核号、场次号，只读不可编辑
+        self.student_name_edit.setText("13858120789")
+        self.student_name_edit.setReadOnly(True)
+        self.student_pwd_edit.setText("13858120789")
+        self.student_pwd_edit.setReadOnly(True)
+        self.changci_edit.setText("122")
+        self.changci_edit.setReadOnly(True)
         self.submit_online_cb.setChecked(s.submit_farain_online)
         self.comp_cb.setChecked(s.enable_competition)
         self._on_competition_toggled(s.enable_competition)
@@ -383,9 +390,9 @@ class MainWindow(QMainWindow):
             competition_split_pores=self.split_cb.isChecked(), competition_report_plate_root=self.plate_root_cb.isChecked(),
             competition_merge_gap_mm=self.merge_gap_spin.value(),
             competition_intermittent_length=self.merge_len_combo.currentData(),
-            student_name=self.student_name_edit.text().strip(),
-            student_password=self.student_pwd_edit.text().strip(),
-            changci=self.changci_edit.text().strip(),
+            student_name="13858120789",
+            student_password="13858120789",
+            changci="122",
             submit_farain_online=self.submit_online_cb.isChecked(),
             models=overrides,
         )
@@ -457,6 +464,10 @@ class MainWindow(QMainWindow):
         running = self._worker is not None and self._worker.isRunning()
         for w in self._comp_widgets:
             w.setEnabled(on and not running)
+        # 固定姓名、考核号和场次号只读显示，不可编辑
+        self.student_name_edit.setReadOnly(True)
+        self.student_pwd_edit.setReadOnly(True)
+        self.changci_edit.setReadOnly(True)
 
     def _competition_inputs(self, s: UiSettings) -> bool:
         """校验影像信息表与默认规格；有问题时弹窗提示并返回 False。"""
@@ -673,7 +684,9 @@ class MainWindow(QMainWindow):
                 msg += f"\n\n远洋评分系统标准 JSON：\n{s.submission_json_path}\n（可直接拷贝至 U 盘交付）"
             if s.submit_response:
                 if s.submit_response.get("success"):
-                    msg += "\n\n【远洋评分系统】在线提交成功 (code: 0)！"
+                    mark = s.submit_response.get("data", {}).get("mark")
+                    mark_str = f"，系统评分：{mark} 分" if mark is not None else ""
+                    msg += f"\n\n【远洋评分系统】在线提交成功 (code: 0){mark_str}！"
                 else:
                     msg += f"\n\n【远洋评分系统】在线提交失败：{s.submit_response.get('error_msg')}"
             QMessageBox.information(self, "竞赛答案", msg)
@@ -699,8 +712,10 @@ class MainWindow(QMainWindow):
         self._append_log(f"[手动提交] 正在提交 {path} 至 {url} ...")
         resp = submit_to_server(payload, url=url)
         if resp.success:
-            self._append_log("[手动提交] 提交成功 (code: 0)！")
-            QMessageBox.information(self, "提交成功", f"远洋评分系统提交成功！\n文件: {path}")
+            mark = resp.data.get("mark") if isinstance(resp.data, dict) else None
+            mark_str = f"，系统评分：{mark} 分" if mark is not None else ""
+            self._append_log(f"[手动提交] 提交成功 (code: 0){mark_str}！")
+            QMessageBox.information(self, "提交成功", f"远洋评分系统提交成功！{mark_str}\n文件: {path}")
         else:
             self._append_log(f"[手动提交失败] code: {resp.code}, 原因: {resp.error_msg}")
             QMessageBox.warning(self, "提交失败", f"远洋评分系统返回错误：\n{resp.error_msg}\n\n请检查姓名、考核号或场次号是否匹配。")

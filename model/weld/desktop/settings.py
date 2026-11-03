@@ -35,10 +35,10 @@ class UiSettings:
     competition_intermittent_length: str = "envelope"
     competition_report_plate_root: bool = False  # 默认不填报板上的根部内凹/咬边
     competition_deadline_min: float = 37.0
-    # 远洋在线评分系统设置
-    student_name: str = ""
-    student_password: str = ""
-    changci: str = ""
+    # 远洋在线评分系统设置（固定为比赛参数，界面只读显示）
+    student_name: str = "13858120789"
+    student_password: str = "13858120789"
+    changci: str = "122"
     submit_farain_online: bool = False
     submit_farain_url: str = "http://www.farain.com:3030/testing/ai/ray/submit"
     models: Dict[str, str] = field(default_factory=dict)  # 仅保存与默认值不同的项

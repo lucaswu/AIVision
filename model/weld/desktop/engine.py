@@ -62,9 +62,9 @@ class RunConfig:
     competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
     competition_deadline_min: float = 0.0   # >0：从开始计时到该分钟数仍未处理的影像按无缺陷兜底并导出
     # 远洋在线评分系统 (http://www.farain.com:3030/testing/ai/ray/submit)
-    student_name: str = ""                  # 学员姓名
-    student_password: str = ""              # 考核号
-    changci: str = ""                       # 场次号
+    student_name: str = "13858120789"       # 学员姓名（固定）
+    student_password: str = "13858120789"   # 考核号（固定）
+    changci: str = "122"                    # 场次号（固定）
     submit_farain_online: bool = False      # 是否在导出后自动提交至远洋评分服务器
     submit_farain_url: str = "http://www.farain.com:3030/testing/ai/ray/submit"
 
