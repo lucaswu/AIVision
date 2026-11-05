@@ -86,8 +86,9 @@ PINGJI_MAP: Dict[str, int] = {
 }
 
 
-def parse_answer_excel(excel_path: Union[str, Path]) -> List[Dict[str, Any]]:
-    """读取并解析 10张答案.xlsx 格式的数据表。"""
+def parse_answer_excel(excel_path: Union[str, Path], is_man_machine: bool = False) -> List[Dict[str, Any]]:
+    """读取并解析 10张答案.xlsx 格式的数据表。
+    is_man_machine 为 False（默认）表示缺陷识别赛项，工艺三属性强制填 -1；True 则解析工艺三属性。"""
     rows = read_xlsx(excel_path)
     if len(rows) < 3:
         raise ValueError(f"Excel 行数不足（至少需要表头和数据行）: {len(rows)}")
@@ -136,26 +137,23 @@ def parse_answer_excel(excel_path: Union[str, Path]) -> List[Dict[str, Any]]:
             # 遇到空行或备注行时跳过
             continue
 
-        # 焊缝形式
+        # 焊缝形式、焊接方法、施焊位置（仅人机大战赛项解析，缺陷识别赛项强制填 -1）
         form_idx = -1
-        for c_idx, f_val in weld_form_cols.items():
-            if c_idx < len(row) and "√" in row[c_idx]:
-                form_idx = f_val
-                break
-
-        # 焊接方法
         method_idx = -1
-        for c_idx, m_val in weld_method_cols.items():
-            if c_idx < len(row) and "√" in row[c_idx]:
-                method_idx = m_val
-                break
-
-        # 施焊位置
         pos_idx = -1
-        for c_idx, p_val in weld_pos_cols.items():
-            if c_idx < len(row) and "√" in row[c_idx]:
-                pos_idx = p_val
-                break
+        if is_man_machine:
+            for c_idx, f_val in weld_form_cols.items():
+                if c_idx < len(row) and "√" in row[c_idx]:
+                    form_idx = f_val
+                    break
+            for c_idx, m_val in weld_method_cols.items():
+                if c_idx < len(row) and "√" in row[c_idx]:
+                    method_idx = m_val
+                    break
+            for c_idx, p_val in weld_pos_cols.items():
+                if c_idx < len(row) and "√" in row[c_idx]:
+                    pos_idx = p_val
+                    break
 
         # 评级
         raw_pj = row[pingji_col].strip() if pingji_col < len(row) else ""
@@ -231,4 +229,21 @@ def submit_payload(name: str,
     with urllib.request.urlopen(req, timeout=15) as resp:
         res_text = resp.read().decode("utf-8")
         return json.loads(res_text)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="解析竞赛 Excel 答案表并提交至远洋评分系统")
+    parser.add_argument("--excel", required=True, help="答案 Excel 文件路径")
+    parser.add_argument("--name", default="13858120789", help="学员姓名")
+    parser.add_argument("--password", default="13858120789", help="考核号")
+    parser.add_argument("--changci", default="122", help="场次号")
+    parser.add_argument("--url", default="http://www.farain.com:3030/testing/ai/ray/submit", help="评分接口地址")
+    parser.add_argument("--man-machine", action="store_true", help="指定为人机大战赛项（解析工艺三属性；未指定则默认缺陷识别，强制填 -1）")
+    args = parser.parse_args()
+
+    items = parse_answer_excel(args.excel, is_man_machine=args.man_machine)
+    print(f"解析完成，共 {len(items)} 道题，正在提交至 {args.url} ...")
+    resp = submit_payload(args.name, args.password, args.changci, items, url=args.url)
+    print(f"服务器返回结果: {resp}")
+
 

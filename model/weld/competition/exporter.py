@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .client import build_submission_payload, build_submit_item, save_submission_json, validate_submission_payload
 from .info_table import InfoRow
-from .process_infer import infer_craft_attributes
+from .process_infer import CraftAttributes, infer_craft_attributes
 from .standards import grade_label
 from .xlsx import write_xlsx
 
@@ -54,9 +54,11 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
                    info_rows: Sequence[InfoRow] = (), failures: Optional[Mapping[str, str]] = None,
                    default_grade: int = 1, quantity_separator: str = ", ",
                    student_name: str = "", student_password: str = "", changci: str = "",
-                   basename: str = "competition_answers") -> ExportResult:
+                   basename: str = "competition_answers",
+                   is_man_machine: bool = False) -> ExportResult:
     """evaluations 为 ImageEvaluation.to_dict()；image_names 为本次全部输入影像文件名；
-    failures 为 {文件名: 原因}（推理失败/超时），这些影像按 default_grade 无缺陷兜底。"""
+    failures 为 {文件名: 原因}（推理失败/超时），这些影像按 default_grade 无缺陷兜底。
+    is_man_machine 为 True 时自动推断焊缝形式、焊接方法、施焊位置；False（默认）为纯缺陷识别，三项填 -1。"""
     failures = dict(failures or {})
     info_by_name: Dict[str, InfoRow] = {}
     for r in info_rows:
@@ -105,7 +107,11 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
             issues.append(f"{name}: {note}")
 
         # 工艺属性推断 (焊缝形式, 焊接方法, 施焊位置)
-        craft = infer_craft_attributes(spec_text) if spec_text else infer_craft_attributes(20.0)
+        # 仅人机大战赛项自动推断工艺三属性；未勾选（缺陷识别）时按规则不考核，填 -1 且表格留空
+        if is_man_machine:
+            craft = infer_craft_attributes(spec_text) if spec_text else infer_craft_attributes(20.0)
+        else:
+            craft = CraftAttributes()
         head = [index, name, spec_text, material, craft.weld_form_name, craft.welding_method_name, craft.welding_position_name]
 
         # 远洋接口每题数据

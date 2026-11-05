@@ -26,6 +26,7 @@ class UiSettings:
     enable_iqi: bool = True
     save_annotated: bool = True
     enable_competition: bool = False
+    competition_man_machine: bool = False   # 是否参加人机大战赛项（勾选则自动推断工艺三属性；未勾选为缺陷识别赛项，填 -1）
     competition_default_spec: str = ""
     competition_info_table: str = ""  # 《影像信息表》.xlsx/.xls/.csv，或逐图规格 JSON
     competition_fast: bool = True

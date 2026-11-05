@@ -73,6 +73,8 @@ def main(argv=None) -> int:
     p.add_argument("--report-plate-root", action="store_true",
                    help="板焊缝（第 6 章）上检出的根部内凹/咬边也填报（默认不填报）")
     p.add_argument("--no-fast", action="store_true", help="竞赛评定时不关闭 IQI/位置检测/灰度值")
+    p.add_argument("--man-machine", action="store_true",
+                   help="指定为人机大战赛项（自动推断工艺三属性；未指定时默认缺陷识别，三项填 -1）")
     p.add_argument("--student-name", default="", help="远洋评分系统：学员姓名")
     p.add_argument("--exam-id", "--password", dest="exam_id", default="", help="远洋评分系统：考核号")
     p.add_argument("--changci", default="", help="远洋评分系统：场次号")
@@ -87,7 +89,9 @@ def main(argv=None) -> int:
         primary_conf=a.primary_conf, wide_slice=not a.no_wide_slice, enable_correction=not a.no_correction,
         enable_location=not a.no_location, enable_location2=not a.no_location2, enable_iqi=not a.no_iqi,
         save_annotated=not a.no_annotated, task_name=a.task_name,
-        enable_competition=bool(a.spec or spec_map or a.info_table), competition_default_spec=a.spec,
+        enable_competition=bool(a.spec or spec_map or a.info_table),
+        competition_man_machine=a.man_machine,
+        competition_default_spec=a.spec,
         competition_specs=spec_map, competition_info_table=a.info_table, competition_fast=not a.no_fast,
         competition_deadline_min=a.deadline_min, competition_strict_pipe_table26=a.strict_pipe_table26,
         competition_split_pores=a.split_pores, competition_merge_gap_mm=a.merge_gap,

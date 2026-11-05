@@ -51,6 +51,7 @@ class RunConfig:
     models: Dict[str, str] = field(default_factory=dict)  # ModelPaths 覆盖项
     # 竞赛评定（缺陷定位/定性/定量/NB/T 47013.2 评级），结果写 competition_results.json
     enable_competition: bool = False
+    competition_man_machine: bool = False   # 是否参加人机大战赛项（自动推断工艺三属性；未勾选为缺陷识别，填 -1）
     competition_default_spec: str = ""      # 所有影像共用的规格，如 "20" / "Φ89×6"
     competition_specs: Dict[str, str] = field(default_factory=dict)  # 文件名或编号 → 规格，优先于影像信息表
     competition_info_table: str = ""        # 《影像信息表》.xlsx/.xls/.csv/.json
@@ -478,7 +479,8 @@ class InferenceEngine:
                                  getattr(self, "_info_rows", []), failures,
                                  student_name=cfg.student_name,
                                  student_password=cfg.student_password,
-                                 changci=cfg.changci)
+                                 changci=cfg.changci,
+                                 is_man_machine=cfg.competition_man_machine)
         except Exception as exc:
             self.log(f"[错误] 竞赛答案导出失败: {exc}")
             return None, None, None

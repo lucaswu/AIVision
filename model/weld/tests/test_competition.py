@@ -639,6 +639,32 @@ class FarainClientAndCraftTest(unittest.TestCase):
             item = data["submitList"][0]
             self.assertEqual(item["TiMuXuHao"], "30447")
             self.assertEqual(item["ListDefect"][0]["Idx"], 4)  # 条形缺陷
+            # 默认非人机大战（缺陷识别），工艺三属性必须填 -1
+            self.assertEqual(item["HanFengXingShiIdx"], -1)
+            self.assertEqual(item["HanJieFangFaIdx"], -1)
+            self.assertEqual(item["ShiHanWeiZhiIdx"], -1)
+
+    def test_export_answers_man_machine_flag(self):
+        import json
+        import tempfile
+        from competition.exporter import export_answers
+
+        ev = evaluate_image(result([det("条形缺陷", 30, 20, 42, 21)]), "28").to_dict()
+        ev["image_name"] = "30447.dcm"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # 勾选人机大战：自动推断工艺
+            res = export_answers(
+                Path(tmp), [ev], ["30447.dcm"],
+                student_name="张三", student_password="EXAM", changci="1",
+                is_man_machine=True,
+            )
+            data = json.loads(res.json_path.read_text(encoding="utf-8"))
+            item = data["submitList"][0]
+            self.assertEqual(item["HanFengXingShiIdx"], 1)  # 双面焊
+            self.assertEqual(item["HanJieFangFaIdx"], 2)   # 埋弧焊 (厚板 28mm > 25mm)
+            self.assertEqual(item["ShiHanWeiZhiIdx"], 1)   # 平焊
+
 
     def test_submit_to_server_mocked(self):
         from unittest.mock import MagicMock, patch

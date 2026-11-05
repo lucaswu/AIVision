@@ -187,6 +187,11 @@ class MainWindow(QMainWindow):
         # 竞赛评定
         self.comp_cb = QCheckBox("竞赛评定（NB/T 47013.2）")
         self.comp_cb.setToolTip("对每张图输出缺陷定位 X、定性、定量与评定等级，写入 competition_results.json")
+        self.man_machine_cb = QCheckBox("人机大战赛项（自动推断工艺）")
+        self.man_machine_cb.setToolTip(
+            "勾选：参加【人机大战】赛项，系统将根据规格自动推断焊缝形式、焊接方法、施焊位置；\n"
+            "未勾选（默认）：参加【缺陷识别】赛项，工艺三属性按规定不考核，提交时填 -1（答案表留空）。"
+        )
         self.spec_edit = QLineEdit()
         self.spec_edit.setPlaceholderText("如 20 / 20+4 / Φ89×6")
         self.spec_edit.setToolTip("影像信息表中找不到的影像使用此规格（可留空）")
@@ -253,13 +258,14 @@ class MainWindow(QMainWindow):
         btn_manual_submit.setToolTip("选择已有的 submission_farain.json 提交至远洋评分系统")
         btn_manual_submit.clicked.connect(self._manual_submit_farain)
 
-        self._comp_widgets = (self.spec_edit, self.info_table_edit, btn_info, btn_info_clear, self.fast_cb,
+        self._comp_widgets = (self.man_machine_cb, self.spec_edit, self.info_table_edit, btn_info, btn_info_clear, self.fast_cb,
                               self.deadline_spin, self.table26_cb, self.split_cb, self.plate_root_cb,
                               self.merge_gap_spin, self.merge_len_combo,
                               self.student_name_edit, self.student_pwd_edit, self.changci_edit,
                               self.submit_online_cb, btn_manual_submit)
         self.comp_cb.toggled.connect(self._on_competition_toggled)
         pf.addRow(self.comp_cb)
+        pf.addRow(self.man_machine_cb)
         pf.addRow("影像信息表", row_info)
         pf.addRow("默认规格", self.spec_edit)
         pf.addRow("学员/考核号", row_student)
@@ -369,6 +375,7 @@ class MainWindow(QMainWindow):
         self.changci_edit.setReadOnly(True)
         self.submit_online_cb.setChecked(s.submit_farain_online)
         self.comp_cb.setChecked(s.enable_competition)
+        self.man_machine_cb.setChecked(s.competition_man_machine)
         self._on_competition_toggled(s.enable_competition)
         self._refresh_input_label()
 
@@ -383,7 +390,9 @@ class MainWindow(QMainWindow):
             enable_location=self.loc_cb.isChecked(), location_conf=self.loc_spin.value(),
             enable_location2=self.loc2_cb.isChecked(), location2_conf=self.loc2_spin.value(),
             enable_iqi=self.iqi_cb.isChecked(), save_annotated=self.annot_cb.isChecked(),
-            enable_competition=self.comp_cb.isChecked(), competition_default_spec=self.spec_edit.text().strip(),
+            enable_competition=self.comp_cb.isChecked(),
+            competition_man_machine=self.man_machine_cb.isChecked(),
+            competition_default_spec=self.spec_edit.text().strip(),
             competition_info_table=self.info_table_edit.text().strip(),
             competition_fast=self.fast_cb.isChecked(), competition_deadline_min=self.deadline_spin.value(),
             competition_strict_pipe_table26=self.table26_cb.isChecked(),
@@ -522,7 +531,9 @@ class MainWindow(QMainWindow):
             enable_location=s.enable_location, location_conf=s.location_conf,
             enable_location2=s.enable_location2, location2_conf=s.location2_conf,
             enable_iqi=s.enable_iqi, save_annotated=s.save_annotated, models=self._models.to_dict(),
-            enable_competition=s.enable_competition, competition_default_spec=s.competition_default_spec,
+            enable_competition=s.enable_competition,
+            competition_man_machine=s.competition_man_machine,
+            competition_default_spec=s.competition_default_spec,
             competition_info_table=s.competition_info_table, competition_fast=s.competition_fast,
             competition_deadline_min=s.competition_deadline_min,
             competition_strict_pipe_table26=s.competition_strict_pipe_table26,
