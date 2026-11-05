@@ -210,7 +210,7 @@ class InferenceEngine:
             enhance_mode="windowing", font_path=None, font_size=20,
             primary_weights=models.primary_weights, fusion_iou=0.5, primary_conf=cfg.primary_conf,
             device=device, det_device=device, wide_slice=bool(cfg.wide_slice),
-            enable_correction=bool(cfg.enable_correction and exists(models.correction_model)),
+            enable_correction=bool(cfg.enable_correction and not cfg.enable_competition and exists(models.correction_model)),
             correction_model=models.correction_model, correction_verbose=False, save_corrected_dir=None,
             enable_location=bool(cfg.enable_location and not fast and exists(models.location_model)),
             location_model=models.location_model, location_conf=cfg.location_conf,
@@ -339,6 +339,7 @@ class InferenceEngine:
         args = self._build_args(cfg, out_dir, file_list)
         if cfg.enable_competition:
             self._prepare_competition(cfg)
+            self.log("[竞赛] 竞赛模式：已跳过底片方向校正（weld_orientation_model）以节省推理时间")
             if cfg.competition_fast:
                 self.log("[竞赛] 提速模式：已关闭 IQI/OCR、焊缝位置检测与灰度值计算")
 

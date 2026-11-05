@@ -484,6 +484,18 @@ class EngineRawImageTest(unittest.TestCase):
         self.assertNotIn("_raw_corrected", saved["results"][0])
         self.assertLess(outcomes[0].competition["grade"], 4)
 
+    def test_competition_skips_orientation_correction(self):
+        from desktop.engine import InferenceEngine, RunConfig
+
+        engine = InferenceEngine(log=lambda s: None)
+        cfg = RunConfig(
+            inputs=["/tmp"], output_dir="/tmp",
+            enable_competition=True, enable_correction=True,
+        )
+        args = engine._build_args(cfg, Path("/tmp"), Path("/tmp/input_files.txt"))
+        self.assertFalse(args.enable_correction, "竞赛模式必须强制关闭方向矫正以节省时间")
+
+
 
 class TimeScoreTest(unittest.TestCase):
     def test_time_score_and_forecast(self):

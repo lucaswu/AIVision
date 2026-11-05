@@ -386,7 +386,8 @@ class MainWindow(QMainWindow):
             inputs=self._inputs, output_dir=self.output_edit.text().strip(),
             recursive=self.recursive_cb.isChecked(), mode=self.mode_combo.currentData(),
             device=self.device_combo.currentData(), primary_conf=self.conf_spin.value(),
-            wide_slice=self.wide_cb.isChecked(), enable_correction=self.corr_cb.isChecked(),
+            wide_slice=self.wide_cb.isChecked(),
+            enable_correction=self.corr_cb.isChecked() and not self.comp_cb.isChecked(),
             enable_location=self.loc_cb.isChecked(), location_conf=self.loc_spin.value(),
             enable_location2=self.loc2_cb.isChecked(), location2_conf=self.loc2_spin.value(),
             enable_iqi=self.iqi_cb.isChecked(), save_annotated=self.annot_cb.isChecked(),
@@ -477,6 +478,12 @@ class MainWindow(QMainWindow):
         self.student_name_edit.setReadOnly(True)
         self.student_pwd_edit.setReadOnly(True)
         self.changci_edit.setReadOnly(True)
+        # 竞赛模式下不需要校正图片，跳过并禁用方向矫正以节省处理时间
+        self.corr_cb.setEnabled(not on and not running)
+        if on:
+            self.corr_cb.setToolTip("竞赛模式下无需底片方向校正，已自动跳过以节省推理时间")
+        else:
+            self.corr_cb.setToolTip("使用 weld_orientation_model 对底片方向做 4 分类自动校准")
 
     def _competition_inputs(self, s: UiSettings) -> bool:
         """校验影像信息表与默认规格；有问题时弹窗提示并返回 False。"""
@@ -527,7 +534,8 @@ class MainWindow(QMainWindow):
             return
         cfg = RunConfig(
             inputs=s.inputs, output_dir=out, recursive=s.recursive, mode=s.mode, device=s.device,
-            primary_conf=s.primary_conf, wide_slice=s.wide_slice, enable_correction=s.enable_correction,
+            primary_conf=s.primary_conf, wide_slice=s.wide_slice,
+            enable_correction=False if s.enable_competition else s.enable_correction,
             enable_location=s.enable_location, location_conf=s.location_conf,
             enable_location2=s.enable_location2, location2_conf=s.location2_conf,
             enable_iqi=s.enable_iqi, save_annotated=s.save_annotated, models=self._models.to_dict(),
@@ -583,10 +591,11 @@ class MainWindow(QMainWindow):
 
     def _set_running(self, running: bool) -> None:
         self.btn_stop.setEnabled(running)
-        for w in (self.mode_combo, self.device_combo, self.conf_spin, self.wide_cb, self.corr_cb, self.loc_cb,
+        for w in (self.mode_combo, self.device_combo, self.conf_spin, self.wide_cb, self.loc_cb,
                   self.loc_spin, self.loc2_cb, self.loc2_spin, self.iqi_cb, self.annot_cb, self.recursive_cb,
                   self.output_edit, self.comp_cb):
             w.setEnabled(not running)
+        self.corr_cb.setEnabled(not running and not self.comp_cb.isChecked())
         for w in self._comp_widgets:
             w.setEnabled(not running and self.comp_cb.isChecked())
         self._update_start_enabled()
