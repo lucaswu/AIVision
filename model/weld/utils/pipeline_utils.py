@@ -195,13 +195,21 @@ class FontRenderer:
                         bgr_color, 2, lineType=cv2.LINE_AA)
             return
 
-        canvas_rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(canvas_rgb)
+        h, w = canvas.shape[:2]
+        ox, oy = int(origin[0]), int(origin[1])
+        x0 = max(0, ox - 4)
+        y0 = max(0, oy - 4)
+        x1 = min(w, max(ox, 0) + self.font_size * (len(text) + 2) + 16)
+        y1 = min(h, max(oy, 0) + int(self.font_size * 2.0) + 16)
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        sub_rgb = cv2.cvtColor(canvas[y0:y1, x0:x1], cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(sub_rgb)
         draw_ctx = ImageDraw.Draw(pil_img)
         rgb_color = (bgr_color[2], bgr_color[1], bgr_color[0])
-        draw_ctx.text(origin, text, font=self._font, fill=rgb_color)
-        updated = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        canvas[:, :, :] = updated
+        draw_ctx.text((ox - x0, oy - y0), text, font=self._font, fill=rgb_color)
+        canvas[y0:y1, x0:x1] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     def _auto_detect_font(self) -> Optional[str]:
         if not (MATPLOTLIB_AVAILABLE and font_manager):

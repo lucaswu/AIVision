@@ -40,7 +40,7 @@ class RunConfig:
     device: str = "cuda:0"                  # cuda:0 | cpu
     primary_conf: float = 0.15
     wide_slice: bool = True
-    enable_correction: bool = True
+    enable_correction: bool = False         # 默认不启用 weld_orientation_model，仅勾选时启用
     enable_location: bool = True
     location_conf: float = 0.6
     enable_location2: bool = True
@@ -210,7 +210,7 @@ class InferenceEngine:
             enhance_mode="windowing", font_path=None, font_size=20,
             primary_weights=models.primary_weights, fusion_iou=0.5, primary_conf=cfg.primary_conf,
             device=device, det_device=device, wide_slice=bool(cfg.wide_slice),
-            enable_correction=bool(cfg.enable_correction and not cfg.enable_competition and exists(models.correction_model)),
+            enable_correction=bool(cfg.enable_correction and exists(models.correction_model)),
             correction_model=models.correction_model, correction_verbose=False, save_corrected_dir=None,
             enable_location=bool(cfg.enable_location and not fast and exists(models.location_model)),
             location_model=models.location_model, location_conf=cfg.location_conf,
@@ -229,6 +229,7 @@ class InferenceEngine:
             ocr_rec_model_name="en_PP-OCRv5_mobile_rec", ocr_rec_model_dir=models.ocr_rec_model_dir,
             enable_ocr_orientation=True, ocr_orientation_model=models.ocr_orientation_model,
             ocr_orientation_device=gauge_device, ocr_number_range="1-19",
+            disable_progress=True,
         )
 
     @staticmethod
@@ -339,7 +340,10 @@ class InferenceEngine:
         args = self._build_args(cfg, out_dir, file_list)
         if cfg.enable_competition:
             self._prepare_competition(cfg)
-            self.log("[竞赛] 竞赛模式：已跳过底片方向校正（weld_orientation_model）以节省推理时间")
+            if args.enable_correction:
+                self.log("[竞赛] 已按勾选启用底片方向校正（weld_orientation_model）")
+            else:
+                self.log("[竞赛] 默认跳过底片方向校正（weld_orientation_model）以节省推理时间")
             if cfg.competition_fast:
                 self.log("[竞赛] 提速模式：已关闭 IQI/OCR、焊缝位置检测与灰度值计算")
 
@@ -395,15 +399,21 @@ class InferenceEngine:
                     break
                 progress(idx, total, src.name, "running")
                 outcome = self._run_one(rip, runner, src, rel, idx, total, prepared_root, in_memory)
+                preloaded_img = outcome.result.pop("_preloaded_image", None) if outcome.ok else None
                 if outcome.ok and cfg.save_annotated:
                     try:
                         from . import render
 
                         outcome.annotated_path = str(
-                            render.save_annotated(outcome.result, self._annotated_path(out_dir, rel, used_names))
+                            render.save_annotated(
+                                outcome.result,
+                                self._annotated_path(out_dir, rel, used_names),
+                                image=preloaded_img,
+                            )
                         )
                     except Exception as exc:
                         self.log(f"[警告] 标注图生成失败 ({src.name}): {exc}")
+                del preloaded_img
                 raw_image = outcome.result.pop("_raw_corrected", None) if outcome.ok else None
                 if outcome.ok and evaluations is not None:
                     outcome.competition = self._evaluate_competition(cfg, outcome.result, src, rel, raw_image)
@@ -454,6 +464,8 @@ class InferenceEngine:
         if not out:
             warn = [s for s in captured if "[警告]" in s] or captured[-3:]
             return ImageOutcome(idx, total, str(src), str(rel), False, error=" | ".join(warn)[:500] or "推理失败")
+        if image_input.image is not None:
+            out[0]["_preloaded_image"] = image_input.image
         return ImageOutcome(idx, total, str(src), str(rel), True, result=out[0])
 
     def _prepare_competition(self, cfg: RunConfig) -> None:

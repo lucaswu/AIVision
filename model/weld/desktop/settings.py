@@ -18,7 +18,7 @@ class UiSettings:
     device: str = "cuda:0"
     primary_conf: float = 0.15
     wide_slice: bool = True
-    enable_correction: bool = True
+    enable_correction: bool = False
     enable_location: bool = True
     location_conf: float = 0.6
     enable_location2: bool = True

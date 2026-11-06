@@ -108,6 +108,34 @@ def enhance_image_windowing(image: np.ndarray, output_bits: int = 8) -> np.ndarr
     if len(image.shape) == 3:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
+    # 8位输入→8位输出快速精确路径：基于256-bin直方图与LUT查表，结果与float32逐像素完全一致
+    if image.dtype == np.uint8 and output_bits == 8:
+        gray = np.ascontiguousarray(image)
+        h, w = gray.shape[:2]
+        margin = int(w * 0.15)
+        if margin > 0 and (w - 2 * margin) > 1:
+            stats_img = np.ascontiguousarray(gray[:, margin:w - margin])
+        else:
+            stats_img = gray
+        hist = cv2.calcHist([stats_img], [0], None, [256], [0, 256]).ravel().astype(np.float64)
+        total = float(hist.sum())
+        if total > 0:
+            cdf = np.cumsum(hist)
+            vals = np.arange(256, dtype=np.float64)
+            img_min = float(np.searchsorted(cdf, 0.02 * total))
+            img_max = float(np.searchsorted(cdf, 0.98 * total))
+            img_mean = float(np.dot(hist, vals) / total)
+            img_std = float(np.sqrt(np.dot(hist, (vals - img_mean) ** 2) / total))
+            window_level = int(img_mean)
+            window_width = max(1, int(min(4 * img_std, img_max - img_min)))
+            window_min = window_level - window_width / 2.0
+            lut = np.clip(
+                (np.arange(256, dtype=np.float32) - window_min) / window_width * 255.0,
+                0, 255
+            ).astype(np.uint8)
+            enhanced = cv2.LUT(gray, lut)
+            return apply_clahe_16bit(enhanced, clip_limit=2.0, tile_grid_size=(8, 8))
+
     # 直接处理，避免重复类型转换
     img_float = image.astype(np.float32, copy=False)
 

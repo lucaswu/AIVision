@@ -177,6 +177,25 @@ class EvaluateImageTest(unittest.TestCase):
         ev = evaluate_image(result([det("圆形缺陷", 50, 25, 52, 27)], label=2), "20")
         self.assertAlmostEqual(ev.records[0].x_mm, 300 - 52, delta=0.05)
 
+    def test_vertical_film_x_uses_longitudinal_axis(self):
+        # 1) 竖向原图 (w=60mm, h=300mm) 未旋转 (label=0)，缺陷在纵向 y∈[120,122]mm, 横向 x∈[28,30]mm
+        vert_raw = {
+            "image_path": "/data/vert.dcm",
+            "width": int(mm(60)),
+            "height": int(mm(300)),
+            "correction": {"label": 0},
+            "rois": [{"roi_index": 0, "bbox": [mm(20), 0, mm(40), mm(300)],
+                      "detections": [det("圆形缺陷", 28, 120, 30, 122)]}],
+        }
+        ev_raw = evaluate_image(vert_raw, "20")
+        self.assertAlmostEqual(ev_raw.records[0].x_mm, 120.0, delta=0.05)
+
+        # 2) 竖向原图经 CCW90° (label=1) 或 CW90° (label=3) 转为横向 (w=300mm, h=60mm) 推理，缺陷在矫正图 x∈[120,122]mm
+        ev_rot1 = evaluate_image(result([det("圆形缺陷", 120, 28, 122, 30)], w=300.0, h=60.0, label=1), "20")
+        self.assertAlmostEqual(ev_rot1.records[0].x_mm, 120.0, delta=0.05)
+        ev_rot3 = evaluate_image(result([det("圆形缺陷", 120, 28, 122, 30)], w=300.0, h=60.0, label=3), "20")
+        self.assertAlmostEqual(ev_rot3.records[0].x_mm, 120.0, delta=0.05)
+
     def test_pipe_root_defects(self):
         dets = [det("内凹", 10, 30, 30, 31)]  # 长度 20mm
         # 手动指定限值 15mm: 20 > 15 -> Ⅳ 级
@@ -486,14 +505,23 @@ class EngineRawImageTest(unittest.TestCase):
 
     def test_competition_skips_orientation_correction(self):
         from desktop.engine import InferenceEngine, RunConfig
+        from desktop.settings import UiSettings
 
         engine = InferenceEngine(log=lambda s: None)
-        cfg = RunConfig(
+        # 默认不勾选方向矫正（enable_correction=False）
+        self.assertFalse(UiSettings().enable_correction)
+        cfg_default = RunConfig(inputs=["/tmp"], output_dir="/tmp", enable_competition=True)
+        self.assertFalse(cfg_default.enable_correction)
+        args_default = engine._build_args(cfg_default, Path("/tmp"), Path("/tmp/input_files.txt"))
+        self.assertFalse(args_default.enable_correction, "默认必须关闭方向矫正以节省时间")
+
+        # 显式勾选时允许开启方向矫正
+        cfg_checked = RunConfig(
             inputs=["/tmp"], output_dir="/tmp",
             enable_competition=True, enable_correction=True,
         )
-        args = engine._build_args(cfg, Path("/tmp"), Path("/tmp/input_files.txt"))
-        self.assertFalse(args.enable_correction, "竞赛模式必须强制关闭方向矫正以节省时间")
+        args_checked = engine._build_args(cfg_checked, Path("/tmp"), Path("/tmp/input_files.txt"))
+        self.assertTrue(args_checked.enable_correction, "显式勾选方向矫正时应允许开启")
 
 
 

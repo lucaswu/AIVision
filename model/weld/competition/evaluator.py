@@ -406,7 +406,12 @@ def evaluate_image(result: Mapping[str, Any], spec: Union[std.WeldSpec, str, int
                     length: Optional[float] = None, points: Optional[int] = None) -> DefectRecord:
         members = list(members)
         boxes = [box_to_original(m.box, label, orig_w, orig_h) for m in members]
-        x_px = min(b[0] for b in boxes)
+        if label % 4 in (1, 3):
+            # 启用方向矫正模型将竖向底片旋转90°校正为横向焊缝后，直接取矫正后横向坐标左端作为 X
+            x_px = min(m.box[0] for m in members)
+        else:
+            is_vertical_orig = (orig_h > orig_w) if (orig_w and orig_h) else bool(members and members[0].axis == "y")
+            x_px = min((b[1] if is_vertical_orig else b[0]) for b in boxes)
         bbox = [min(b[0] for b in boxes), min(b[1] for b in boxes),
                 max(b[2] for b in boxes), max(b[3] for b in boxes)]
         ar = members[0].aspect_ratio if len(members) == 1 else None

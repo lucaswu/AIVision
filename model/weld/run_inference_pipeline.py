@@ -120,6 +120,8 @@ class PreparedImageInput:
     image: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
     # keep_raw 时保留的原始高位灰度图（float32，极性与 8bit 图一致），供框内精细测量
     raw: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
+    # DICOM 读取时顺带提取的像素物理尺寸（mm/pixel），避免下游二次打开 DICOM 文件
+    pixel_size_mm: Optional[float] = None
 
 
 def _normalize_to_uint8(image: np.ndarray,
@@ -127,6 +129,17 @@ def _normalize_to_uint8(image: np.ndarray,
                         invert: bool = False) -> np.ndarray:
     if image is None:
         raise ValueError("Empty image array")
+
+    # 16位单通道无分位裁剪快速精确路径：基于65536项LUT查表，与float32逐像素完全一致
+    if clip_percent is None and image.dtype == np.uint16 and image.ndim == 2:
+        low, high, _, _ = cv2.minMaxLoc(image)
+        if high <= low:
+            return np.zeros(image.shape, dtype=np.uint8)
+        lut_f = (np.arange(65536, dtype=np.float32) - float(low)) / float(high - low) * 255.0
+        lut_f = np.clip(lut_f, 0.0, 255.0)
+        if invert:
+            lut_f = 255.0 - lut_f
+        return lut_f.astype(np.uint8)[image]
 
     arr = image.astype(np.float32)
     if clip_percent is not None:
@@ -148,7 +161,7 @@ def _normalize_to_uint8(image: np.ndarray,
     return out
 
 
-def _read_dicom_for_conversion(path: Path) -> Tuple[np.ndarray, bool]:
+def _read_dicom_with_meta(path: Path) -> Tuple[np.ndarray, bool, Optional[float]]:
     if pydicom is None:
         raise RuntimeError("pydicom 未安装，无法读取 DICOM；请在推理镜像中安装 pydicom")
 
@@ -163,13 +176,26 @@ def _read_dicom_for_conversion(path: Path) -> Tuple[np.ndarray, bool]:
     if arr.ndim == 3 and samples_per_pixel == 1:
         arr = arr[0]
 
-    arr = arr.astype(np.float32)
     slope = float(getattr(ds, "RescaleSlope", 1.0))
     intercept = float(getattr(ds, "RescaleIntercept", 0.0))
-    if samples_per_pixel == 1:
-        arr = arr * slope + intercept
+    if samples_per_pixel == 1 and (slope != 1.0 or intercept != 0.0):
+        arr = arr.astype(np.float32) * slope + intercept
+    elif arr.dtype != np.uint16:
+        arr = arr.astype(np.float32)
 
     invert = str(getattr(ds, "PhotometricInterpretation", "")).upper() == "MONOCHROME1"
+    pixel_size_mm: Optional[float] = None
+    try:
+        ps = getattr(ds, "PixelSpacing", None) or getattr(ds, "ImagerPixelSpacing", None)
+        if ps:
+            pixel_size_mm = float(ps[1] if len(ps) > 1 else ps[0])
+    except Exception:
+        pass
+    return arr, invert, pixel_size_mm
+
+
+def _read_dicom_for_conversion(path: Path) -> Tuple[np.ndarray, bool]:
+    arr, invert, _ = _read_dicom_with_meta(path)
     return arr, invert
 
 
@@ -208,16 +234,22 @@ def _prepare_image_input(image_path: Path, prepared_root: Path, in_memory: bool 
                          keep_raw: bool = False) -> PreparedImageInput:
     """in_memory=True 时 8bit 图直接随结果返回、不写 PNG（下游不需要文件路径时使用，如未启用 IQI）。
     keep_raw=True 时附带原始高位灰度图（见 PreparedImageInput.raw）。"""
-    image, invert = _read_image_for_preprocessing(image_path)
+    ext = image_path.suffix.lower()
+    pixel_size_mm: Optional[float] = None
+    if ext in DICOM_EXTS:
+        image, invert, pixel_size_mm = _read_dicom_with_meta(image_path)
+    else:
+        image, invert = _read_image_for_preprocessing(image_path)
     raw = _raw_gray(image, invert) if keep_raw else None
     if not _needs_8bit_conversion(image_path, image):
         return PreparedImageInput(original_path=image_path, processing_path=image_path, converted_to_8bit=False,
-                                  raw=raw)
+                                  raw=raw, pixel_size_mm=pixel_size_mm)
 
     image_8 = _normalize_to_uint8(image, invert=invert)
     if in_memory:
         return PreparedImageInput(original_path=image_path, processing_path=image_path, converted_to_8bit=True,
-                                  image=ensure_color(normalize_input_image(image_8)), raw=raw)
+                                  image=ensure_color(normalize_input_image(image_8)), raw=raw,
+                                  pixel_size_mm=pixel_size_mm)
     prepared_root.mkdir(parents=True, exist_ok=True)
     suffix_hash = hashlib.md5(str(image_path).encode("utf-8")).hexdigest()[:8]
     prepared_path = prepared_root / f"{image_path.stem}__src8__{suffix_hash}.png"
@@ -233,6 +265,7 @@ def _prepare_image_input(image_path: Path, prepared_root: Path, in_memory: bool 
         processing_path=prepared_path,
         converted_to_8bit=True,
         raw=raw,
+        pixel_size_mm=pixel_size_mm,
     )
 
 
@@ -538,11 +571,13 @@ class InferencePipelineRunner:
     def run(self, image_inputs: List[PreparedImageInput]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         total = len(image_inputs)
+        disable_progress = bool(getattr(self.args, "disable_progress", False))
+        iterable = image_inputs if disable_progress else tqdm(image_inputs, desc="推理中")
 
-        for idx, image_input in enumerate(tqdm(image_inputs, desc="推理中")):
+        for idx, image_input in enumerate(iterable):
             image_path = image_input.original_path
             processing_path = image_input.processing_path
-            if self.output_dir:
+            if self.output_dir and not disable_progress:
                 self._update_progress_file(self.output_dir, idx, total, image_path.name, stage="running")
             try:
                 # 输入预处理：16bit / DICOM 先转换为 8bit，再进入后续既有流程
@@ -643,6 +678,8 @@ class InferencePipelineRunner:
                     "ocr": iqi_result,
                     "grayscale_density": grayscale_density,
                     "grayscale_density_regions": grayscale_density_regions,
+                    **({"pixel_size_mm": image_input.pixel_size_mm}
+                       if image_input.pixel_size_mm is not None else {}),
                 })
                 if image_input.raw is not None:
                     # 与检测坐标系一致的高位灰度图；以 "_" 开头，调用方须在写 JSON 前取走
@@ -651,7 +688,7 @@ class InferencePipelineRunner:
                 print(f"[警告] 处理 {image_path} 时出错: {exc}")
 
             # Update progress after both detection and OCR are done for this image
-            if self.output_dir:
+            if self.output_dir and not disable_progress:
                 self._update_progress_file(self.output_dir, idx + 1, total, image_path.name, stage="running")
 
         return results

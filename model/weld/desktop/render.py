@@ -113,18 +113,30 @@ def draw_result(image: np.ndarray, result: Dict[str, Any], font: Optional[FontRe
     return canvas
 
 
-def render_annotated(result: Dict[str, Any], font: Optional[FontRenderer] = None) -> np.ndarray:
+def render_annotated(
+    result: Dict[str, Any],
+    font: Optional[FontRenderer] = None,
+    image: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """读取推理所用图像 → 矫正方向 → 叠加结果。"""
-    image = load_image(_source_path(result))
+    if image is None:
+        image = load_image(_source_path(result))
+    elif image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     label = int((result.get("correction") or {}).get("label", 0) or 0)
     if label:
         image = apply_correction_label(image, label)
     return draw_result(image, result, font)
 
 
-def save_annotated(result: Dict[str, Any], out_path: Path, font: Optional[FontRenderer] = None,
-                   quality: int = 92) -> Path:
-    canvas = render_annotated(result, font)
+def save_annotated(
+    result: Dict[str, Any],
+    out_path: Path,
+    font: Optional[FontRenderer] = None,
+    quality: int = 92,
+    image: Optional[np.ndarray] = None,
+) -> Path:
+    canvas = render_annotated(result, font, image=image)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     params = [int(cv2.IMWRITE_JPEG_QUALITY), quality] if out_path.suffix.lower() in (".jpg", ".jpeg") else None
     if not cv_io.imwrite(out_path, canvas, params):

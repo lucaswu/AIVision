@@ -278,26 +278,46 @@ class RFDetrDetectionModel:
             return {idx: str(name) for idx, name in enumerate(raw_names)}
         return {}
 
+    def _parse_single_detections(self, detections: Any) -> List[Dict[str, Any]]:
+        if detections is None or len(getattr(detections, "xyxy", [])) == 0:
+            return []
+        results: List[Dict[str, Any]] = []
+        for bbox, score, cls_id in zip(
+                detections.xyxy, detections.confidence, detections.class_id):
+            cls_id_int = int(cls_id)
+            results.append({
+                "bbox": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
+                "confidence": float(score),
+                "class_id": cls_id_int,
+                "class_name": resolve_label(cls_id_int, self.class_map)
+            })
+        return results
+
     def predict_patch(self, patch_bgr: np.ndarray) -> List[Dict[str, Any]]:
         patch_rgb = cv2.cvtColor(patch_bgr, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(patch_rgb)
         detections = self.model.predict(pil_image, threshold=self.confidence)
         detections = _ensure_single_prediction(detections)
-        if detections is None or len(getattr(detections, "xyxy", [])) == 0:
-            return []
+        return self._parse_single_detections(detections)
 
-        results: List[Dict[str, Any]] = []
-        for bbox, score, cls_id in zip(
-                detections.xyxy, detections.confidence, detections.class_id):
-            cls_id_int = int(cls_id)
-            result = {
-                "bbox": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
-                "confidence": float(score),
-                "class_id": cls_id_int,
-                "class_name": resolve_label(cls_id_int, self.class_map)
-            }
-            results.append(result)
-        return results
+    def predict_patches(self, patches_bgr: Sequence[np.ndarray]) -> List[List[Dict[str, Any]]]:
+        """批量推理多个等尺寸切片，减少逐片 GPU 启动与同步开销。"""
+        if not patches_bgr:
+            return []
+        if len(patches_bgr) == 1:
+            return [self.predict_patch(patches_bgr[0])]
+        # TensorRT engine 为 batch_size=1 构建，若已切换为 TrtRunnerModule 则逐片推理
+        inner = getattr(getattr(self.model, "model", None), "model", None)
+        if inner is not None and inner.__class__.__name__ == "TrtRunnerModule":
+            return [self.predict_patch(p) for p in patches_bgr]
+        try:
+            pil_images = [Image.fromarray(cv2.cvtColor(p, cv2.COLOR_BGR2RGB)) for p in patches_bgr]
+            batch_out = self.model.predict(pil_images, threshold=self.confidence)
+            if not isinstance(batch_out, list):
+                batch_out = [batch_out]
+            return [self._parse_single_detections(d) for d in batch_out]
+        except Exception:
+            return [self.predict_patch(p) for p in patches_bgr]
 
 
 class RFDetrSegmentationModel:
@@ -521,15 +541,35 @@ def _process_roi_and_detection(
         aligned_roi, rotation_meta = align_roi_orientation(roi_patch)
         enhanced_roi = enhance_image(aligned_roi, mode=enhance_mode, output_bits=8)
         roi_h, roi_w = enhanced_roi.shape[:2]
-        square_size = max(roi_h, roi_w)
-        padded_roi, pad_left, pad_top = center_pad_to_window(
-            enhanced_roi, (square_size, square_size)
+        target_size = max(1, int(wide_slice.target_size)) if wide_slice else 880
+        padded_roi, scale, pad_left, pad_top = letterbox_to_window(
+            enhanced_roi, (target_size, target_size)
         )
         prepared_roi = ensure_color(padded_roi)
         detections_raw = detection_model.predict_patch(prepared_roi)
         if roi_debug_dir is not None:
             _save_debug_image(prepared_roi, detections_raw, roi_debug_dir / "primary_input.jpg", font_renderer)
-        detections = _shift_detections_from_padding(detections_raw, pad_left, pad_top, roi_w, roi_h)
+        is_wide_roi = bool(
+            wide_slice and wide_slice.enabled
+            and (roi_w / max(roi_h, 1)) >= wide_slice.aspect_ratio_threshold
+        )
+        detections: List[Dict[str, Any]] = []
+        for det in detections_raw or []:
+            bbox = det.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            unscaled_w = (bbox[2] - bbox[0]) / scale
+            # 宽长比极大（启用宽切片）时，主干分支将整条焊缝压缩为细条，偶尔会把整条焊缝误检为单个低置信度巨框
+            if is_wide_roi and unscaled_w > 0.75 * roi_w and float(det.get("confidence", 0.0)) < 0.5:
+                continue
+            new_det = det.copy()
+            new_det["bbox"] = [
+                float(np.clip((bbox[0] - pad_left) / scale, 0, roi_w)),
+                float(np.clip((bbox[1] - pad_top) / scale, 0, roi_h)),
+                float(np.clip((bbox[2] - pad_left) / scale, 0, roi_w)),
+                float(np.clip((bbox[3] - pad_top) / scale, 0, roi_h)),
+            ]
+            detections.append(new_det)
         detections = _restore_detections_from_alignment(detections, rotation_meta)
         mapped_detections = _map_to_image(detections, x1_i, y1_i, img_w, img_h, source="primary")
 
@@ -710,6 +750,85 @@ def _run_wide_slice_detection(aligned_roi: np.ndarray,
         return detections
 
     pending_full: Optional[WideSlicePatch] = None
+    if debug_dir is None and hasattr(detection_model, "predict_patches"):
+        slice_tasks: List[Tuple[str, Any, float, int, int]] = []
+        prepared_batch: List[np.ndarray] = []
+        for patch in plan.patches:
+            if patch.is_full_window:
+                if pending_full is None:
+                    pending_full = patch
+                else:
+                    stacked = stack_wide_slice_pair(pending_full, patch)
+                    padded, scale, pad_left, pad_top = letterbox_to_window(
+                        stacked, (target_size, target_size)
+                    )
+                    prepared_batch.append(ensure_color(padded))
+                    slice_tasks.append(("pair", (pending_full, patch), scale, pad_left, pad_top))
+                    pending_full = None
+            elif patch.width > 0 and patch.height > 0:
+                padded, scale, pad_left, pad_top = letterbox_to_window(
+                    patch.image, (target_size, target_size)
+                )
+                prepared_batch.append(ensure_color(padded))
+                slice_tasks.append(("single", patch, scale, pad_left, pad_top))
+        if pending_full is not None and pending_full.width > 0 and pending_full.height > 0:
+            padded, scale, pad_left, pad_top = letterbox_to_window(
+                pending_full.image, (target_size, target_size)
+            )
+            prepared_batch.append(ensure_color(padded))
+            slice_tasks.append(("single", pending_full, scale, pad_left, pad_top))
+            pending_full = None
+
+        batch_raw = detection_model.predict_patches(prepared_batch)
+        for (kind, payload, scale, pad_left, pad_top), raw in zip(slice_tasks, batch_raw):
+            if not raw:
+                continue
+            if kind == "pair":
+                top_patch, bottom_patch = payload
+                for det in raw:
+                    bbox = det["bbox"]
+                    x1 = (bbox[0] - pad_left) / scale
+                    y1 = (bbox[1] - pad_top) / scale
+                    x2 = (bbox[2] - pad_left) / scale
+                    y2 = (bbox[3] - pad_top) / scale
+                    if (y1 + y2) / 2.0 < plan.roi_height:
+                        cur_patch = top_patch
+                        x_offset = top_patch.x_offset
+                        local_y1, local_y2 = y1, y2
+                    else:
+                        cur_patch = bottom_patch
+                        x_offset = bottom_patch.x_offset
+                        local_y1 = y1 - plan.roi_height
+                        local_y2 = y2 - plan.roi_height
+                    if (x2 - x1) > 0.96 * cur_patch.width and float(det.get("confidence", 0.0)) < 0.5:
+                        continue
+                    new_det = det.copy()
+                    new_det["bbox"] = [
+                        float(np.clip(x1 + x_offset, 0, plan.roi_width)),
+                        float(np.clip(local_y1, 0, plan.roi_height)),
+                        float(np.clip(x2 + x_offset, 0, plan.roi_width)),
+                        float(np.clip(local_y2, 0, plan.roi_height)),
+                    ]
+                    new_det["source"] = "wide_slice"
+                    detections.append(new_det)
+            else:
+                patch = payload
+                for det in raw:
+                    bbox = det["bbox"]
+                    unscaled_w = (bbox[2] - bbox[0]) / scale
+                    if unscaled_w > 0.96 * patch.width and float(det.get("confidence", 0.0)) < 0.5:
+                        continue
+                    new_det = det.copy()
+                    new_det["bbox"] = [
+                        float((bbox[0] - pad_left) / scale + patch.x_offset),
+                        float((bbox[1] - pad_top) / scale),
+                        float((bbox[2] - pad_left) / scale + patch.x_offset),
+                        float((bbox[3] - pad_top) / scale),
+                    ]
+                    new_det["source"] = "wide_slice"
+                    detections.append(new_det)
+        return detections
+
     for patch in plan.patches:
         if patch.is_full_window:
             if pending_full is None:
@@ -1323,6 +1442,10 @@ def _suppress_contained_boxes(detections: List[Dict[str, Any]],
             if inter / area_small >= containment_thresh:
                 det_big = detections[idx_big]
                 det_small = detections[idx_small]
+                same_cls = det_big.get("class_id") == det_small.get("class_id")
+                # 防止不同类别的低置信度超大框吞并高置信度局部真实缺陷并篡改大框类别
+                if not same_cls and area_big > 3.0 * area_small:
+                    continue
                 conf_big = float(det_big.get("confidence", 0.0))
                 conf_small = float(det_small.get("confidence", 0.0))
                 if conf_small > conf_big:
