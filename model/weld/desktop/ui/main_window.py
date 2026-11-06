@@ -551,7 +551,9 @@ class MainWindow(QMainWindow):
             competition_strict_pipe_table26=s.competition_strict_pipe_table26,
             competition_split_pores=s.competition_split_pores, competition_merge_gap_mm=s.competition_merge_gap_mm,
             competition_intermittent_length=s.competition_intermittent_length,
-            competition_plate_root="report" if s.competition_report_plate_root else "drop",
+            competition_plate_root="report" if getattr(s, "competition_report_plate_root", False) else getattr(s, "competition_plate_root", "drop"),
+            competition_round_scale=getattr(s, "competition_round_scale", 0.42),
+            competition_small_pipe_arc_expand=getattr(s, "competition_small_pipe_arc_expand", True),
             student_name=s.student_name, student_password=s.student_password, changci=s.changci,
             submit_farain_online=s.submit_farain_online, submit_farain_url=s.submit_farain_url,
         )

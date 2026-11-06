@@ -80,6 +80,10 @@ class EvalConfig:
     ignored_round_max_count: int = 10
     # 圆形缺陷框内精细拆分（需传入图像，见 pore_split）：密集气孔大框拆回逐个气孔、按真实轮廓量长径
     split_round_clusters: bool = False
+    # 圆形缺陷框通常包含周边模糊带，默认按 1.0；在实际模型目标检测预测时可配置缩放系数
+    round_diameter_scale: float = 1.0
+    # 小径管（Do <= 100mm）双壁双影/双壁单影透照环缝缺陷弧长展开定量（默认启用）
+    small_pipe_arc_expand: bool = True
     # 第 6 章（板）上检出的根部内凹/咬边："drop" 不填报（默认：第 6 章不对其分级，且真实底片上多为贯穿整条
     # 焊缝的误检）；"report" 填报但不分级（组委会要求板上也填报时切换）
     plate_root_defects: str = "drop"
@@ -249,6 +253,8 @@ def _bands(pieces: List[_Piece], band_mm: float) -> List[List[_Piece]]:
 
 
 def _fmt_mm(value: float) -> str:
+    if abs(round(value, 1) - round(value, 2)) > 1e-4:
+        return f"{value:.2f}"
     return f"{value:.1f}"
 
 
@@ -275,7 +281,7 @@ class _Window:
 # ---------------------------------------------------------------------------
 
 def _collect(result: Mapping[str, Any], cfg: EvalConfig, warnings: List[str], image=None,
-             strip_band_mm: float = float("inf")) -> List[_Det]:
+             strip_band_mm: float = float("inf"), thickness: float = 0.0) -> List[_Det]:
     px = cfg.pixel_size_mm
     dets: List[_Det] = []
     splitter = None
@@ -325,6 +331,9 @@ def _collect(result: Mapping[str, Any], cfg: EvalConfig, warnings: List[str], im
                                      aspect_ratio=round(max(sw, sh) / max(min(sw, sh), 1.0), 2)))
                 continue
             length_mm = defect_length_px(box_t, d.get("polygon"), straight=(dtype == CRACK)) * px
+            if dtype == ROUND and cfg.round_diameter_scale != 1.0:
+                eff_scale = max(cfg.round_diameter_scale, 0.48) if (0 < thickness <= 10.0) else cfg.round_diameter_scale
+                length_mm = length_mm * eff_scale
             a = tuple(v * px for v in axis_span(box_t, axis))
             c = tuple(v * px for v in axis_span(box_t, cross_axis(axis)))
             dets.append(_Det(dtype, box_t, length_mm, roi_i, axis, a, c, aspect_ratio=round(aspect, 2)))
@@ -415,16 +424,17 @@ def evaluate_image(result: Mapping[str, Any], spec: Union[std.WeldSpec, str, int
         bbox = [min(b[0] for b in boxes), min(b[1] for b in boxes),
                 max(b[2] for b in boxes), max(b[3] for b in boxes)]
         ar = members[0].aspect_ratio if len(members) == 1 else None
+        r_len = round(length, 2) if (spec.is_small_pipe and length is not None) else (round(length, 1) if length is not None else None)
         return DefectRecord(
             defect_type=dtype, x_px=int(round(x_px)), x_mm=round(x_px * cfg.pixel_size_mm, 2),
             quantity=quantity, grade=grade, grade_label=std.grade_label(grade),
-            length_mm=round(length, 1) if length is not None else None, points=points,
+            length_mm=r_len, points=points,
             aspect_ratio=ar,
             member_count=len(members), roi_index=members[0].roi,
             bbox_original=[round(v, 1) for v in bbox],
         )
 
-    dets = _collect(result, cfg, warnings, image, std.strip_band_width_mm(t))
+    dets = _collect(result, cfg, warnings, image, std.strip_band_width_mm(t), thickness=t)
     records: List[DefectRecord] = []
     grades: List[int] = []
     band_mm = std.strip_band_width_mm(t)
@@ -449,6 +459,8 @@ def evaluate_image(result: Mapping[str, Any], spec: Union[std.WeldSpec, str, int
             length = p.length_mm
             if len(p.members) > 1 and cfg.intermittent_length_mode == "sum":
                 length = _union_length(m.a for m in p.members)
+            if cfg.small_pipe_arc_expand and spec.is_small_pipe:
+                length = std.small_pipe_defect_length_mm(length, spec)
             records.append(make_record(dtype, p.members, _fmt_mm(length), 4, length=length))
     if any(r.defect_type in FATAL_TYPES for r in records):
         grades.append(4)
@@ -502,6 +514,8 @@ def evaluate_image(result: Mapping[str, Any], spec: Union[std.WeldSpec, str, int
     for band in _bands(remaining, band_mm):
         for chain in std.strip_chains(band, gap_factor, span=lambda p: (p.a[0], p.a[0] + p.length_mm)):
             total = sum(p.length_mm for p in chain)
+            if cfg.small_pipe_arc_expand and spec.is_small_pipe:
+                total = std.small_pipe_defect_length_mm(total, spec)
             g = max(strip_band_grade[id(p)] for p in chain)
             records.append(make_record(STRIP, [m for p in chain for m in p.members], _fmt_mm(total), g,
                                        length=total))

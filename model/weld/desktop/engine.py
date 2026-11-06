@@ -61,6 +61,8 @@ class RunConfig:
     competition_merge_gap_mm: float = 2.0   # 断续未熔合/未焊透/纵向裂纹：间隔 ≤ 该值合并为一个缺陷
     competition_intermittent_length: str = "envelope"  # envelope（含间隔）| sum（各段之和）
     competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
+    competition_round_scale: float = 1.0   # 圆形缺陷长径缩放比例（默认 1.0；按气孔核心尺寸折减可设为 0.42）
+    competition_small_pipe_arc_expand: bool = True  # 小径管缺陷按圆柱环缝弧长展开定量（默认启用）
     competition_deadline_min: float = 0.0   # >0：从开始计时到该分钟数仍未处理的影像按无缺陷兜底并导出
     # 远洋在线评分系统 (http://www.farain.com:3030/testing/ai/ray/submit)
     student_name: str = "13858120789"       # 学员姓名（固定）
@@ -541,6 +543,8 @@ class InferenceEngine:
             intermittent_merge_gap_mm=cfg.competition_merge_gap_mm,
             intermittent_length_mode=cfg.competition_intermittent_length,
             plate_root_defects=cfg.competition_plate_root,
+            round_diameter_scale=cfg.competition_round_scale,
+            small_pipe_arc_expand=getattr(cfg, "competition_small_pipe_arc_expand", True),
         )
 
     def _evaluate_competition(self, cfg: RunConfig, result: Dict[str, Any], src: Path,

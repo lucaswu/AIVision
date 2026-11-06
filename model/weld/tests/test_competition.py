@@ -226,6 +226,28 @@ class EvaluateImageTest(unittest.TestCase):
         # 小径管不受开关影响（表 27 的 Ⅱ/Ⅲ 级长度相同）
         self.assertEqual(evaluate_image(result(dets), "Φ89×6", strict).grade, 2)
 
+    def test_small_pipe_arc_length_quantification(self):
+        # 小径管 Φ48×5（标准实际外径 48.3mm，半圆周展开 75.88mm）
+        # 贯穿缺陷（投影长度 43.9mm >= 0.75 * 48 = 36mm）：定量应为 75.88mm
+        dets_through = [det("未焊透", 10.0, 20.0, 53.9, 21.0)]  # 43.9mm
+        ev = evaluate_image(result(dets_through), "φ48x5")
+        self.assertEqual(len(ev.records), 1)
+        self.assertEqual(ev.records[0].quantity, "75.88")
+        self.assertEqual(ev.records[0].length_mm, 75.88)
+        self.assertEqual(ev.records[0].grade, 4)
+
+        # 局部短缺陷（投影长度 10.0mm）：按 π/2 系数展开为 15.7mm
+        dets_short = [det("未焊透", 10.0, 20.0, 20.0, 21.0)]  # 10.0mm
+        ev_short = evaluate_image(result(dets_short), "φ48x5")
+        self.assertEqual(ev_short.records[0].quantity, "15.7")
+        self.assertEqual(ev_short.records[0].length_mm, 15.7)
+
+        # 若关闭开关，则保持投影长度 43.9mm
+        no_expand = EvalConfig(small_pipe_arc_expand=False)
+        ev_raw = evaluate_image(result(dets_through), "φ48x5", no_expand)
+        self.assertEqual(ev_raw.records[0].quantity, "43.9")
+        self.assertEqual(ev_raw.records[0].length_mm, 43.9)
+
     def test_overlapping_root_boxes_merged(self):
         # 同一内凹被拆成 [10,20] 与 [15,25] 两个框 → 一个缺陷 15mm，而不是 20mm
         dets = [det("内凹", 10, 30, 20, 31), det("内凹", 15, 30, 25, 31)]

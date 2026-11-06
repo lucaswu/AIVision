@@ -1380,13 +1380,30 @@ def _merge_classwise_overlapping_boxes(detections: List[Dict[str, Any]],
             merged.append(best.copy())
             continue
 
-        boxes = [detections[i]["bbox"] for i in indices]
+        best_box = best["bbox"]
+        best_conf = float(best.get("confidence", 0.0))
+        best_w = abs(best_box[2] - best_box[0])
+        best_h = abs(best_box[3] - best_box[1])
+        best_len = max(best_w, best_h)
         fused = best.copy()
+
+        # 仅将置信度足够高（>=0.7*best_conf）且尺寸合理（长轴<=1.35*best_len）的框纳入边界融合，
+        # 防止弱置信度的边缘大粗框/拖尾框将缺陷起始点或终点大幅往外拉伸
+        valid_boxes = []
+        for i in indices:
+            box = detections[i]["bbox"]
+            conf = float(detections[i].get("confidence", 0.0))
+            box_len = max(abs(box[2] - box[0]), abs(box[3] - box[1]))
+            if conf >= 0.70 * best_conf and box_len <= 1.35 * max(best_len, 1.0):
+                valid_boxes.append(box)
+        if not valid_boxes:
+            valid_boxes = [best_box]
+
         fused["bbox"] = [
-            float(min(box[0] for box in boxes)),
-            float(min(box[1] for box in boxes)),
-            float(max(box[2] for box in boxes)),
-            float(max(box[3] for box in boxes))
+            float(min(box[0] for box in valid_boxes)),
+            float(min(box[1] for box in valid_boxes)),
+            float(max(box[2] for box in valid_boxes)),
+            float(max(box[3] for box in valid_boxes))
         ]
         sources = {detections[i].get("source") for i in indices}
         if len(sources) > 1:

@@ -34,7 +34,9 @@ class UiSettings:
     competition_split_pores: bool = False
     competition_merge_gap_mm: float = 2.0
     competition_intermittent_length: str = "envelope"
-    competition_report_plate_root: bool = False  # 默认不填报板上的根部内凹/咬边
+    competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
+    competition_round_scale: float = 0.42   # 圆形缺陷长径缩放比例（默认 0.42 折减至核心尺寸）
+    competition_small_pipe_arc_expand: bool = True  # 小径管缺陷按圆柱环缝弧长展开定量（默认启用）
     competition_deadline_min: float = 37.0
     # 远洋在线评分系统设置（固定为比赛参数，界面只读显示）
     student_name: str = "13858120789"

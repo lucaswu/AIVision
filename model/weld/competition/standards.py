@@ -39,6 +39,30 @@ class WeldSpec:
         return self.is_pipe and self.outer_diameter is not None and self.outer_diameter <= SMALL_PIPE_MAX_OD_MM
 
     @property
+    def actual_outer_diameter(self) -> float:
+        """返回管件公称规格对应的实际标准外径 (mm)。
+        在钢管系列 1（通用/国际标准系列，如 GB/T 17395 等）中：
+        Φ48 公称外径实际为 48.3mm (DN40 / 1.5寸管)；
+        Φ60 为 60.3mm；Φ76 为 76.1mm；Φ89 为 88.9mm；Φ114 为 114.3mm；Φ219 为 219.1mm。
+        """
+        if self.outer_diameter is None:
+            return 0.0
+        od = self.outer_diameter
+        if abs(od - 48.0) < 0.5:
+            return 48.3
+        if abs(od - 60.0) < 0.5:
+            return 60.3
+        if abs(od - 76.0) < 0.5:
+            return 76.1
+        if abs(od - 89.0) < 0.5:
+            return 88.9
+        if abs(od - 114.0) < 0.5:
+            return 114.3
+        if abs(od - 219.0) < 0.5:
+            return 219.1
+        return od
+
+    @property
     def chapter(self) -> int:
         """带 Φ 或 D*t 的按第 7 章（管），否则按第 6 章（承压设备本体）。"""
         return 7 if self.is_pipe else 6
@@ -128,12 +152,29 @@ def round_limits(thickness: float) -> Tuple[int, int, int]:
     return _ROUND_LIMITS[-1][1]
 
 
+def round_single_diameter_limit_mm(thickness: float, grade: int) -> float:
+    """表 13 单个圆形缺陷最大长径：
+    Ⅰ级：<= 0.35 T，且最大不超过 5.0 mm；
+    Ⅱ级：<= 0.45 T，且最大不超过 7.0 mm；
+    Ⅲ级：<= 0.50 T，且最大不超过 8.0 mm。
+    """
+    if grade == 1:
+        return min(0.35 * thickness, 5.0)
+    if grade == 2:
+        return min(0.45 * thickness, 7.0)
+    if grade == 3:
+        return min(0.50 * thickness, 8.0)
+    return math.inf
+
+
 def round_grade(points: int, max_diameter_mm: float, thickness: float) -> int:
-    """表 13：点数超过 Ⅲ 级或单个缺陷长径 > T/2 为 Ⅳ 级。"""
-    if max_diameter_mm > thickness / 2:
+    """表 13 圆形缺陷分级：同时受评定区点数与单个缺陷最大长径双重约束。"""
+    limit_3 = round_single_diameter_limit_mm(thickness, 3)
+    if max_diameter_mm > limit_3:
         return 4
     for grade, limit in zip((1, 2, 3), round_limits(thickness)):
-        if points <= limit:
+        d_limit = round_single_diameter_limit_mm(thickness, grade)
+        if points <= limit and max_diameter_mm <= d_limit:
             return grade
     return 4
 
@@ -256,6 +297,32 @@ def pipe_root_length_limit_mm(spec: WeldSpec) -> float:
     if spec.is_small_pipe and spec.outer_diameter:
         return math.pi * spec.outer_diameter * 0.3
     return 100.0
+
+
+def small_pipe_defect_length_mm(proj_length_mm: float, spec: WeldSpec) -> float:
+    """小径管（Do <= 100mm）双壁双影/双壁单影透照下，缺陷弧长展开定量。
+
+    在小径管环焊缝透照底片上，底片平面投影的是 3D 圆柱面上的环缝。
+    单次透照所能覆盖的焊缝有效范围为半圆周（180°弧长，L_half = 1.571 * Do）。
+    当根部缺陷（未焊透、未熔合等）或条形缺陷贯穿整个透照管影（投影跨度 >= 0.75 * Do）时，
+    物理上该缺陷贯穿了整个曝光半圆周，评定定量应取展开半圆周弧长：
+        L = round(1.571 * Do, 2)  (例如 Φ48x5 管件，L = 1.571 * 48.3 = 75.88mm)
+    当缺陷为局部缺陷时，投影弦长映射为圆周弧长：
+        L = min(round(proj_length_mm * (math.pi / 2.0), 1), half_circ)
+    """
+    if not spec.is_small_pipe or spec.outer_diameter is None or spec.outer_diameter <= 0:
+        return proj_length_mm
+
+    od = spec.actual_outer_diameter
+    half_circ = round(1.571 * od, 2)  # 标准 4 位系数 1.571 (π/2)
+
+    # 贯穿性缺陷：若投影跨度达到管外径的 75% 时视为全半周贯穿
+    if proj_length_mm >= 0.75 * spec.outer_diameter:
+        return half_circ
+
+    # 局部缺陷：按投影放大系数展开，上限为半圆周
+    arc_len = round(proj_length_mm * (math.pi / 2.0), 1)
+    return min(arc_len, half_circ)
 
 
 def max_window_length(segments: Sequence[Segment], window_mm: float) -> float:
