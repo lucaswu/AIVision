@@ -24,8 +24,8 @@ class UiSettings:
     enable_location2: bool = True
     location2_conf: float = 0.25
     enable_iqi: bool = True
-    save_annotated: bool = True
-    enable_competition: bool = False
+    save_annotated: bool = False            # 竞赛模式默认不保存标注大图以最大化提速
+    enable_competition: bool = True         # 默认开启竞赛自动化评定
     competition_man_machine: bool = False   # 是否参加人机大战赛项（勾选则自动推断工艺三属性；未勾选为缺陷识别赛项，填 -1）
     competition_default_spec: str = ""
     competition_info_table: str = ""  # 《影像信息表》.xlsx/.xls/.csv，或逐图规格 JSON
@@ -34,6 +34,7 @@ class UiSettings:
     competition_split_pores: bool = False
     competition_merge_gap_mm: float = 2.0
     competition_intermittent_length: str = "envelope"
+    competition_report_plate_root: bool = False  # 默认不填报板上的根部内凹/咬边
     competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
     competition_round_scale: float = 0.42   # 圆形缺陷长径缩放比例（默认 0.42 折减至核心尺寸）
     competition_small_pipe_arc_expand: bool = True  # 小径管缺陷按圆柱环缝弧长展开定量（默认启用）
@@ -42,7 +43,7 @@ class UiSettings:
     student_name: str = "13858120789"
     student_password: str = "13858120789"
     changci: str = "122"
-    submit_farain_online: bool = False
+    submit_farain_online: bool = True       # 默认开启推理后自动向远洋系统在线提交
     submit_farain_url: str = "http://www.farain.com:3030/testing/ai/ray/submit"
     models: Dict[str, str] = field(default_factory=dict)  # 仅保存与默认值不同的项
 
@@ -57,6 +58,10 @@ class UiSettings:
         for key, value in raw.items():
             if key in names and isinstance(value, type(getattr(obj, key))):
                 setattr(obj, key, value)
+        if "competition_report_plate_root" in raw and "competition_plate_root" not in raw:
+            obj.competition_plate_root = "report" if obj.competition_report_plate_root else "drop"
+        elif "competition_plate_root" in raw and "competition_report_plate_root" not in raw:
+            obj.competition_report_plate_root = (obj.competition_plate_root == "report")
         return obj
 
     def save(self) -> None:

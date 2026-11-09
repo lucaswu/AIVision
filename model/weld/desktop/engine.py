@@ -68,7 +68,7 @@ class RunConfig:
     student_name: str = "13858120789"       # 学员姓名（固定）
     student_password: str = "13858120789"   # 考核号（固定）
     changci: str = "122"                    # 场次号（固定）
-    submit_farain_online: bool = False      # 是否在导出后自动提交至远洋评分服务器
+    submit_farain_online: bool = True       # 是否在导出后自动提交至远洋评分服务器
     submit_farain_url: str = "http://www.farain.com:3030/testing/ai/ray/submit"
 
 
@@ -515,14 +515,26 @@ class InferenceEngine:
             try:
                 payload = json.loads(res.json_path.read_text(encoding="utf-8"))
                 resp = submit_to_server(payload, url=cfg.submit_farain_url)
-                submit_resp_data = {"success": resp.success, "code": resp.code, "error_msg": resp.error_msg}
+                submit_resp_data = {
+                    "success": resp.success,
+                    "code": resp.code,
+                    "error_msg": resp.error_msg,
+                    "data": resp.data if isinstance(resp.data, dict) else ({"mark": resp.data} if resp.data else {}),
+                    "raw_text": resp.raw_text,
+                }
+                mark = None
+                if isinstance(resp.data, dict):
+                    mark = resp.data.get("mark")
+                elif isinstance(resp.data, (int, float, str)) and resp.data != "":
+                    mark = resp.data
                 if resp.success:
-                    self.log("[远洋评分系统] 提交成功！(code: 0)")
+                    mark_str = f"，系统评分：{mark} 分" if mark is not None else ""
+                    self.log(f"[远洋评分系统] 提交成功 (code: 0){mark_str}！")
                 else:
                     self.log(f"[远洋评分系统] 提交失败: code={resp.code}, 原因: {resp.error_msg}")
             except Exception as e:
                 self.log(f"[远洋评分系统] 提交异常: {e}")
-                submit_resp_data = {"success": False, "code": -1, "error_msg": str(e)}
+                submit_resp_data = {"success": False, "code": -1, "error_msg": str(e), "data": {}}
 
         return path, json_path_str, submit_resp_data
 

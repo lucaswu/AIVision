@@ -79,5 +79,90 @@ class CompetitionCellsTest(unittest.TestCase):
         self.assertEqual(cells[1], "圆形缺陷 X=100px 3")
 
 
+class UiSettingsCompatibilityTest(unittest.TestCase):
+    def test_plate_root_attributes_present(self):
+        from desktop.settings import UiSettings
+
+        s = UiSettings()
+        self.assertTrue(hasattr(s, "competition_report_plate_root"))
+        self.assertTrue(hasattr(s, "competition_plate_root"))
+        self.assertTrue(hasattr(s, "competition_round_scale"))
+        self.assertTrue(hasattr(s, "competition_small_pipe_arc_expand"))
+        self.assertFalse(s.competition_report_plate_root)
+        self.assertEqual(s.competition_plate_root, "drop")
+
+    def test_json_load_backwards_compatibility(self):
+        import json
+        from desktop.settings import UiSettings
+        from unittest.mock import patch
+
+        legacy_json = json.dumps({"competition_report_plate_root": True})
+        with patch.object(paths, "settings_path") as mock_path:
+            mock_path.return_value.read_text.return_value = legacy_json
+            s = UiSettings.load()
+            self.assertTrue(s.competition_report_plate_root)
+            self.assertEqual(s.competition_plate_root, "report")
+
+        new_json = json.dumps({"competition_plate_root": "report"})
+        with patch.object(paths, "settings_path") as mock_path:
+            mock_path.return_value.read_text.return_value = new_json
+            s = UiSettings.load()
+            self.assertTrue(s.competition_report_plate_root)
+            self.assertEqual(s.competition_plate_root, "report")
+
+
+class MainWindowSummaryTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import os
+        from PyQt6.QtWidgets import QApplication
+
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_summary_update_and_layout(self):
+        from desktop.engine import ImageOutcome, RunSummary
+        from desktop.ui.main_window import MainWindow
+
+        win = MainWindow()
+        self.assertFalse(win.table.horizontalHeader().isSectionHidden(0))
+        # Check summary reset state
+        self.assertIn("就绪", win.summary_detail_label.text())
+
+        # Simulate outcome
+        o = ImageOutcome(
+            index=0, total=1, image_path="test.dcm", rel_path="test.dcm", ok=True,
+            competition={"grade_label": "Ⅳ级", "records": [{"defect_type": "裂纹"}]}
+        )
+        win._outcomes[0] = o
+        win._total = 1
+
+        summary = RunSummary(
+            output_dir="/tmp/out", total=1, succeeded=1, failed=0, cancelled=False,
+            elapsed_s=2.5, answers_path="/tmp/out/answers.xlsx",
+            submit_response={"success": True, "data": {"mark": 50}}
+        )
+        win._update_completed_summary(summary)
+
+        text = win.summary_detail_label.text()
+        self.assertIn("Ⅳ级: 1", text)
+        self.assertIn("裂纹: <b>1</b>", text)
+        self.assertIn("50", text)
+        self.assertIn("全目录概况", text)
+        self.assertIn("总体评定结果", win.summary_box.title())
+
+        # Also test without score
+        summary_no_score = RunSummary(
+            output_dir="/tmp/out", total=1, succeeded=1, failed=0, cancelled=False,
+            elapsed_s=2.5, answers_path="/tmp/out/answers.xlsx",
+            submit_response={"success": True, "data": {}}
+        )
+        win._update_completed_summary(summary_no_score)
+        text_no_score = win.summary_detail_label.text()
+        self.assertIn("已成功（服务端已接收提交", text_no_score)
+
+        win.close()
+
+
 if __name__ == "__main__":
     unittest.main()

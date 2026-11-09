@@ -7,9 +7,9 @@ from typing import Dict, List, Optional, Tuple
 from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import paths
@@ -153,9 +153,17 @@ class MainWindow(QMainWindow):
         io.addRow("", row_opt)
         outer.addWidget(io_box)
 
-        # 参数
+        # 参数（三列水平排布，全部参数在界面直观展开，无需滚动滑条）
         param_box = QGroupBox("参数")
-        pf = QFormLayout(param_box)
+        param_layout = QHBoxLayout(param_box)
+        param_layout.setContentsMargins(12, 8, 12, 8)
+        param_layout.setSpacing(16)
+
+        # 第 1 列：基础检测与模型设置
+        col1 = QWidget()
+        pf1 = QFormLayout(col1)
+        pf1.setContentsMargins(0, 0, 0, 0)
+        pf1.setSpacing(6)
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("检测 (det)", "det")
         self.mode_combo.addItem("分割 (seg)", "seg")
@@ -172,20 +180,24 @@ class MainWindow(QMainWindow):
         self.loc2_spin = self._spin(0.01, 0.99, 0.25)
         self.iqi_cb = QCheckBox("IQI 像质计识别")
         self.annot_cb = QCheckBox("保存标注图")
-        pf.addRow("模式", self.mode_combo)
-        pf.addRow("设备", self.device_combo)
-        pf.addRow("主模型置信度", self.conf_spin)
-        pf.addRow(self.wide_cb)
-        pf.addRow(self.corr_cb)
-        pf.addRow(self.loc_cb, self.loc_spin)
-        pf.addRow(self.loc2_cb, self.loc2_spin)
-        pf.addRow(self.iqi_cb)
-        pf.addRow(self.annot_cb)
+        pf1.addRow("模式", self.mode_combo)
+        pf1.addRow("设备", self.device_combo)
+        pf1.addRow("主模型置信度", self.conf_spin)
+        pf1.addRow(self.wide_cb)
+        pf1.addRow(self.corr_cb)
+        pf1.addRow(self.loc_cb, self.loc_spin)
+        pf1.addRow(self.loc2_cb, self.loc2_spin)
+        pf1.addRow(self.iqi_cb)
+        pf1.addRow(self.annot_cb)
         btn_models = QPushButton("模型设置…")
         btn_models.clicked.connect(self._edit_models)
-        pf.addRow(btn_models)
+        pf1.addRow(btn_models)
 
-        # 竞赛评定
+        # 第 2 列：竞赛评定与标准规则
+        col2 = QWidget()
+        pf2 = QFormLayout(col2)
+        pf2.setContentsMargins(0, 0, 0, 0)
+        pf2.setSpacing(6)
         self.comp_cb = QCheckBox("竞赛评定（NB/T 47013.2）")
         self.comp_cb.setToolTip("对每张图输出缺陷定位 X、定性、定量与评定等级，写入 competition_results.json")
         self.man_machine_cb = QCheckBox("人机大战赛项（自动推断工艺）")
@@ -221,12 +233,26 @@ class MainWindow(QMainWindow):
         self.table26_cb = QCheckBox("大中径管根部缺陷严格按表 26 分级")
         self.table26_cb.setToolTip("默认按竞赛规则（9）：超 Ⅲ 级限值判 Ⅳ，其余判 Ⅱ。\n"
                                    "勾选后外径 > 100mm 的管道：任意 3T 内累计 ≤ T 为 Ⅱ 级，总长 ≤ 100mm 为 Ⅲ 级")
-        self.split_cb = QCheckBox("气孔框内精细拆分（实验）")
-        self.split_cb.setToolTip("在原始高位图上把密集气孔大框拆回逐个气孔、按真实轮廓量长径。\n"
-                                 "需用真实底片验证后再用于比赛")
         self.plate_root_cb = QCheckBox("板焊缝上的根部内凹/咬边也填报")
         self.plate_root_cb.setToolTip("默认不填报：第 6 章（板）不对根部内凹/咬边分级，且模型在板上常有贯穿整条焊缝的误检。\n"
                                       "组委会要求板上也必须填报时勾选")
+        pf2.addRow(self.comp_cb)
+        pf2.addRow(self.man_machine_cb)
+        pf2.addRow("影像信息表", row_info)
+        pf2.addRow("默认规格", self.spec_edit)
+        pf2.addRow("截止时间", self.deadline_spin)
+        pf2.addRow(self.fast_cb)
+        pf2.addRow(self.table26_cb)
+        pf2.addRow(self.plate_root_cb)
+
+        # 第 3 列：后处理与远洋提交
+        col3 = QWidget()
+        pf3 = QFormLayout(col3)
+        pf3.setContentsMargins(0, 0, 0, 0)
+        pf3.setSpacing(6)
+        self.split_cb = QCheckBox("气孔框内精细拆分（实验）")
+        self.split_cb.setToolTip("在原始高位图上把密集气孔大框拆回逐个气孔、按真实轮廓量长径。\n"
+                                 "需用真实底片验证后再用于比赛")
         self.merge_gap_spin = QDoubleSpinBox()
         self.merge_gap_spin.setRange(0, 50)
         self.merge_gap_spin.setDecimals(1)
@@ -240,8 +266,6 @@ class MainWindow(QMainWindow):
         for w in (self.merge_gap_spin, self.merge_len_combo):
             w.setToolTip("断续未熔合/未焊透/纵向裂纹：间隔 ≤ 该值合并为一个缺陷；\n"
                          "合并后长度取包络（含间隔）或各段之和")
-
-        # 远洋在线评分系统设置（固定姓名、考核号、场次号，界面显示但不可编辑）
         self.student_name_edit = QLineEdit("13858120789")
         self.student_name_edit.setReadOnly(True)
         self.student_name_edit.setToolTip("学员姓名（已固定：13858120789，不可编辑）")
@@ -254,12 +278,21 @@ class MainWindow(QMainWindow):
         row_student = QHBoxLayout()
         row_student.addWidget(self.student_name_edit, 1)
         row_student.addWidget(self.student_pwd_edit, 1)
-
         self.submit_online_cb = QCheckBox("推理后自动在线提交")
         self.submit_online_cb.setToolTip("推理与导出完成后，自动 POST 提交至远洋评分服务器 (http://www.farain.com:3030/testing/ai/ray/submit)")
         btn_manual_submit = QPushButton("远洋系统在线提交…")
         btn_manual_submit.setToolTip("选择已有的 submission_farain.json 提交至远洋评分系统")
         btn_manual_submit.clicked.connect(self._manual_submit_farain)
+        pf3.addRow(self.split_cb)
+        pf3.addRow("断续合并", row_merge)
+        pf3.addRow("学员/考核号", row_student)
+        pf3.addRow("场次号", self.changci_edit)
+        pf3.addRow(self.submit_online_cb)
+        pf3.addRow(btn_manual_submit)
+
+        param_layout.addWidget(col1, 1)
+        param_layout.addWidget(col2, 1)
+        param_layout.addWidget(col3, 1)
 
         self._comp_widgets = (self.man_machine_cb, self.spec_edit, self.info_table_edit, btn_info, btn_info_clear, self.fast_cb,
                               self.deadline_spin, self.table26_cb, self.split_cb, self.plate_root_cb,
@@ -267,45 +300,47 @@ class MainWindow(QMainWindow):
                               self.student_name_edit, self.student_pwd_edit, self.changci_edit,
                               self.submit_online_cb, btn_manual_submit)
         self.comp_cb.toggled.connect(self._on_competition_toggled)
-        pf.addRow(self.comp_cb)
-        pf.addRow(self.man_machine_cb)
-        pf.addRow("影像信息表", row_info)
-        pf.addRow("默认规格", self.spec_edit)
-        pf.addRow("学员/考核号", row_student)
-        pf.addRow("场次号", self.changci_edit)
-        pf.addRow("截止时间", self.deadline_spin)
-        pf.addRow(self.fast_cb)
-        pf.addRow(self.table26_cb)
-        pf.addRow(self.plate_root_cb)
-        pf.addRow(self.split_cb)
-        pf.addRow("断续合并", row_merge)
-        pf.addRow(self.submit_online_cb)
-        pf.addRow(btn_manual_submit)
-        param_box.setFixedWidth(300)
 
-        # 结果表 + 预览
-        self.table = QTableWidget(0, len(COLUMNS))
+        # 结果表 + 预览（内部保留对象用于数据管理与测试兼容，界面隐藏不显示）
+        self.table = QTableWidget(0, len(COLUMNS), self)
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(0, 150)
+        self.table.setColumnWidth(1, 60)
+        self.table.setColumnWidth(2, 70)
+        self.table.setColumnWidth(3, 65)
+        self.table.setColumnWidth(4, 75)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(6, 65)
         self.table.verticalHeader().setVisible(False)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
-        self.viewer = ImageViewer()
+        self.table.hide()
 
-        split = QSplitter(Qt.Orientation.Vertical)
-        split.addWidget(self.table)
-        split.addWidget(self.viewer)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 3)
-        split.setSizes([200, 520])
-        self.table.setMinimumHeight(120)
+        self.viewer = ImageViewer(self)
+        self.viewer.hide()
 
-        mid = QHBoxLayout()
-        mid.addWidget(param_box)
-        mid.addWidget(split, 1)
-        outer.addLayout(mid, 1)
+        self._split = QSplitter(Qt.Orientation.Vertical, self)
+        self._split.addWidget(self.table)
+        self._split.addWidget(self.viewer)
+        self._split.hide()
+
+        # 总体评定结果看板（与参数形成上下排布，位于参数下方，独占拉伸）
+        self.summary_box = QGroupBox("总体评定结果")
+        summary_vbox = QVBoxLayout(self.summary_box)
+        summary_vbox.setContentsMargins(12, 10, 12, 10)
+        summary_vbox.setSpacing(6)
+        self.summary_detail_label = QLabel()
+        self.summary_detail_label.setWordWrap(True)
+        self.summary_detail_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        summary_vbox.addWidget(self.summary_detail_label, 1)
+        self._reset_summary_box()
+
+        # 上下垂直布局：上方参数面板，下方总体评定结果看板
+        outer.addWidget(param_box)
+        outer.addWidget(self.summary_box, 1)
 
         # 进度/控制/日志
         self.progress = QProgressBar()
@@ -365,7 +400,8 @@ class MainWindow(QMainWindow):
         self.fast_cb.setChecked(s.competition_fast)
         self.table26_cb.setChecked(s.competition_strict_pipe_table26)
         self.split_cb.setChecked(s.competition_split_pores)
-        self.plate_root_cb.setChecked(s.competition_report_plate_root)
+        report_plate = getattr(s, "competition_report_plate_root", False) or getattr(s, "competition_plate_root", "drop") == "report"
+        self.plate_root_cb.setChecked(bool(report_plate))
         self.merge_gap_spin.setValue(s.competition_merge_gap_mm)
         self.merge_len_combo.setCurrentIndex(max(0, self.merge_len_combo.findData(s.competition_intermittent_length)))
         self.deadline_spin.setValue(s.competition_deadline_min)
@@ -385,6 +421,7 @@ class MainWindow(QMainWindow):
     def _collect_settings(self) -> UiSettings:
         defaults = paths.ModelPaths.defaults().to_dict()
         overrides = {k: v for k, v in self._models.to_dict().items() if v != defaults.get(k)}
+        report_plate = self.plate_root_cb.isChecked()
         return UiSettings(
             inputs=self._inputs, output_dir=self.output_edit.text().strip(),
             recursive=self.recursive_cb.isChecked(), mode=self.mode_combo.currentData(),
@@ -400,7 +437,11 @@ class MainWindow(QMainWindow):
             competition_info_table=self.info_table_edit.text().strip(),
             competition_fast=self.fast_cb.isChecked(), competition_deadline_min=self.deadline_spin.value(),
             competition_strict_pipe_table26=self.table26_cb.isChecked(),
-            competition_split_pores=self.split_cb.isChecked(), competition_report_plate_root=self.plate_root_cb.isChecked(),
+            competition_split_pores=self.split_cb.isChecked(),
+            competition_report_plate_root=report_plate,
+            competition_plate_root="report" if report_plate else "drop",
+            competition_round_scale=getattr(self._settings, "competition_round_scale", 0.42),
+            competition_small_pipe_arc_expand=getattr(self._settings, "competition_small_pipe_arc_expand", True),
             competition_merge_gap_mm=self.merge_gap_spin.value(),
             competition_intermittent_length=self.merge_len_combo.currentData(),
             student_name="13858120789",
@@ -551,7 +592,7 @@ class MainWindow(QMainWindow):
             competition_strict_pipe_table26=s.competition_strict_pipe_table26,
             competition_split_pores=s.competition_split_pores, competition_merge_gap_mm=s.competition_merge_gap_mm,
             competition_intermittent_length=s.competition_intermittent_length,
-            competition_plate_root="report" if getattr(s, "competition_report_plate_root", False) else getattr(s, "competition_plate_root", "drop"),
+            competition_plate_root="report" if (getattr(s, "competition_report_plate_root", False) or getattr(s, "competition_plate_root", "drop") == "report") else "drop",
             competition_round_scale=getattr(s, "competition_round_scale", 0.42),
             competition_small_pipe_arc_expand=getattr(s, "competition_small_pipe_arc_expand", True),
             student_name=s.student_name, student_password=s.student_password, changci=s.changci,
@@ -569,6 +610,7 @@ class MainWindow(QMainWindow):
         self._outcomes.clear()
         self.viewer.set_image(None)
         self.log_view.clear()
+        self._reset_summary_box()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self._started_at = time.time()
@@ -638,6 +680,173 @@ class MainWindow(QMainWindow):
         self.timing_label.setText(text)
         self.timing_label.setStyleSheet("color:#c00;font-weight:bold;" if risk else "")
 
+    def _reset_summary_box(self) -> None:
+        self.summary_box.setTitle("总体评定结果（全目录汇总）")
+        self.summary_box.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid #d0d7de; border-radius: 8px; margin-top: 4px; padding: 6px; background-color: #f6f8fa; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #24292f; font-size: 13px; }"
+        )
+        self.summary_detail_label.setText(
+            "<table width='100%' cellpadding='8' cellspacing='8' style='border-collapse:separate;'>"
+            "<tr>"
+            "<td width='34%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>"
+            "<h4 style='color:#24292f; margin:0 0 6px 0;'>📋 状态：就绪</h4>"
+            "<p style='color:#57606a; margin:0; line-height:160%; font-size:12px;'>请在上方确认各栏参数，点击下方<b>「开始」</b>按钮启动全目录批量推理。</p>"
+            "</td>"
+            "<td width='33%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>"
+            "<h4 style='color:#24292f; margin:0 0 6px 0;'>⚡ 竞赛评定流水线</h4>"
+            "<p style='color:#57606a; margin:0; line-height:160%; font-size:12px;'>模型检测 ➔ 竞赛评定（定性/定量/定级） ➔ 答案表导出 ➔ <b>远洋系统在线提交评分</b>。</p>"
+            "</td>"
+            "<td width='33%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>"
+            "<h4 style='color:#24292f; margin:0 0 6px 0;'>📊 结果看板</h4>"
+            "<p style='color:#57606a; margin:0; line-height:160%; font-size:12px;'>全目录推理完成后，此处将横向呈现等级分布、缺陷汇总及远洋系统得分。</p>"
+            "</td>"
+            "</tr>"
+            "</table>"
+        )
+
+    def _update_running_summary(self) -> None:
+        total = self._total or len(self._inputs)
+        done = len(self._outcomes)
+        if total == 0:
+            return
+        pct = (done / total) * 100
+        grades = {"Ⅰ级": 0, "Ⅱ级": 0, "Ⅲ级": 0, "Ⅳ级": 0}
+        defects = 0
+        for o in self._outcomes.values():
+            if o.ok and o.competition:
+                g = o.competition.get("grade_label")
+                if g in grades:
+                    grades[g] += 1
+                defects += len(o.competition.get("records") or [])
+        text = (
+            "<table width='100%' cellpadding='8' cellspacing='8' style='border-collapse:separate;'>"
+            "<tr>"
+            "<td width='34%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>"
+            f"<h4 style='color:#0969da; margin:0 0 6px 0;'>⏳ 正在推理：已完成 {done} / {total} 幅（{pct:.1f}%）</h4>"
+            "<p style='color:#57606a; margin:0; font-size:12px;'>正在批量处理中，请稍候…</p>"
+            "</td>"
+            "<td width='33%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>"
+            "<div style='font-weight:bold; margin-bottom:6px;'>当前等级分布：</div>"
+            f"<span style='color:#1a7f37;font-weight:bold;'>Ⅰ级: {grades['Ⅰ级']}</span>&nbsp;&nbsp;&nbsp;&nbsp;"
+            f"<span style='color:#0969da;font-weight:bold;'>Ⅱ级: {grades['Ⅱ级']}</span>&nbsp;&nbsp;&nbsp;&nbsp;"
+            f"<span style='color:#d97706;font-weight:bold;'>Ⅲ级: {grades['Ⅲ级']}</span>&nbsp;&nbsp;&nbsp;&nbsp;"
+            f"<span style='color:#cf222e;font-weight:bold;'>Ⅳ级: {grades['Ⅳ级']}</span>"
+            "</td>"
+            "<td width='33%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>"
+            "<div style='font-weight:bold; margin-bottom:6px;'>检出缺陷统计：</div>"
+            f"<div style='font-size:13px;'>已检出 <b>{defects}</b> 处缺陷</div>"
+            "</td>"
+            "</tr>"
+            "</table>"
+        )
+        self.summary_box.setTitle(f"总体评定结果（推理中: {done}/{total}）")
+        self.summary_detail_label.setText(text)
+
+    def _update_completed_summary(self, s: RunSummary) -> None:
+        from competition.exporter import time_score
+
+        grades = {"Ⅰ级": 0, "Ⅱ级": 0, "Ⅲ级": 0, "Ⅳ级": 0}
+        defect_counts: Dict[str, int] = {}
+        total_defects = 0
+        for o in self._outcomes.values():
+            if o.ok and o.competition:
+                g = o.competition.get("grade_label")
+                if g in grades:
+                    grades[g] += 1
+                for rec in o.competition.get("records") or []:
+                    dtype = rec.get("defect_type") or "未知缺陷"
+                    defect_counts[dtype] = defect_counts.get(dtype, 0) + 1
+                    total_defects += 1
+
+        qual_count = grades["Ⅰ级"] + grades["Ⅱ级"]
+        qual_rate = (qual_count / s.succeeded * 100) if s.succeeded > 0 else 0.0
+        score = time_score(s.elapsed_s) if s.answers_path else None
+        avg_s = (s.elapsed_s / s.total) if s.total > 0 else 0.0
+
+        defect_parts = [f"{k}: <b>{v}</b>" for k, v in sorted(defect_counts.items(), key=lambda x: -x[1])]
+        defect_str = "，".join(defect_parts) if defect_parts else "无缺陷"
+
+        farain_part = ""
+        if s.submit_response:
+            if s.submit_response.get("success"):
+                mark = None
+                resp_data = s.submit_response.get("data")
+                if isinstance(resp_data, dict):
+                    mark = resp_data.get("mark")
+                    if mark is None:
+                        mark = resp_data.get("score")
+                elif isinstance(resp_data, (int, float, str)) and resp_data != "":
+                    mark = resp_data
+
+                if mark is not None:
+                    farain_part = (
+                        f"<b>远洋系统在线评分：</b>"
+                        f"<span style='color:#1a7f37;font-weight:bold;'>已成功（系统评分：<span style='font-size:15px;color:#1a7f37;'>{mark}</span> 分）</span>"
+                    )
+                else:
+                    farain_part = (
+                        f"<b>远洋系统在线评分：</b>"
+                        f"<span style='color:#1a7f37;font-weight:bold;'>已成功（服务端已接收提交，当前无回传分值）</span>"
+                    )
+            else:
+                err = s.submit_response.get('error_msg') or '未知错误'
+                farain_part = f"<b>远洋系统在线评分：</b><span style='color:#cf222e;font-weight:bold;'>提交失败：{err}</span>"
+        elif s.submission_json_path:
+            farain_part = f"<b>远洋系统在线评分：</b><span style='color:#0969da;'>已生成远洋JSON (未勾选在线提交)</span>"
+        else:
+            farain_part = f"<b>远洋系统在线评分：</b><span style='color:#57606a;'>未生成提交文件</span>"
+
+        time_part = f"<b>竞赛时间分 B：</b><b style='color:#0969da;font-size:15px;'>{score:.2f}</b> / 10.00" if score is not None else ""
+
+        answers_info = ""
+        if s.answers_path:
+            answers_info += f"<div><b>竞赛答案：</b><code>{Path(s.answers_path).name}</code></div>"
+        if s.submission_json_path:
+            answers_info += f"<div style='margin-top:2px;'><b>远洋JSON：</b><code>{Path(s.submission_json_path).name}</code>（断网可直接拷入 U 盘）</div>"
+
+        html = f"""
+        <table width='100%' cellpadding='8' cellspacing='8' style='border-collapse:separate;'>
+            <tr>
+                <td width='34%' valign='top' style='background:#ffffff; border:1px solid #b4e0be; border-radius:6px; padding:10px 12px;'>
+                    <h4 style='color:#1a7f37; margin:0 0 6px 0; font-size:14px;'>🏆 全目录概况</h4>
+                    <div><b>图像总量：</b>共 <b>{s.total}</b> 幅（成功 <span style='color:#1a7f37;font-weight:bold;'>{s.succeeded}</span>，失败 <span style='color:#cf222e;font-weight:bold;'>{s.failed}</span>）</div>
+                    <div><b>总耗时：</b>{fmt_duration(s.elapsed_s)}（{s.elapsed_s:.1f}s，平均 {avg_s:.2f}s/幅）</div>
+                    <div style='margin-top:4px; padding-top:4px; border-top:1px dashed #d0d7de;'>
+                        {time_part}<br/>
+                        {farain_part}
+                    </div>
+                </td>
+                <td width='33%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>
+                    <h4 style='color:#24292f; margin:0 0 6px 0; font-size:14px;'>📊 NB/T 47013.2 等级分布</h4>
+                    <div style='font-size:13px; margin-bottom:6px;'>
+                        <span style='color:#1a7f37;font-weight:bold;'>Ⅰ级: {grades['Ⅰ级']}</span> 幅 &nbsp;|&nbsp;
+                        <span style='color:#0969da;font-weight:bold;'>Ⅱ级: {grades['Ⅱ级']}</span> 幅 &nbsp;|&nbsp;
+                        <span style='color:#d97706;font-weight:bold;'>Ⅲ级: {grades['Ⅲ级']}</span> 幅 &nbsp;|&nbsp;
+                        <span style='color:#cf222e;font-weight:bold;'>Ⅳ级: {grades['Ⅳ级']}</span> 幅
+                    </div>
+                    <div>
+                        <b>综合合格率 (Ⅰ+Ⅱ级)：</b><span style='font-size:14px;font-weight:bold;color:#0969da;'>{qual_rate:.1f}%</span><br/>
+                        （合格 <b>{qual_count}</b> 幅 / 不合格 <b>{grades['Ⅲ级'] + grades['Ⅳ级']}</b> 幅）
+                    </div>
+                </td>
+                <td width='33%' valign='top' style='background:#ffffff; border:1px solid #d0d7de; border-radius:6px; padding:10px 12px;'>
+                    <h4 style='color:#24292f; margin:0 0 6px 0; font-size:14px;'>🔍 缺陷分类检出汇总（共 {total_defects} 处）</h4>
+                    <div style='font-size:12px; line-height:150%;'>{defect_str}</div>
+                    <div style='margin-top:4px; padding-top:4px; border-top:1px dashed #d0d7de; font-size:11px; color:#57606a;'>
+                        {answers_info}
+                    </div>
+                </td>
+            </tr>
+        </table>
+        """
+        self.summary_box.setTitle("总体评定结果（全目录推理完成）")
+        self.summary_box.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 2px solid #2da44e; border-radius: 8px; margin-top: 4px; padding: 6px; background-color: #f0fdf4; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #1a7f37; font-size: 13px; }"
+        )
+        self.summary_detail_label.setText(html)
+
     def _on_outcome(self, o: ImageOutcome) -> None:
         self._outcomes[o.index] = o
         row = self.table.rowCount()
@@ -658,8 +867,9 @@ class MainWindow(QMainWindow):
             if col == COLUMNS.index("评定结果"):
                 item.setToolTip("\n".join(text.split("；")))
             self.table.setItem(row, col, item)
-        if row == 0 and o.annotated_path:
+        if row == 0:
             self.table.selectRow(0)
+        self._update_running_summary()
 
     def _on_row_selected(self) -> None:
         rows = self.table.selectionModel().selectedRows()
@@ -694,6 +904,7 @@ class MainWindow(QMainWindow):
         state = "已停止" if s.cancelled else "完成"
         self.status_label.setText(f"{state}：成功 {s.succeeded}，失败 {s.failed}，耗时 {s.elapsed_s:.1f}s")
         self._append_log(f"输出目录: {s.output_dir}")
+        self._update_completed_summary(s)
         if s.answers_path:
             # 规则：答案导出时间不计；s.elapsed_s 在导出前截取
             score = time_score(s.elapsed_s)
@@ -709,8 +920,15 @@ class MainWindow(QMainWindow):
                 msg += f"\n\n远洋评分系统标准 JSON：\n{s.submission_json_path}\n（可直接拷贝至 U 盘交付）"
             if s.submit_response:
                 if s.submit_response.get("success"):
-                    mark = s.submit_response.get("data", {}).get("mark")
-                    mark_str = f"，系统评分：{mark} 分" if mark is not None else ""
+                    mark = None
+                    resp_data = s.submit_response.get("data")
+                    if isinstance(resp_data, dict):
+                        mark = resp_data.get("mark")
+                        if mark is None:
+                            mark = resp_data.get("score")
+                    elif isinstance(resp_data, (int, float, str)) and resp_data != "":
+                        mark = resp_data
+                    mark_str = f"，系统评分：{mark} 分" if mark is not None else "（服务端已接收）"
                     msg += f"\n\n【远洋评分系统】在线提交成功 (code: 0){mark_str}！"
                 else:
                     msg += f"\n\n【远洋评分系统】在线提交失败：{s.submit_response.get('error_msg')}"

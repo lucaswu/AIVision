@@ -19,11 +19,22 @@ class ImageViewer(QGraphicsView):
         self.setRenderHints(QPainter.RenderHint.SmoothPixmapTransform | QPainter.RenderHint.Antialiasing)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(Qt.GlobalColor.black)
+        self._show_placeholder()
+
+    def _show_placeholder(self) -> None:
+        self._scene.clear()
+        self._item = None
+        txt = self._scene.addText("点击上方表格中的影像行，在此预览底片与缺陷标注")
+        txt.setDefaultTextColor(Qt.GlobalColor.gray)
+        rect = txt.boundingRect()
+        txt.setPos(-rect.width() / 2, -rect.height() / 2)
+        self.setSceneRect(-200, -100, 400, 200)
 
     def set_image(self, bgr: np.ndarray | None) -> None:
         self._scene.clear()
         self._item = None
         if bgr is None:
+            self._show_placeholder()
             return
         rgb = np.ascontiguousarray(bgr[:, :, ::-1])
         h, w = rgb.shape[:2]
