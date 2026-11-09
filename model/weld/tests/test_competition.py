@@ -705,6 +705,7 @@ class FarainClientAndCraftTest(unittest.TestCase):
             )
             self.assertIsNotNone(res.json_path)
             self.assertTrue(res.json_path.exists())
+            self.assertEqual(res.json_path.name, "场次2.EXAM888.json")
             data = json.loads(res.json_path.read_text(encoding="utf-8"))
             self.assertEqual(data["name"], "李四")
             self.assertEqual(data["password"], "EXAM888")

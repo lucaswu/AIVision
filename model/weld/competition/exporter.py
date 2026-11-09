@@ -172,12 +172,18 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
         issues.append(f"xlsx 写入失败: {exc}")
         xlsx_path = None
 
-    # 生成远洋评分系统标准 JSON 文件 (U 盘离线备份与在线提交)
+    # 生成远洋评分系统标准 JSON 文件 (U 盘离线备份与在线提交，命名格式：场次.考核号.json)
     farain_payload = build_submission_payload(student_name, student_password, changci, farain_items)
     v_issues = validate_submission_payload(farain_payload)
     for vi in v_issues:
         issues.append(f"[远洋接口规范自检] {vi}")
-    farain_json_path = out_dir / f"{basename}_farain.json"
+    cc_clean = str(changci).strip()
+    pwd_clean = str(student_password).strip()
+    if cc_clean and pwd_clean:
+        farain_json_name = f"{cc_clean}.{pwd_clean}.json"
+    else:
+        farain_json_name = f"{basename}_farain.json"
+    farain_json_path = out_dir / farain_json_name
     try:
         save_submission_json(farain_payload, farain_json_path)
     except OSError as exc:

@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         self.submit_online_cb = QCheckBox("推理后自动在线提交")
         self.submit_online_cb.setToolTip("推理与导出完成后，自动 POST 提交至远洋评分服务器 (http://www.farain.com:3030/testing/ai/ray/submit)")
         btn_manual_submit = QPushButton("远洋系统在线提交…")
-        btn_manual_submit.setToolTip("选择已有的 submission_farain.json 提交至远洋评分系统")
+        btn_manual_submit.setToolTip("选择已有的 场次.考核号.json (或远洋提交JSON) 提交至远洋评分系统")
         btn_manual_submit.clicked.connect(self._manual_submit_farain)
         pf3.addRow(self.split_cb)
         pf3.addRow("断续合并", row_merge)
