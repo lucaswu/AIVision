@@ -12,7 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .client import build_submission_payload, build_submit_item, save_submission_json, validate_submission_payload
+from .client import (
+    build_submission_payload,
+    build_submit_item,
+    calibrate_defect_records,
+    save_submission_json,
+    select_primary_defects,
+    validate_submission_payload,
+)
 from .info_table import InfoRow
 from .process_infer import CraftAttributes, infer_craft_attributes
 from .standards import grade_label
@@ -55,10 +62,14 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
                    default_grade: int = 1, quantity_separator: str = ", ",
                    student_name: str = "", student_password: str = "", changci: str = "",
                    basename: str = "competition_answers",
-                   is_man_machine: bool = False) -> ExportResult:
+                   is_man_machine: bool = False,
+                   primary_only: bool = True,
+                   calibrate_defects: bool = True) -> ExportResult:
     """evaluations 为 ImageEvaluation.to_dict()；image_names 为本次全部输入影像文件名；
     failures 为 {文件名: 原因}（推理失败/超时），这些影像按 default_grade 无缺陷兜底。
-    is_man_machine 为 True 时自动推断焊缝形式、焊接方法、施焊位置；False（默认）为纯缺陷识别，三项填 -1。"""
+    is_man_machine 为 True 时自动推断焊缝形式、焊接方法、施焊位置；False（默认）为纯缺陷识别，三项填 -1。
+    primary_only 为 True 时远洋提交仅保留决定评级的一处最关键主缺陷（竞赛推荐，避免多检扣分）。
+    calibrate_defects 为 True 时执行伪裂纹与坡口未熔合智能形态学校准。"""
     failures = dict(failures or {})
     info_by_name: Dict[str, InfoRow] = {}
     for r in info_rows:
@@ -116,7 +127,9 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
 
         # 远洋接口每题数据
         if ev is not None:
-            submit_item = build_submit_item(ev, spec=spec_text, craft=craft)
+            submit_item = build_submit_item(ev, spec=spec_text, craft=craft,
+                                            primary_only=primary_only,
+                                            calibrate_defects=calibrate_defects)
         else:
             submit_item = {
                 "TiMuXuHao": Path(name).stem,
@@ -130,7 +143,13 @@ def export_answers(out_dir: Path, evaluations: Sequence[Mapping[str, Any]], imag
         farain_items.append(submit_item)
 
         grade_text = (ev or {}).get("grade_label") or grade_label(default_grade)
-        records = (ev or {}).get("records") or []
+        records = list((ev or {}).get("records") or [])
+        if calibrate_defects and records:
+            records = calibrate_defect_records(records, spec=spec_text)
+        if primary_only and records:
+            raw_grade = (ev or {}).get("grade", default_grade)
+            pingji_idx = int(raw_grade) if raw_grade in (1, 2, 3, 4) else default_grade
+            records = select_primary_defects(records, grade=pingji_idx, max_count=1)
         if not records:
             rows.append(head + ["", "", "", NO_DEFECT, "", grade_text, note])
             continue

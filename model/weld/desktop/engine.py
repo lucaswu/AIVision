@@ -63,6 +63,8 @@ class RunConfig:
     competition_plate_root: str = "drop"    # 板焊缝上的根部内凹/咬边：drop（默认不填报）| report
     competition_round_scale: float = 1.0   # 圆形缺陷长径缩放比例（默认 1.0；按气孔核心尺寸折减可设为 0.42）
     competition_small_pipe_arc_expand: bool = True  # 小径管缺陷按圆柱环缝弧长展开定量（默认启用）
+    competition_primary_defect_only: bool = True   # 远洋提交仅保留决定评级的一处最关键主缺陷（推荐，避免多检扣分）
+    competition_calibrate_defects: bool = True     # 结合工艺与形态学校准易混定性（粗钝裂纹转条渣、坡口未熔合校准）
     competition_deadline_min: float = 0.0   # >0：从开始计时到该分钟数仍未处理的影像按无缺陷兜底并导出
     # 远洋在线评分系统 (http://www.farain.com:3030/testing/ai/ray/submit)
     student_name: str = "13858120789"       # 学员姓名（固定）
@@ -495,7 +497,9 @@ class InferenceEngine:
                                  student_name=cfg.student_name,
                                  student_password=cfg.student_password,
                                  changci=cfg.changci,
-                                 is_man_machine=cfg.competition_man_machine)
+                                 is_man_machine=cfg.competition_man_machine,
+                                 primary_only=cfg.competition_primary_defect_only,
+                                 calibrate_defects=cfg.competition_calibrate_defects)
         except Exception as exc:
             self.log(f"[错误] 竞赛答案导出失败: {exc}")
             return None, None, None
@@ -579,6 +583,17 @@ class InferenceEngine:
             self.log(f"[警告] 竞赛评定失败 ({src.name}): {exc}")
             return None
         data = evaluation.to_dict()
+        records = list(data.get("records") or [])
+        if getattr(cfg, "competition_calibrate_defects", True) and records:
+            from competition.client import calibrate_defect_records
+            records = calibrate_defect_records(records, spec=spec)
+        if getattr(cfg, "competition_primary_defect_only", True) and records:
+            from competition.client import select_primary_defects
+            raw_grade = data.get("grade", 1)
+            pingji_idx = int(raw_grade) if raw_grade in (1, 2, 3, 4) else 1
+            records = select_primary_defects(records, grade=pingji_idx, max_count=1)
+        data["records"] = records
+        data["has_defects"] = bool(records)
         data["rel_path"] = str(rel)
         data["pixel_size_mm"] = eval_cfg.pixel_size_mm
         for msg in evaluation.warnings:

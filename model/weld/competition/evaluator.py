@@ -82,7 +82,7 @@ class EvalConfig:
     split_round_clusters: bool = False
     # 圆形缺陷框通常包含周边模糊带，默认按 1.0；在实际模型目标检测预测时可配置缩放系数
     round_diameter_scale: float = 1.0
-    # 小径管（Do <= 100mm）双壁双影/双壁单影透照环缝缺陷弧长展开定量（默认启用）
+    # 小径管（Do <= 100mm）定量自适应：贯穿根部缺陷按半周展开（对齐 75.88mm），局部缺陷按水平直线测长（默认启用）
     small_pipe_arc_expand: bool = True
     # 第 6 章（板）上检出的根部内凹/咬边："drop" 不填报（默认：第 6 章不对其分级，且真实底片上多为贯穿整条
     # 焊缝的误检）；"report" 填报但不分级（组委会要求板上也填报时切换）

@@ -316,13 +316,12 @@ def small_pipe_defect_length_mm(proj_length_mm: float, spec: WeldSpec) -> float:
     od = spec.actual_outer_diameter
     half_circ = round(1.571 * od, 2)  # 标准 4 位系数 1.571 (π/2)
 
-    # 贯穿性缺陷：若投影跨度达到管外径的 75% 时视为全半周贯穿
+    # 贯穿性根部缺陷：若投影跨度达到管外径的 75% 时视为全半周贯穿（如 Φ48x5 贯穿未焊透取 75.88mm）
     if proj_length_mm >= 0.75 * spec.outer_diameter:
         return half_circ
 
-    # 局部缺陷：按投影放大系数展开，上限为半圆周
-    arc_len = round(proj_length_mm * (math.pi / 2.0), 1)
-    return min(arc_len, half_circ)
+    # 局部缺陷：严格遵循竞赛规则第 9 条“按水平测量的直线长度作为答题记录值”，不进行放大展开
+    return proj_length_mm
 
 
 def max_window_length(segments: Sequence[Segment], window_mm: float) -> float:

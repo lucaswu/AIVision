@@ -227,8 +227,8 @@ class EvaluateImageTest(unittest.TestCase):
         self.assertEqual(evaluate_image(result(dets), "Φ89×6", strict).grade, 2)
 
     def test_small_pipe_arc_length_quantification(self):
-        # 小径管 Φ48×5（标准实际外径 48.3mm，半圆周展开 75.88mm）
-        # 贯穿缺陷（投影长度 43.9mm >= 0.75 * 48 = 36mm）：定量应为 75.88mm
+        # 小径管 Φ48×5 贯穿性根部未焊透（投影长度 43.9mm >= 0.75 * 48 = 36mm）：
+        # 按照 NB/T 47013.2 与官方参考答案《小径管例子答案.xlsx》，自动取标准半圆周长 75.88mm
         dets_through = [det("未焊透", 10.0, 20.0, 53.9, 21.0)]  # 43.9mm
         ev = evaluate_image(result(dets_through), "φ48x5")
         self.assertEqual(len(ev.records), 1)
@@ -236,17 +236,17 @@ class EvaluateImageTest(unittest.TestCase):
         self.assertEqual(ev.records[0].length_mm, 75.88)
         self.assertEqual(ev.records[0].grade, 4)
 
-        # 局部短缺陷（投影长度 10.0mm）：按 π/2 系数展开为 15.7mm
+        # 局部未贯穿短缺陷（投影长度 10.0mm）：遵循竞赛规则第 9 条直尺测长，保持水平直线长度 10.0mm
         dets_short = [det("未焊透", 10.0, 20.0, 20.0, 21.0)]  # 10.0mm
         ev_short = evaluate_image(result(dets_short), "φ48x5")
-        self.assertEqual(ev_short.records[0].quantity, "15.7")
-        self.assertEqual(ev_short.records[0].length_mm, 15.7)
+        self.assertEqual(ev_short.records[0].quantity, "10.0")
+        self.assertEqual(ev_short.records[0].length_mm, 10.0)
 
-        # 若关闭开关，则保持投影长度 43.9mm
-        no_expand = EvalConfig(small_pipe_arc_expand=False)
-        ev_raw = evaluate_image(result(dets_through), "φ48x5", no_expand)
-        self.assertEqual(ev_raw.records[0].quantity, "43.9")
-        self.assertEqual(ev_raw.records[0].length_mm, 43.9)
+        # 若显式关闭自适应开关，则贯穿缺陷也保持原始投影长度 43.9mm
+        cfg_no_expand = EvalConfig(small_pipe_arc_expand=False)
+        ev_no_expand = evaluate_image(result(dets_through), "φ48x5", cfg_no_expand)
+        self.assertEqual(ev_no_expand.records[0].quantity, "43.9")
+        self.assertEqual(ev_no_expand.records[0].length_mm, 43.9)
 
     def test_overlapping_root_boxes_merged(self):
         # 同一内凹被拆成 [10,20] 与 [15,25] 两个框 → 一个缺陷 15mm，而不是 20mm
@@ -753,6 +753,82 @@ class FarainClientAndCraftTest(unittest.TestCase):
             res = submit_to_server({"type": 4})
             self.assertTrue(res.success)
             self.assertEqual(res.code, 0)
+
+    def test_calibrate_and_select_primary_defects(self):
+        from competition.client import (
+            calibrate_defect_records,
+            select_primary_defects,
+            build_submit_item,
+        )
+
+        # 1. 宽钝伪裂纹校准测试：长宽比 2.4，长度 10.9mm（短轴 ~4.5mm）应校准为条形缺陷
+        records = [
+            {"defect_type": "裂纹", "aspect_ratio": 2.4, "length_mm": 10.89, "grade": 4, "x_mm": 81.09},
+            {"defect_type": "裂纹", "aspect_ratio": 1.7, "length_mm": 10.0, "grade": 4, "x_mm": 150.0},
+            {"defect_type": "圆形缺陷", "points": 10, "grade": 3, "x_mm": 80.0},
+        ]
+        calibrated = calibrate_defect_records(records, spec="18")
+        self.assertEqual(calibrated[0]["defect_type"], "条形缺陷")
+        self.assertEqual(calibrated[1]["defect_type"], "圆形缺陷")
+
+        # 2. 管道短小未焊透校准测试：在小管径中长宽比 3.5 且长度 5.6mm 应校准为条形缺陷
+        pipe_recs = [
+            {"defect_type": "未焊透", "aspect_ratio": 3.79, "length_mm": 5.62, "grade": 4, "x_mm": 47.46},
+        ]
+        cal_pipe = calibrate_defect_records(pipe_recs, spec="168*7")
+        self.assertEqual(cal_pipe[0]["defect_type"], "条形缺陷")
+
+        # 3. 厚板多道焊坡口未熔合校准：t=18mm 板上未焊透校准为未熔合
+        plate_recs = [
+            {"defect_type": "未焊透", "aspect_ratio": 9.15, "length_mm": 42.96, "grade": 4, "x_mm": 322.24},
+        ]
+        cal_plate = calibrate_defect_records(plate_recs, spec="18")
+        self.assertEqual(cal_plate[0]["defect_type"], "未熔合")
+
+        # 4. 主缺陷筛选测试：IV 级致死缺陷优先于 III 级圆形缺陷，长度最长者优先
+        mixed_recs = [
+            {"defect_type": "未熔合", "length_mm": 43.0, "grade": 4, "x_mm": 322.24},
+            {"defect_type": "圆形缺陷", "points": 2, "grade": 1, "x_mm": 128.0},
+            {"defect_type": "未熔合", "length_mm": 10.0, "grade": 4, "x_mm": 155.0},
+        ]
+        primary = select_primary_defects(mixed_recs, grade=4, max_count=1)
+        self.assertEqual(len(primary), 1)
+        self.assertEqual(primary[0]["defect_type"], "未熔合")
+        self.assertEqual(primary[0]["length_mm"], 43.0)
+
+        # 5. 厚板多道焊坡口缺陷保持与原坐标一致（不进行人为原点硬吸附）
+        plate_recs_gen = [
+            {"defect_type": "未熔合", "aspect_ratio": 10.69, "length_mm": 31.96, "grade": 4, "x_mm": 36.31},
+        ]
+        cal_gen = calibrate_defect_records(plate_recs_gen, spec="16")
+        self.assertEqual(cal_gen[0]["defect_type"], "未熔合")
+        self.assertEqual(cal_gen[0]["x_mm"], 36.31)
+        self.assertEqual(cal_gen[0]["length_mm"], 31.96)
+
+        # 6. 单面焊管道根部内凹优选与跨类共线合并测试
+        pipe_merge_recs = [
+            {"defect_type": "未焊透", "aspect_ratio": 3.79, "length_mm": 5.62, "grade": 4, "x_mm": 47.46},
+            {"defect_type": "裂纹", "aspect_ratio": 1.66, "length_mm": 7.41, "grade": 4, "x_mm": 56.41},
+        ]
+        cal_merge = calibrate_defect_records(pipe_merge_recs, spec="168*7")
+        self.assertEqual(len(cal_merge), 1)
+        self.assertEqual(cal_merge[0]["defect_type"], "条形缺陷")
+        self.assertAlmostEqual(cal_merge[0]["length_mm"], 16.36, places=1)
+
+        # 7. build_submit_item with primary_only & calibrate_defects
+        ev_mock = {
+            "image_name": "20071.dcm",
+            "grade": 4,
+            "spec": "18",
+            "records": [
+                {"defect_type": "未焊透", "aspect_ratio": 9.15, "length_mm": 42.96, "grade": 4, "x_mm": 322.24},
+                {"defect_type": "圆形缺陷", "points": 5, "grade": 2, "x_mm": 100.0},
+            ]
+        }
+        item = build_submit_item(ev_mock, primary_only=True, calibrate_defects=True)
+        self.assertEqual(len(item["ListDefect"]), 1)
+        self.assertEqual(item["ListDefect"][0]["Idx"], 2)  # 2: 未熔合
+        self.assertEqual(item["ListDefect"][0]["XZuoBiao"], "322.24")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,9 @@ from .client import (
     SubmitResponse,
     build_submission_payload,
     build_submit_item,
+    calibrate_defect_records,
     save_submission_json,
+    select_primary_defects,
     submit_to_server,
     validate_submission_payload,
 )
@@ -29,11 +31,13 @@ __all__ = [
     "WeldSpec",
     "build_submission_payload",
     "build_submit_item",
+    "calibrate_defect_records",
     "evaluate_image",
     "evaluate_results",
     "infer_craft_attributes",
     "parse_spec",
     "save_submission_json",
+    "select_primary_defects",
     "submit_to_server",
     "validate_submission_payload",
 ]

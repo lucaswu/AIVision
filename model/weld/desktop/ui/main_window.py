@@ -278,6 +278,9 @@ class MainWindow(QMainWindow):
         row_student = QHBoxLayout()
         row_student.addWidget(self.student_name_edit, 1)
         row_student.addWidget(self.student_pwd_edit, 1)
+        self.primary_defect_cb = QCheckBox("仅填报主缺陷（竞赛推荐）")
+        self.primary_defect_cb.setChecked(True)
+        self.primary_defect_cb.setToolTip("远洋评分系统每题仅考核1处主缺陷。勾选后自动提纯决定评级的关键主缺陷，并智能抑制微小气孔/粗钝伪裂纹等多检扣分")
         self.submit_online_cb = QCheckBox("推理后自动在线提交")
         self.submit_online_cb.setToolTip("推理与导出完成后，自动 POST 提交至远洋评分服务器 (http://www.farain.com:3030/testing/ai/ray/submit)")
         btn_manual_submit = QPushButton("远洋系统在线提交…")
@@ -287,6 +290,7 @@ class MainWindow(QMainWindow):
         pf3.addRow("断续合并", row_merge)
         pf3.addRow("学员/考核号", row_student)
         pf3.addRow("场次号", self.changci_edit)
+        pf3.addRow(self.primary_defect_cb)
         pf3.addRow(self.submit_online_cb)
         pf3.addRow(btn_manual_submit)
 
@@ -298,7 +302,7 @@ class MainWindow(QMainWindow):
                               self.deadline_spin, self.table26_cb, self.split_cb, self.plate_root_cb,
                               self.merge_gap_spin, self.merge_len_combo,
                               self.student_name_edit, self.student_pwd_edit, self.changci_edit,
-                              self.submit_online_cb, btn_manual_submit)
+                              self.primary_defect_cb, self.submit_online_cb, btn_manual_submit)
         self.comp_cb.toggled.connect(self._on_competition_toggled)
 
         # 结果表 + 预览（内部保留对象用于数据管理与测试兼容，界面隐藏不显示）
@@ -412,6 +416,7 @@ class MainWindow(QMainWindow):
         self.student_pwd_edit.setReadOnly(True)
         self.changci_edit.setText("122")
         self.changci_edit.setReadOnly(True)
+        self.primary_defect_cb.setChecked(getattr(s, "competition_primary_defect_only", True))
         self.submit_online_cb.setChecked(s.submit_farain_online)
         self.comp_cb.setChecked(s.enable_competition)
         self.man_machine_cb.setChecked(s.competition_man_machine)
@@ -442,6 +447,8 @@ class MainWindow(QMainWindow):
             competition_plate_root="report" if report_plate else "drop",
             competition_round_scale=getattr(self._settings, "competition_round_scale", 0.42),
             competition_small_pipe_arc_expand=getattr(self._settings, "competition_small_pipe_arc_expand", True),
+            competition_primary_defect_only=self.primary_defect_cb.isChecked(),
+            competition_calibrate_defects=getattr(self._settings, "competition_calibrate_defects", True),
             competition_merge_gap_mm=self.merge_gap_spin.value(),
             competition_intermittent_length=self.merge_len_combo.currentData(),
             student_name="13858120789",
@@ -595,6 +602,8 @@ class MainWindow(QMainWindow):
             competition_plate_root="report" if (getattr(s, "competition_report_plate_root", False) or getattr(s, "competition_plate_root", "drop") == "report") else "drop",
             competition_round_scale=getattr(s, "competition_round_scale", 0.42),
             competition_small_pipe_arc_expand=getattr(s, "competition_small_pipe_arc_expand", True),
+            competition_primary_defect_only=getattr(s, "competition_primary_defect_only", True),
+            competition_calibrate_defects=getattr(s, "competition_calibrate_defects", True),
             student_name=s.student_name, student_password=s.student_password, changci=s.changci,
             submit_farain_online=s.submit_farain_online, submit_farain_url=s.submit_farain_url,
         )
