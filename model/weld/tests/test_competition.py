@@ -584,25 +584,37 @@ class FarainClientAndCraftTest(unittest.TestCase):
     def test_craft_inference(self):
         from competition.process_infer import infer_craft_attributes
 
-        # 管道：单面焊 (2), 全位置 (5), 小径管氩弧焊 (3)
+        # 竞赛默认模式 (competition_mode=True):
+        # 管道：单面焊 (2), 评片试件平焊 (1), 题库制作手工焊 (1)
         c_pipe = infer_craft_attributes("Φ89×6")
-        self.assertEqual((c_pipe.weld_form_idx, c_pipe.welding_position_idx, c_pipe.welding_method_idx), (2, 5, 3))
+        self.assertEqual((c_pipe.weld_form_idx, c_pipe.welding_position_idx, c_pipe.welding_method_idx), (2, 1, 1))
         self.assertEqual(c_pipe.weld_form_name, "单面焊")
-        self.assertEqual(c_pipe.welding_position_name, "全位置")
+        self.assertEqual(c_pipe.welding_position_name, "平焊")
+        self.assertEqual(c_pipe.welding_method_name, "手工焊")
 
-        # 垫板单面焊：垫板单面焊 (3), 平焊 (1), 中厚板手工焊+埋弧焊 (9)
+        # 竞赛试板 <= 15mm：单面焊 (2), 平焊 (1), 手工焊 (1)
+        c_thin = infer_craft_attributes("15")
+        self.assertEqual((c_thin.weld_form_idx, c_thin.welding_position_idx, c_thin.welding_method_idx), (2, 1, 1))
+        self.assertEqual(c_thin.weld_form_name, "单面焊")
+
+        # 竞赛厚板 > 15mm：双面焊 (1), 平焊 (1), 手工焊 (1)
+        c_thick = infer_craft_attributes("16")
+        self.assertEqual((c_thick.weld_form_idx, c_thick.welding_position_idx, c_thick.welding_method_idx), (1, 1, 1))
+        self.assertEqual(c_thick.weld_form_name, "双面焊")
+
+        # 垫板单面焊：垫板单面焊 (3), 平焊 (1), 手工焊 (1)
         c_extra = infer_craft_attributes("20+4")
-        self.assertEqual((c_extra.weld_form_idx, c_extra.welding_position_idx, c_extra.welding_method_idx), (3, 1, 9))
+        self.assertEqual((c_extra.weld_form_idx, c_extra.welding_position_idx, c_extra.welding_method_idx), (3, 1, 1))
         self.assertEqual(c_extra.weld_form_name, "垫板单面焊")
-        self.assertEqual(c_extra.welding_method_name, "手工焊+埋弧焊")
 
-        # 大厚板：双面焊 (1), 平焊 (1), 埋弧焊 (2)
-        c_thick = infer_craft_attributes("28")
-        self.assertEqual((c_thick.weld_form_idx, c_thick.welding_position_idx, c_thick.welding_method_idx), (1, 1, 2))
+        # 非竞赛工业制造推断模式 (competition_mode=False):
+        c_pipe_eng = infer_craft_attributes("Φ89×6", competition_mode=False)
+        self.assertEqual((c_pipe_eng.weld_form_idx, c_pipe_eng.welding_position_idx, c_pipe_eng.welding_method_idx), (2, 5, 3))
+        self.assertEqual(c_pipe_eng.welding_position_name, "全位置")
 
-        # 薄板：双面焊 (1), 平焊 (1), 手工焊 (1)
-        c_thin = infer_craft_attributes("10")
-        self.assertEqual((c_thin.weld_form_idx, c_thin.welding_position_idx, c_thin.welding_method_idx), (1, 1, 1))
+        c_thick_eng = infer_craft_attributes("28", competition_mode=False)
+        self.assertEqual((c_thick_eng.weld_form_idx, c_thick_eng.welding_position_idx, c_thick_eng.welding_method_idx), (1, 1, 2))
+        self.assertEqual(c_thick_eng.welding_method_name, "埋弧焊")
 
     def test_build_submit_item_and_defect_formatting(self):
         from competition.client import build_submit_item
@@ -724,7 +736,7 @@ class FarainClientAndCraftTest(unittest.TestCase):
             data = json.loads(res.json_path.read_text(encoding="utf-8"))
             item = data["submitList"][0]
             self.assertEqual(item["HanFengXingShiIdx"], 1)  # 双面焊
-            self.assertEqual(item["HanJieFangFaIdx"], 2)   # 埋弧焊 (厚板 28mm > 25mm)
+            self.assertEqual(item["HanJieFangFaIdx"], 1)   # 手工焊 (竞赛试件人工缺陷统一由手工电弧焊制造)
             self.assertEqual(item["ShiHanWeiZhiIdx"], 1)   # 平焊
 
 

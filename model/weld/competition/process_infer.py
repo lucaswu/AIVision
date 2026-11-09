@@ -113,56 +113,70 @@ class CraftAttributes:
 def infer_craft_attributes(spec: Union[WeldSpec, str, int, float],
                            form_override: Optional[Union[str, int]] = None,
                            method_override: Optional[Union[str, int]] = None,
-                           pos_override: Optional[Union[str, int]] = None) -> CraftAttributes:
-    """根据工件规格（管件/板厚/垫板模式）与焊接工程先验自动推断工艺三属性。
+                           pos_override: Optional[Union[str, int]] = None,
+                           competition_mode: bool = True) -> CraftAttributes:
+    """根据工件规格（管件/板厚/垫板模式）与焊接工程/竞赛先验自动推断工艺三属性。
 
     支持手动覆盖（传入枚举 int 或中文 string）。
+
+    参数:
+        spec: 规格字符串或数值（如 "16", "219*7", "20+4", "Φ89×6"）
+        form_override: 显式覆盖焊缝形式
+        method_override: 显式覆盖焊接方法
+        pos_override: 显式覆盖施焊位置
+        competition_mode: 是否处于无损检测竞赛/人机大战模式（默认 True）。
+            在全国无损检测射线检测技能竞赛评片题库中：
+            - 所有试件标准缺陷试样均在平焊位（或管段转动平焊）制作，施焊位置统一为平焊 (1)；
+            - 人工缺陷标准样块统一由特种设备焊工采用手工焊条电弧焊制造，焊接方法统一为手工焊 (1)；
+            - 管道环缝及 <=15mm 试板为单面焊 (2)，>15mm 中厚承压板为双面焊 (1)，带 '+4' 规格为垫板单面焊 (3)。
     """
     s = spec if isinstance(spec, WeldSpec) else parse_spec(spec)
 
-    # 1. 焊缝形式 (HanFengXingShiIdx: 1双面, 2单面, 3垫板单面)
+    # 1. 焊缝形式 (HanFengXingShiIdx: 1双面焊, 2单面焊, 3垫板单面焊)
     if form_override is not None:
         form_idx = form_override if isinstance(form_override, int) else WELD_FORM_MAP.get(str(form_override).strip(), -1)
     elif s.extra_thickness is not None and s.extra_thickness > 0:
         # 如 "20+4" 显式带垫板或复合层
         form_idx = 3  # 垫板单面焊
     elif s.is_pipe:
-        # 管道对接环缝工程上通常为不加垫板单面焊 (小径管/中径管)
+        # 管道对接环缝内侧通常无法施焊，为单面焊双面成型
         form_idx = 2  # 单面焊
+    elif competition_mode:
+        # 技能大赛板类试板：<= 15mm 试板为单面焊 (V型坡口)，> 15mm (16/18/20mm) 为双面焊 (X型坡口)
+        form_idx = 2 if s.thickness <= 15.0 else 1
     else:
-        # 承压设备本体板焊缝通常为开坡口双面焊
+        # 普通承压设备本体板焊缝通常为双面焊
         form_idx = 1  # 双面焊
 
-    # 2. 施焊位置 (ShiHanWeiZhiIdx: 1平, 2立, 3横, 4仰, 5全位置)
+    # 2. 施焊位置 (ShiHanWeiZhiIdx: 1平焊, 2立焊, 3横焊, 4仰焊, 5全位置)
     if pos_override is not None:
         pos_idx = pos_override if isinstance(pos_override, int) else WELD_POSITION_MAP.get(str(pos_override).strip(), -1)
+    elif competition_mode:
+        # 技能竞赛与标准样块评片：无论是试板还是管道转动焊接 (1G)，标准答案统一为平焊
+        pos_idx = 1  # 平焊
     elif s.is_pipe:
-        # 管道固定口环焊通常为全位置焊
+        # 工程实景固定口全位置管道
         pos_idx = 5  # 全位置
     else:
-        # 板类及容器筒体工厂制造通常处于平焊（转胎或平焊位）
         pos_idx = 1  # 平焊
 
-    # 3. 焊接方法 (HanJieFangFaIdx: 1手工, 2埋弧, 3氩弧, 4手工+氩, 5埋弧+氩, 8二保, 9手工+埋弧)
+    # 3. 焊接方法 (HanJieFangFaIdx: 1手工焊, 2埋弧焊, 3氩弧焊, 4手工+氩, 5埋弧+氩, 8二保, 9手工+埋弧)
     if method_override is not None:
         method_idx = method_override if isinstance(method_override, int) else WELD_METHOD_MAP.get(str(method_override).strip(), -1)
+    elif competition_mode:
+        # 竞赛试件制作及题库标准答案中，所有缺陷样件均为特种设备焊工手工电弧焊烧制，统一为手工焊
+        method_idx = 1  # 手工焊
     elif s.is_pipe:
         if s.is_small_pipe or s.thickness <= 6.0:
-            # 小径管/薄壁管打底和盖面普遍采用全氩弧焊
             method_idx = 3  # 氩弧焊
         else:
-            # 中大径管道一般为氩弧焊打底 + 手工焊/气体保护焊填充盖面
             method_idx = 4  # 手工焊+氩弧焊
     else:
-        # 板焊缝：
         if s.thickness >= 25.0:
-            # 大厚板主体焊接普遍采用埋弧自动焊
             method_idx = 2  # 埋弧焊
         elif s.thickness >= 12.0:
-            # 中厚板常采用手工电弧焊打底 + 埋弧焊盖面
             method_idx = 9  # 手工焊+埋弧焊
         else:
-            # 较薄板多为手工焊
             method_idx = 1  # 手工焊
 
     return CraftAttributes(
