@@ -2,6 +2,8 @@ package com.aivision.gateway.service;
 
 import com.aivision.gateway.model.*;
 import com.aivision.gateway.repository.*;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,6 +57,13 @@ public class TaskService {
     private String resultBaseDir;
     
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    private static final ObjectMapper GEOMETRY_MAPPER = new ObjectMapper();
+
+    /** 任务列表范围：仅当前用户创建的任务 */
+    public static final String TASK_SCOPE_MINE = "mine";
+    /** 任务列表范围：项目下全部用户的任务 */
+    public static final String TASK_SCOPE_ALL = "all";
     
     /**
      * 提交检测任务
@@ -169,22 +178,9 @@ public class TaskService {
         } else {
             // 不按焊口过滤：列出项目下所有底片，每张底片按其焊口列表展开
             List<TaskFile> taskFiles = taskFileRepository.findByProjectIds(request.getProjectIds());
+            Map<String, String> fileNames = loadFileNames(taskFiles);
             for (TaskFile tf : taskFiles) {
-                List<WeldJoint> joints = tf.getWeldJoints();
-                if (joints == null || joints.isEmpty()) {
-                    // 该底片尚未配置焊口（旧数据或未迁移），保留整张底片一条结果、携带全部缺陷
-                    items.add(buildReportItem(tf, null));
-                } else {
-                    for (WeldJoint joint : joints) {
-                        items.add(buildReportItem(tf, joint));
-                    }
-                    // 未被分配到任何焊口的缺陷，单独归入一条"未分组"结果，避免遗漏
-                    boolean hasUnassignedDefect = tf.getDefectRecords().stream()
-                        .anyMatch(dr -> dr.getWeldJointId() == null || dr.getWeldJointId().isEmpty());
-                    if (hasUnassignedDefect) {
-                        items.add(buildReportItem(tf, null));
-                    }
-                }
+                items.addAll(expandReportItems(tf, fileNames));
             }
         }
 
@@ -192,16 +188,102 @@ public class TaskService {
     }
 
     /**
+     * 获取单个任务的详细报告结果（第三方报告系统对接）。
+     *
+     * @throws IllegalArgumentException 任务ID为空
+     * @throws NoSuchElementException   任务不存在，或任务不属于 header 中的项目
+     * @throws SecurityException        用户对该项目无访问权限
+     */
+    @Transactional(readOnly = true)
+    public TaskReportResultResponse getTaskReportResultByTask(String taskId, String projectId, String userId) {
+        if (taskId == null || taskId.trim().isEmpty()) {
+            throw new IllegalArgumentException("任务ID不能为空");
+        }
+        // 任务不属于该项目时同样按"不存在"处理，避免泄露其他项目的任务信息
+        Task task = taskRepository.findById(taskId)
+            .filter(t -> t.getProjectId() != null && t.getProjectId().equals(projectId))
+            .orElseThrow(() -> new NoSuchElementException("任务不存在: " + taskId));
+
+        try {
+            validateProjectAccess(projectId, userId);
+        } catch (RuntimeException e) {
+            throw new SecurityException(e.getMessage());
+        }
+
+        TaskReportResultResponse resp = new TaskReportResultResponse();
+        resp.setTaskId(task.getTaskId());
+        resp.setTaskName(task.getTaskName());
+        resp.setProjectId(task.getProjectId());
+        resp.setProjectName(projectRepository.findById(projectId).map(Project::getProjectName).orElse(null));
+        resp.setStatus(task.getStatus() != null ? task.getStatus().name().toLowerCase() : null);
+        if (task.getCreatedAt() != null) resp.setCreateTime(task.getCreatedAt().format(DATE_TIME_FORMATTER));
+        if (task.getEndTime() != null) resp.setEndTime(task.getEndTime().format(DATE_TIME_FORMATTER));
+
+        List<TaskFile> taskFiles = taskFileRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
+        Map<String, String> fileNames = loadFileNames(taskFiles);
+        List<ReportResultResponse.ReportItem> items = new ArrayList<>();
+        for (TaskFile tf : taskFiles) {
+            items.addAll(expandReportItems(tf, fileNames));
+        }
+        resp.setReportItems(items);
+        return resp;
+    }
+
+    /**
+     * 将一张底片按焊口展开为报告结果：一个焊口一条结果；
+     * 未配置焊口的底片（旧数据或未迁移）保留整片一条、携带全部缺陷；
+     * 已有焊口但存在未分配焊口的缺陷时，额外追加一条"未分组"结果，避免遗漏。
+     */
+    private List<ReportResultResponse.ReportItem> expandReportItems(TaskFile tf, Map<String, String> fileNames) {
+        List<ReportResultResponse.ReportItem> items = new ArrayList<>();
+        String fileName = fileNames.getOrDefault(tf.getFileId(), "unknown");
+        List<WeldJoint> joints = tf.getWeldJoints();
+        if (joints == null || joints.isEmpty()) {
+            items.add(buildReportItem(tf, null, fileName));
+            return items;
+        }
+        for (WeldJoint joint : joints) {
+            items.add(buildReportItem(tf, joint, fileName));
+        }
+        boolean hasUnassignedDefect = tf.getDefectRecords().stream()
+            .anyMatch(dr -> dr.getWeldJointId() == null || dr.getWeldJointId().isEmpty());
+        if (hasUnassignedDefect) {
+            items.add(buildReportItem(tf, null, fileName));
+        }
+        return items;
+    }
+
+    /** 批量查询文件原始名称，避免逐条查询 */
+    private Map<String, String> loadFileNames(List<TaskFile> taskFiles) {
+        Map<String, String> names = new HashMap<>();
+        if (taskFiles == null || taskFiles.isEmpty()) return names;
+        List<String> fileIds = new ArrayList<>();
+        for (TaskFile tf : taskFiles) {
+            if (tf.getFileId() != null) fileIds.add(tf.getFileId());
+        }
+        if (fileIds.isEmpty()) return names;
+        List<File> files = fileRepository.findByFileIdIn(fileIds);
+        if (files != null) {
+            for (File f : files) {
+                names.put(f.getFileId(), f.getOriginalName());
+            }
+        }
+        return names;
+    }
+
+    /**
      * 组装单条报告结果。joint 为 null 表示未按焊口分组（旧数据没有焊口记录，
      * 或该底片已有焊口但这条结果专门承载"未分配焊口"的缺陷）。
      */
     private ReportResultResponse.ReportItem buildReportItem(TaskFile tf, WeldJoint joint) {
+        String fileName = fileRepository.findById(tf.getFileId()).map(File::getOriginalName).orElse("unknown");
+        return buildReportItem(tf, joint, fileName);
+    }
+
+    private ReportResultResponse.ReportItem buildReportItem(TaskFile tf, WeldJoint joint, String fileName) {
         ReportResultResponse.ReportItem item = new ReportResultResponse.ReportItem();
         item.setFileId(tf.getFileId());
-
-        // 尝试获取文件名
-        Optional<File> fileOpt = fileRepository.findById(tf.getFileId());
-        item.setFileName(fileOpt.map(File::getOriginalName).orElse("unknown"));
+        item.setFileName(fileName);
 
         item.setFilmPixelValue(tf.getFilmPixelValue());
         item.setResolution(tf.getResolution());
@@ -243,8 +325,17 @@ public class TaskService {
             ReportResultResponse.DefectItem d = new ReportResultResponse.DefectItem();
             d.setDefectId(dr.getDefectRecordId());
             d.setDefectNature(dr.getDefectName());
-            // 优先使用 position (语义描述)，如果没有则使用 geometry (坐标JSON)
-            d.setDefectLocation(dr.getPosition() != null ? dr.getPosition() : dr.getGeometry());
+            // 优先使用人工填写的 position；否则由 geometry 换算为 "X:中心x, Y:中心y"
+            List<Double> bbox = geometryToBBox(dr.getGeometry());
+            d.setDefectBBox(bbox);
+            if (dr.getPosition() != null && !dr.getPosition().trim().isEmpty()) {
+                d.setDefectLocation(dr.getPosition());
+            } else if (bbox != null) {
+                d.setDefectLocation(String.format("X:%d, Y:%d",
+                    Math.round((bbox.get(0) + bbox.get(2)) / 2), Math.round((bbox.get(1) + bbox.get(3)) / 2)));
+            } else {
+                d.setDefectLocation(dr.getGeometry());
+            }
             d.setDefectSize(dr.getSize());
             d.setDefectLevel(dr.getGrade());
             d.setRemark(dr.getRemark());
@@ -253,6 +344,54 @@ public class TaskService {
         item.setDefects(defects);
 
         return item;
+    }
+
+    /**
+     * 将缺陷 geometry JSON 转换为外接矩形 [x1, y1, x2, y2]（原图像素坐标）。
+     * 支持 {"type":"rect","x","y","w","h"}、[x1,y1,x2,y2] 数组、以及带 points 的多边形；无法解析时返回 null。
+     */
+    static List<Double> geometryToBBox(String geometry) {
+        if (geometry == null || geometry.trim().isEmpty()) return null;
+        try {
+            JsonNode node = GEOMETRY_MAPPER.readTree(geometry);
+            if (node.isArray() && node.size() == 4 && node.get(0).isNumber()) {
+                return Arrays.asList(node.get(0).asDouble(), node.get(1).asDouble(),
+                    node.get(2).asDouble(), node.get(3).asDouble());
+            }
+            if (node.isObject()) {
+                if (node.has("x") && node.has("y") && node.has("w") && node.has("h")) {
+                    double x = node.get("x").asDouble();
+                    double y = node.get("y").asDouble();
+                    return Arrays.asList(x, y, x + node.get("w").asDouble(), y + node.get("h").asDouble());
+                }
+                JsonNode points = node.path("points");
+                if (points.isArray() && points.size() > 0) {
+                    double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY;
+                    double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
+                    for (JsonNode p : points) {
+                        double px;
+                        double py;
+                        if (p.isArray() && p.size() >= 2) {
+                            px = p.get(0).asDouble();
+                            py = p.get(1).asDouble();
+                        } else if (p.has("x") && p.has("y")) {
+                            px = p.get("x").asDouble();
+                            py = p.get("y").asDouble();
+                        } else {
+                            continue;
+                        }
+                        minX = Math.min(minX, px);
+                        minY = Math.min(minY, py);
+                        maxX = Math.max(maxX, px);
+                        maxY = Math.max(maxY, py);
+                    }
+                    if (minX <= maxX) return Arrays.asList(minX, minY, maxX, maxY);
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("缺陷 geometry 解析失败: {}", geometry);
+        }
+        return null;
     }
 
     @Transactional
@@ -465,8 +604,26 @@ public class TaskService {
 
     @Transactional(readOnly = true)
     public TaskListResponse getTaskList(String projectId, String userId) {
-        validateProjectAndUser(projectId, userId);
-        List<Task> tasks = taskRepository.findByProjectIdAndUserIdOrderByCreatedAtDesc(projectId, userId);
+        return getTaskList(projectId, userId, TASK_SCOPE_MINE);
+    }
+
+    /**
+     * 获取任务列表
+     * @param scope mine（默认）= 仅当前用户创建的任务；all = 项目下所有用户的任务（需项目读权限）
+     */
+    @Transactional(readOnly = true)
+    public TaskListResponse getTaskList(String projectId, String userId, String scope) {
+        String normalized = (scope == null || scope.trim().isEmpty()) ? TASK_SCOPE_MINE : scope.trim().toLowerCase();
+        List<Task> tasks;
+        if (TASK_SCOPE_MINE.equals(normalized)) {
+            validateProjectAndUser(projectId, userId);
+            tasks = taskRepository.findByProjectIdAndUserIdOrderByCreatedAtDesc(projectId, userId);
+        } else if (TASK_SCOPE_ALL.equals(normalized)) {
+            validateProjectAccess(projectId, userId);
+            tasks = taskRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        } else {
+            throw new IllegalArgumentException("scope 参数无效: " + scope + "，可选值: mine / all");
+        }
         List<TaskListResponse.TaskListItem> items = new ArrayList<>();
         for (Task task : tasks) {
             TaskListResponse.TaskListItem item = new TaskListItemBuilder(task).build();

@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
+import java.util.NoSuchElementException;
 
 @RestController
 @RequestMapping("/api/v1/tasks")
@@ -54,13 +55,37 @@ public class TaskController {
     }
 
     @GetMapping("/list")
-    @Operation(summary = "获取任务列表")
+    @Operation(summary = "获取任务列表", description = "scope=mine（默认）仅返回当前用户创建的任务；scope=all 返回项目下所有用户的任务")
     public ResponseEntity<ApiResponse<TaskListResponse>> getTaskList(
+        @RequestHeader("project-id") String projectId,
+        @RequestHeader("user-id") String userId,
+        @Parameter(description = "列表范围：mine / all", example = "mine")
+        @RequestParam(value = "scope", required = false, defaultValue = TaskService.TASK_SCOPE_MINE) String scope) {
+        try {
+            TaskListResponse response = taskService.getTaskList(projectId, userId, scope);
+            return ResponseEntity.ok(ApiResponse.success("获取成功", response));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(400).body(ApiResponse.error(400, e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{task_id}/report-result")
+    @Operation(summary = "获取单个任务的详细报告结果", description = "第三方报告系统对接：返回焊口编号、工艺参数及缺陷评定详情")
+    public ResponseEntity<ApiResponse<TaskReportResultResponse>> getTaskReportResultByTask(
+        @PathVariable("task_id") String taskId,
         @RequestHeader("project-id") String projectId,
         @RequestHeader("user-id") String userId) {
         try {
-            TaskListResponse response = taskService.getTaskList(projectId, userId);
+            TaskReportResultResponse response = taskService.getTaskReportResultByTask(taskId, projectId, userId);
             return ResponseEntity.ok(ApiResponse.success("获取成功", response));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(400).body(ApiResponse.error(400, e.getMessage()));
+        } catch (SecurityException e) {
+            return ResponseEntity.status(403).body(ApiResponse.error(403, e.getMessage()));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(404).body(ApiResponse.error(404, e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(ApiResponse.error(500, e.getMessage()));
         }

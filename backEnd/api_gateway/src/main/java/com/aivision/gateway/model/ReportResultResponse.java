@@ -144,8 +144,15 @@ public class ReportResultResponse {
         
         @JsonProperty("Remark")
         private String remark;
+
+        /** 缺陷外接矩形 [x1, y1, x2, y2]（原图像素坐标），无矩形几何信息时为 null */
+        @JsonProperty("DefectBBox")
+        private List<Double> defectBBox;
         
         // Getters and Setters
+        public List<Double> getDefectBBox() { return defectBBox; }
+        public void setDefectBBox(List<Double> defectBBox) { this.defectBBox = defectBBox; }
+
         public String getDefectId() { return defectId; }
         public void setDefectId(String defectId) { this.defectId = defectId; }
         
